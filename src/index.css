@@ -35,6 +35,38 @@ header p { margin: 0; color: #5a6b7c; }
   margin-bottom: 16px;
 }
 
+.user-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  background: #fff;
+  border: 1px solid #cfdbe4;
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin-bottom: 16px;
+}
+
+.user-bar .who { font-weight: 600; color: #0f2a3d; }
+.user-bar .spacer { flex: 1; }
+
+.auth-wrap { max-width: 420px; margin: 60px auto 0; }
+.auth-wrap h1 { margin: 0 0 8px 0; font-size: 24px; color: #0f2a3d; }
+.auth-wrap input[type="password"] {
+  width: 100%;
+  border: 1px solid #cfdbe4;
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 14px;
+  font-family: inherit;
+  background: #fff;
+  color: #1a2332;
+}
+
+.checkbox-row { display: flex; flex-wrap: wrap; gap: 4px 16px; margin: 6px 0; }
+.checkbox-row label { font-weight: 400; display: flex; gap: 6px; align-items: center; color: #1a2332; }
+.checkbox-row input { width: auto; }
+
 .actor-bar label { font-weight: 600; color: #0f2a3d; }
 .actor-bar .hint { color: #5a6b7c; font-size: 12px; }
 
