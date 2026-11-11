@@ -1,0 +1,31 @@
+{
+  "dependencies": {
+    "concurrently": "^6.5.1",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^4.22.1",
+    "pg": "^8.5.1",
+    "react": "^18.0.0",
+    "react-dom": "^18.0.0"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/node": "25.6.0",
+    "@types/react": "^18.0.0",
+    "@types/react-dom": "^18.0.0",
+    "@vitejs/plugin-react": "^4.7.0",
+    "nodemon": "^2.0.22",
+    "typescript": "^4.6.3",
+    "vite": "^5.4.21"
+  },
+  "name": "relay",
+  "private": true,
+  "scripts": {
+    "build": "tsc && vite build",
+    "dev": "concurrently \"vite\" \"nodemon server/index.js\"",
+    "preview": "vite preview",
+    "test": "node server/stateMachine.test.js && node server/tickets.test.js"
+  },
+  "version": "0.0.0"
+}

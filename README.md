@@ -35,7 +35,7 @@ audit rules and the data model.
 
 ```
 relay/
-├── client/               # React + TypeScript + Vite frontend
+├── src/                  # React + TypeScript + Vite frontend
 │   ├── main.tsx
 │   ├── App.tsx
 │   ├── api.ts
