@@ -198,6 +198,20 @@ ticket service is tested against an in-memory fake implementing the same
   `project_name_taken`; an unknown project on create or assign answers
   400 `unknown_project`.
 
+## Gantt view
+
+- **Gantt tab:** next to the ticket list, the Gantt tab shows every
+  ticket under the current project filter as a bar on a shared time
+  axis, from `created_at` to `updated_at` (or now while the ticket is
+  not terminal), colored by status and grouped by project.
+- **Task relations:** the line under each bar is the ticket's status
+  journey, read from its transition history; hovering a bar shows the
+  journey with times. Clicking a bar opens the ticket detail.
+- No new endpoint or schema change: the view reuses `GET /api/tickets`
+  and `GET /api/tickets/:id` (which returns the transition history).
+  Inter-ticket dependencies are out of scope — they would need a new
+  data model.
+
 ## API
 
 Every `/api` endpoint except `/api/health`, `/api/auth/status`,

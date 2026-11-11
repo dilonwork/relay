@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState } from 'react';
+import { Fragment, useCallback, useEffect, useState } from 'react';
 import { api, getToken, onUnauthorized, setToken } from './api';
-import type { AdminOverview, ApiKey, LegalTransition, Project, QueueEntry, Ticket, TicketWithHistory, User } from './api';
+import type { AdminOverview, ApiKey, LegalTransition, Project, QueueEntry, Ticket, TicketWithHistory, Transition, User } from './api';
 
 const STATUS_LABELS: Record<string, string> = {
   requirement: 'Requirement',
@@ -56,6 +56,93 @@ function formatTime(iso: string): string {
   return new Date(iso).toLocaleString();
 }
 
+function formatAxisTime(ms: number): string {
+  return new Date(ms).toLocaleString(undefined, {
+    month: 'numeric',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+// Gantt view (Dashboard with Gantt chart design): bars are derived from
+// existing ticket data — no schema change, no new endpoint. A bar runs
+// from created_at to updated_at (or now while the ticket is not
+// terminal). Task relations are the ticket's own status journey, read
+// from its transition history.
+const TERMINAL_STATUSES = new Set(['delivered', 'cancelled']);
+
+const STATUS_COLORS: Record<string, string> = {
+  requirement: '#5a6b7c',
+  decomposing: '#7c5cd6',
+  needs_clarification: '#b7791f',
+  pending_dev: '#2b6cb0',
+  in_dev: '#0e7c7b',
+  pending_review: '#6b46c1',
+  in_review: '#805ad5',
+  pending_test: '#d69e2e',
+  in_test: '#dd6b20',
+  pending_deploy: '#3182ce',
+  deploying: '#2b6cb0',
+  delivered: '#1d6b3c',
+  cancelled: '#9aa7b1',
+};
+
+function statusColor(code: string): string {
+  return STATUS_COLORS[code] || '#5a6b7c';
+}
+
+// The statuses a ticket has passed through, in order, without
+// consecutive repeats. The first transition's from_status is the start
+// (null on creation means the ticket starts at its to_status).
+function journeyFromTransitions(transitions: Transition[]): string[] {
+  const out: string[] = [];
+  for (const tr of transitions) {
+    if (tr.from_status && (out.length === 0 || out[out.length - 1] !== tr.from_status)) {
+      out.push(tr.from_status);
+    }
+    if (out.length === 0 || out[out.length - 1] !== tr.to_status) out.push(tr.to_status);
+  }
+  return out;
+}
+
+// Time window covering every bar. A zero-length window (all tickets at
+// one instant, or no tickets) is widened to one hour either side so
+// bars stay visible.
+function ganttRange(tickets: Ticket[]): { min: number; max: number } {
+  let min = Infinity;
+  let max = -Infinity;
+  const now = Date.now();
+  for (const t of tickets) {
+    const start = new Date(t.created_at).getTime();
+    const end = TERMINAL_STATUSES.has(t.status) ? new Date(t.updated_at).getTime() : now;
+    if (start < min) min = start;
+    if (end > max) max = end;
+  }
+  if (!Number.isFinite(min) || !Number.isFinite(max) || max <= min) {
+    const base = Number.isFinite(min) ? min : now;
+    return { min: base - 3600000, max: base + 3600000 };
+  }
+  return { min, max };
+}
+
+// Group Gantt rows by project, in project-list order, uncategorized last.
+// A ticket whose project no longer exists falls back to uncategorized.
+function groupGanttTickets(
+  rows: Ticket[],
+  projects: Project[]
+): { name: string; rows: Ticket[] }[] {
+  const byId = new Map<string, { name: string; rows: Ticket[] }>();
+  for (const p of projects) byId.set(p.id, { name: p.name, rows: [] });
+  const uncategorized = { name: 'Uncategorized', rows: [] as Ticket[] };
+  for (const t of rows) {
+    const group = t.project_id ? byId.get(t.project_id) : uncategorized;
+    if (group) group.rows.push(t);
+    else uncategorized.rows.push(t);
+  }
+  return [...byId.values(), uncategorized].filter((g) => g.rows.length > 0);
+}
+
 // Actor ids are user UUIDs now; show a short prefix, full value on hover.
 function shortId(id: string | null): string {
   if (!id) return '—';
@@ -91,6 +178,10 @@ export default function App() {
 
   const [adminView, setAdminView] = useState(false);
   const [tab, setTab] = useState('all');
+  const [view, setView] = useState<'list' | 'gantt'>('list');
+  const [ganttTickets, setGanttTickets] = useState<Ticket[]>([]);
+  const [journeys, setJourneys] = useState<Record<string, string[]>>({});
+  const [ganttLoading, setGanttLoading] = useState(false);
   const [tickets, setTickets] = useState<QueueEntry[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<TicketWithHistory | null>(null);
@@ -192,6 +283,34 @@ export default function App() {
       setError(err instanceof Error ? err.message : 'Failed to load ticket.');
     }
   }, []);
+
+  // Gantt data: all tickets under the current project filter (the status
+  // tabs do not apply — the Gantt shows every status), plus each
+  // ticket's status journey from its transition history.
+  const loadGantt = useCallback(async () => {
+    const projectId = projectFilter === 'all' ? undefined : projectFilter;
+    setGanttLoading(true);
+    try {
+      const rows = await api.listTickets(undefined, projectId);
+      setGanttTickets(rows);
+      const settled = await Promise.allSettled(rows.map((t) => api.getTicket(t.id)));
+      const next: Record<string, string[]> = {};
+      settled.forEach((r, i) => {
+        if (r.status === 'fulfilled') next[rows[i].id] = journeyFromTransitions(r.value.transitions);
+      });
+      setJourneys(next);
+    } catch (err) {
+      if ((err as { status?: number }).status === 401) return; // handled by onUnauthorized
+      setError(err instanceof Error ? err.message : 'Failed to load Gantt data.');
+    } finally {
+      setGanttLoading(false);
+    }
+  }, [projectFilter]);
+
+  useEffect(() => {
+    if (authState !== 'app' || view !== 'gantt') return;
+    loadGantt();
+  }, [view, authState, loadGantt]);
 
   useEffect(() => {
     if (authState !== 'app') return;
@@ -479,7 +598,8 @@ export default function App() {
         <button
           className="link"
           onClick={() => {
-            loadTickets(tab);
+            if (view === 'gantt') loadGantt();
+            else loadTickets(tab);
             if (selectedId) loadDetail(selectedId);
           }}
         >
@@ -666,6 +786,39 @@ export default function App() {
                 detail below.
               </p>
             )}
+            <div className="gantt-view-toggle">
+              <button
+                className={view === 'list' ? 'active' : ''}
+                onClick={() => {
+                  setView('list');
+                  loadTickets(tab);
+                }}
+              >
+                List
+              </button>
+              <button
+                className={view === 'gantt' ? 'active' : ''}
+                onClick={() => setView('gantt')}
+              >
+                Gantt
+              </button>
+            </div>
+            {view === 'gantt' ? (
+              ganttLoading && ganttTickets.length === 0 ? (
+                <p className="muted">Loading Gantt…</p>
+              ) : ganttTickets.length === 0 ? (
+                <p className="muted">No tickets in this project view.</p>
+              ) : (
+                <GanttChart
+                  tickets={ganttTickets}
+                  projects={projects}
+                  journeys={journeys}
+                  selectedId={selectedId}
+                  onSelect={setSelectedId}
+                />
+              )
+            ) : (
+              <>
             <div className="tabs">
               {QUEUE_TABS.map((t) => (
                 <button
@@ -720,6 +873,8 @@ export default function App() {
                   ))}
                 </tbody>
               </table>
+            )}
+              </>
             )}
           </div>
 
@@ -887,6 +1042,85 @@ export default function App() {
           )}
         </>
       )}
+    </div>
+  );
+}
+
+// Gantt view: one bar per ticket on a shared time axis, grouped by
+// project. A bar runs from created_at to updated_at (or now while the
+// ticket is not terminal); the line under it is the ticket's status
+// journey from its transition history. Clicking a bar opens the ticket
+// detail, same as clicking a row in the list.
+function GanttChart(props: {
+  tickets: Ticket[];
+  projects: Project[];
+  journeys: Record<string, string[]>;
+  selectedId: string | null;
+  onSelect: (id: string) => void;
+}) {
+  const { tickets, projects, journeys, selectedId, onSelect } = props;
+  const range = ganttRange(tickets);
+  const span = range.max - range.min;
+  const groups = groupGanttTickets(tickets, projects);
+  const ticks = [0, 0.25, 0.5, 0.75, 1].map((f) => range.min + span * f);
+
+  return (
+    <div className="gantt-grid">
+      <div />
+      <div className="gantt-axis">
+        {ticks.map((t, i) => (
+          <span
+            key={t}
+            style={{
+              left: `${i * 25}%`,
+              transform: i === 0 ? 'none' : i === 4 ? 'translateX(-100%)' : 'translateX(-50%)',
+            }}
+          >
+            {formatAxisTime(t)}
+          </span>
+        ))}
+      </div>
+      {groups.map((g) => (
+        <Fragment key={g.name}>
+          <div className="gantt-group">
+            {g.name} ({g.rows.length})
+          </div>
+          {g.rows.map((t) => {
+            const start = new Date(t.created_at).getTime();
+            const end = TERMINAL_STATUSES.has(t.status)
+              ? new Date(t.updated_at).getTime()
+              : Date.now();
+            const left = Math.max(0, ((start - range.min) / span) * 100);
+            const width = Math.max(1.5, Math.min(100 - left, ((end - start) / span) * 100));
+            const journey = journeys[t.id] || [];
+            const journeyText = journey.map(statusLabel).join(' → ');
+            const tooltip = journeyText
+              ? `${t.title}\n${journeyText}\n${formatTime(t.created_at)} → ${formatTime(
+                  new Date(end).toISOString()
+                )}`
+              : `${t.title}\n${formatTime(t.created_at)} → ${formatTime(new Date(end).toISOString())}`;
+            return (
+              <Fragment key={t.id}>
+                <div className="gantt-label" title={t.title}>
+                  <span className="gantt-title">{t.title}</span>
+                  <span className={`badge ${t.status}`}>{statusLabel(t.status)}</span>
+                </div>
+                <div className="gantt-track">
+                  <div
+                    className={`gantt-bar${selectedId === t.id ? ' selected' : ''}`}
+                    style={{ marginLeft: `${left}%`, width: `${width}%`, background: statusColor(t.status) }}
+                    title={tooltip}
+                    onClick={() => onSelect(t.id)}
+                  />
+                  <div className="gantt-journey" title={journeyText || undefined}>
+                    {journeyText || '—'}
+                  </div>
+                </div>
+              </Fragment>
+            );
+          })}
+        </Fragment>
+      ))}
     </div>
   );
 }
