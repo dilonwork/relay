@@ -5,6 +5,7 @@ const cors = require('cors');
 const db = require('./database');
 const { legalTransitions } = require('./stateMachine');
 const tickets = require('./tickets');
+const projects = require('./projects');
 const auth = require('./auth');
 const admin = require('./admin');
 
@@ -91,6 +92,7 @@ app.post('/api/tickets', async (req, res) => {
       description: req.body ? req.body.description : undefined,
       source: req.body ? req.body.source : undefined,
       reason: req.body ? req.body.reason : undefined,
+      projectId: req.body ? req.body.project_id : undefined,
     });
     if (!result.ok) return res.status(result.status).json({ error: result.error, message: result.message });
     res.status(201).json(result.ticket);
@@ -104,7 +106,10 @@ app.get('/api/tickets', async (req, res) => {
     const statuses = req.query.status
       ? String(req.query.status).split(',').map((s) => s.trim()).filter(Boolean)
       : null;
-    const rows = await tickets.listTickets(db, statuses);
+    // ?project_id=<uuid> filters to one project; ?project_id=none lists
+    // uncategorized tickets. Absent means all projects.
+    const projectFilter = req.query.project_id ? String(req.query.project_id).trim() : undefined;
+    const rows = await tickets.listTickets(db, statuses, projectFilter || undefined);
     res.json(rows);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -153,7 +158,61 @@ app.post('/api/tickets/:id/transitions', async (req, res) => {
 // can currently pick up, each with the transition they would take next.
 app.get('/api/queue', async (req, res) => {
   try {
-    res.json(await tickets.listClaimable(db, req.user.roles));
+    const projectFilter = req.query.project_id ? String(req.query.project_id).trim() : undefined;
+    res.json(await tickets.listClaimable(db, req.user.roles, projectFilter || undefined));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- Project endpoints (Project view) ---
+// Any authenticated user may list projects; creating one is PM or Admin.
+
+app.get('/api/projects', async (req, res) => {
+  try {
+    res.json(await projects.listProjects(db));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/projects', async (req, res) => {
+  try {
+    const result = await projects.createProject(db, {
+      actorId: req.user.id,
+      actorRoles: req.user.roles,
+      name: req.body ? req.body.name : undefined,
+      description: req.body ? req.body.description : undefined,
+    });
+    if (!result.ok) return res.status(result.status).json({ error: result.error, message: result.message });
+    res.status(201).json(result.project);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/projects/:id', async (req, res) => {
+  try {
+    const project = await projects.getProject(db, req.params.id);
+    if (!project) return res.status(404).json({ error: 'project_not_found', message: 'Project not found.' });
+    res.json(project);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Move a ticket into a project, or back to uncategorized
+// (project_id null or blank). PM only; the service enforces it.
+app.patch('/api/tickets/:id/project', async (req, res) => {
+  try {
+    const result = await projects.assignTicketProject(db, {
+      actorId: req.user.id,
+      actorRoles: req.user.roles,
+      ticketId: req.params.id,
+      projectId: req.body ? req.body.project_id : undefined,
+    });
+    if (!result.ok) return res.status(result.status).json({ error: result.error, message: result.message });
+    res.json(result.ticket);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
