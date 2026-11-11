@@ -66,6 +66,7 @@ class FakeDb {
     }
     if (sql.startsWith('INSERT INTO ticket_transitions')) {
       // Creation variant carries NULL from_status and a fixed 'requirement'.
+      // Parameter order: ticket, actor, role, [from, to,] reason, handoff, artifacts.
       const isCreation = sql.includes("VALUES ($1, $2, $3, NULL, 'requirement'");
       const tr = {
         id: `test-transition-${++this.seq}`,
@@ -75,7 +76,8 @@ class FakeDb {
         from_status: isCreation ? null : params[3],
         to_status: isCreation ? 'requirement' : params[4],
         reason: isCreation ? params[3] : params[5],
-        artifacts: JSON.parse(isCreation ? params[4] : params[6]),
+        handoff: isCreation ? params[4] : params[6],
+        artifacts: JSON.parse(isCreation ? params[5] : params[7]),
         result: sql.includes("'rejected'") ? 'rejected' : 'applied',
         created_at: new Date().toISOString(),
       };
@@ -103,25 +105,27 @@ class FakeDb {
 
 async function driveToDelivered(db, ticketId) {
   // Appendix B shaped flow: clarification loop + one review rejection.
+  // The two trial handoffs (decomposing -> pending_dev, in_dev ->
+  // pending_review) carry handoff notes, as the server now requires.
   const steps = [
-    ['leader-1', 'leader', 'decomposing', 'start decomposing'],
-    ['leader-1', 'leader', 'needs_clarification', 'acceptance metric undefined'],
-    ['pm-1', 'pm', 'decomposing', 'metric defined: p95 < 200ms'],
-    ['leader-1', 'leader', 'pending_dev', 'split into 3 dev tasks'],
-    ['dev-1', 'engineer', 'in_dev', ''],
-    ['dev-1', 'engineer', 'pending_review', 'change notes + self-test pass'],
-    ['rev-2', 'reviewer', 'in_review', ''],
-    ['rev-2', 'reviewer', 'in_dev', 'fix the null check'],
-    ['dev-1', 'engineer', 'pending_review', 'fixed, re-requesting review'],
-    ['rev-2', 'reviewer', 'in_review', ''],
-    ['rev-2', 'reviewer', 'pending_test', 'looks good'],
-    ['qa-1', 'tester', 'in_test', ''],
-    ['qa-1', 'tester', 'pending_deploy', 'all tests pass'],
-    ['ops-1', 'deployer', 'deploying', ''],
-    ['ops-1', 'deployer', 'delivered', 'v1.2.0 verified in prod'],
+    ['leader-1', 'leader', 'decomposing', 'start decomposing', ''],
+    ['leader-1', 'leader', 'needs_clarification', 'acceptance metric undefined', ''],
+    ['pm-1', 'pm', 'decomposing', 'metric defined: p95 < 200ms', ''],
+    ['leader-1', 'leader', 'pending_dev', 'split into 3 dev tasks', 'Work list: 1) search index 2) filters 3) pagination; acceptance: p95 < 200ms'],
+    ['dev-1', 'engineer', 'in_dev', '', ''],
+    ['dev-1', 'engineer', 'pending_review', 'change notes + self-test pass', 'Changed: search index + filters; tests: unit 12 pass, manual smoke pass'],
+    ['rev-2', 'reviewer', 'in_review', '', ''],
+    ['rev-2', 'reviewer', 'in_dev', 'fix the null check', ''],
+    ['dev-1', 'engineer', 'pending_review', 'fixed, re-requesting review', 'Fixed the null check; re-ran unit tests, 12 pass'],
+    ['rev-2', 'reviewer', 'in_review', '', ''],
+    ['rev-2', 'reviewer', 'pending_test', 'looks good', ''],
+    ['qa-1', 'tester', 'in_test', '', ''],
+    ['qa-1', 'tester', 'pending_deploy', 'all tests pass', ''],
+    ['ops-1', 'deployer', 'deploying', '', ''],
+    ['ops-1', 'deployer', 'delivered', 'v1.2.0 verified in prod', ''],
   ];
-  for (const [actorId, actorRole, to, reason] of steps) {
-    const res = await tickets.transitionTicket(db, ticketId, { actorId, actorRoles: [actorRole], toStatus: to, reason });
+  for (const [actorId, actorRole, to, reason, handoff] of steps) {
+    const res = await tickets.transitionTicket(db, ticketId, { actorId, actorRoles: [actorRole], toStatus: to, reason, handoff });
     assert.equal(res.ok, true, `step to ${to} as ${actorRole} failed: ${res.message || ''}`);
   }
 }
@@ -208,11 +212,11 @@ async function main() {
     });
     const id = created.ticket.id;
     await tickets.transitionTicket(db, id, { actorId: 'leader-1', actorRoles: ['leader'], toStatus: 'decomposing', reason: '' });
-    await tickets.transitionTicket(db, id, { actorId: 'leader-1', actorRoles: ['leader'], toStatus: 'pending_dev', reason: 'split done' });
+    await tickets.transitionTicket(db, id, { actorId: 'leader-1', actorRoles: ['leader'], toStatus: 'pending_dev', reason: 'split done', handoff: 'work list: 1) build 2) test' });
     let res = await tickets.transitionTicket(db, id, { actorId: 'dev-1', actorRoles: ['engineer'], toStatus: 'in_dev', reason: '' });
     assert.equal(res.ticket.assignee_id, 'dev-1');
     assert.equal(res.ticket.developer_id, 'dev-1');
-    res = await tickets.transitionTicket(db, id, { actorId: 'dev-1', actorRoles: ['engineer'], toStatus: 'pending_review', reason: 'done' });
+    res = await tickets.transitionTicket(db, id, { actorId: 'dev-1', actorRoles: ['engineer'], toStatus: 'pending_review', reason: 'done', handoff: 'built + self-tested' });
     assert.equal(res.ticket.assignee_id, null);
     assert.equal(res.ticket.developer_id, 'dev-1');
     await tickets.transitionTicket(db, id, { actorId: 'rev-2', actorRoles: ['reviewer'], toStatus: 'in_review', reason: '' });
@@ -248,9 +252,9 @@ async function main() {
     });
     const id = created.ticket.id;
     await tickets.transitionTicket(db, id, { actorId: 'leader-1', actorRoles: ['leader'], toStatus: 'decomposing', reason: '' });
-    await tickets.transitionTicket(db, id, { actorId: 'leader-1', actorRoles: ['leader'], toStatus: 'pending_dev', reason: 'done' });
+    await tickets.transitionTicket(db, id, { actorId: 'leader-1', actorRoles: ['leader'], toStatus: 'pending_dev', reason: 'done', handoff: 'work list attached' });
     await tickets.transitionTicket(db, id, { actorId: 'dev-1', actorRoles: ['engineer'], toStatus: 'in_dev', reason: '' });
-    await tickets.transitionTicket(db, id, { actorId: 'dev-1', actorRoles: ['engineer'], toStatus: 'pending_review', reason: 'done' });
+    await tickets.transitionTicket(db, id, { actorId: 'dev-1', actorRoles: ['engineer'], toStatus: 'pending_review', reason: 'done', handoff: 'built + self-tested' });
     // The developer holds both engineer and reviewer roles, so the role
     // check passes — but the self-work check still blocks them, using
     // their real identity.
@@ -276,9 +280,9 @@ async function main() {
     });
     const id = created.ticket.id;
     await tickets.transitionTicket(db, id, { actorId: 'leader-1', actorRoles: ['leader'], toStatus: 'decomposing', reason: '' });
-    await tickets.transitionTicket(db, id, { actorId: 'leader-1', actorRoles: ['leader'], toStatus: 'pending_dev', reason: 'done' });
+    await tickets.transitionTicket(db, id, { actorId: 'leader-1', actorRoles: ['leader'], toStatus: 'pending_dev', reason: 'done', handoff: 'work list attached' });
     await tickets.transitionTicket(db, id, { actorId: 'dev-1', actorRoles: ['engineer'], toStatus: 'in_dev', reason: '' });
-    await tickets.transitionTicket(db, id, { actorId: 'dev-1', actorRoles: ['engineer'], toStatus: 'pending_review', reason: 'done' });
+    await tickets.transitionTicket(db, id, { actorId: 'dev-1', actorRoles: ['engineer'], toStatus: 'pending_review', reason: 'done', handoff: 'built + self-tested' });
     // Engineer-only account: no reviewer role, so the pickup is refused
     // even though the transition itself is legal.
     const noRole = await tickets.transitionTicket(db, id, {
@@ -364,6 +368,109 @@ async function main() {
     assert.equal(all.length, 2);
     const none = await tickets.listTickets(db, ['delivered']);
     assert.equal(none.length, 0);
+  });
+
+  await ok('handoff is required on the two trial transitions, and stored when given', async () => {
+    const db = new FakeDb();
+    const created = await tickets.createTicket(db, {
+      actorId: 'pm-1', actorRoles: ['pm'], title: 't', description: 'd',
+    });
+    const id = created.ticket.id;
+    await tickets.transitionTicket(db, id, { actorId: 'leader-1', actorRoles: ['leader'], toStatus: 'decomposing', reason: '' });
+    // Missing handoff: 400, ticket unchanged, rejection audited.
+    const noHandoff = await tickets.transitionTicket(db, id, {
+      actorId: 'leader-1', actorRoles: ['leader'], toStatus: 'pending_dev', reason: 'split done', handoff: '   ',
+    });
+    assert.equal(noHandoff.ok, false);
+    assert.equal(noHandoff.status, 400);
+    assert.equal(noHandoff.error, 'handoff_required');
+    assert.equal((await tickets.getTicket(db, id)).status, 'decomposing');
+    const history = await tickets.listTransitions(db, id);
+    assert.equal(history.length, 3);
+    assert.equal(history[2].result, 'rejected');
+    assert.equal(history[2].to_status, 'pending_dev');
+    // With a handoff note the transition applies and the note is stored.
+    const withHandoff = await tickets.transitionTicket(db, id, {
+      actorId: 'leader-1', actorRoles: ['leader'], toStatus: 'pending_dev', reason: 'split done',
+      handoff: 'Work list: 1) build 2) test; acceptance: p95 < 200ms',
+    });
+    assert.equal(withHandoff.ok, true);
+    assert.equal(withHandoff.transition.handoff, 'Work list: 1) build 2) test; acceptance: p95 < 200ms');
+    await tickets.transitionTicket(db, id, { actorId: 'dev-1', actorRoles: ['engineer'], toStatus: 'in_dev', reason: '' });
+    const noReviewHandoff = await tickets.transitionTicket(db, id, {
+      actorId: 'dev-1', actorRoles: ['engineer'], toStatus: 'pending_review', reason: 'done',
+    });
+    assert.equal(noReviewHandoff.ok, false);
+    assert.equal(noReviewHandoff.status, 400);
+    assert.equal(noReviewHandoff.error, 'handoff_required');
+    const withReviewHandoff = await tickets.transitionTicket(db, id, {
+      actorId: 'dev-1', actorRoles: ['engineer'], toStatus: 'pending_review', reason: 'done',
+      handoff: 'Changed: search index + filters; tests: unit 12 pass',
+    });
+    assert.equal(withReviewHandoff.ok, true);
+    const full = await tickets.getTicketWithHistory(db, id);
+    const reviewRow = full.transitions.find((t) => t.to_status === 'pending_review' && t.result === 'applied');
+    assert.equal(reviewRow.handoff, 'Changed: search index + filters; tests: unit 12 pass');
+  });
+
+  await ok('handoff is optional on other transitions and stored when given', async () => {
+    const db = new FakeDb();
+    const created = await tickets.createTicket(db, {
+      actorId: 'pm-1', actorRoles: ['pm'], title: 't', description: 'd',
+    });
+    const id = created.ticket.id;
+    const without = await tickets.transitionTicket(db, id, {
+      actorId: 'leader-1', actorRoles: ['leader'], toStatus: 'decomposing', reason: '',
+    });
+    assert.equal(without.ok, true);
+    assert.equal(without.transition.handoff, '');
+    const withNote = await tickets.transitionTicket(db, id, {
+      actorId: 'leader-1', actorRoles: ['leader'], toStatus: 'needs_clarification', reason: 'scope?', handoff: 'my reading of the scope',
+    });
+    assert.equal(withNote.ok, true);
+    assert.equal(withNote.transition.handoff, 'my reading of the scope');
+  });
+
+  await ok('queue returns only tickets the caller can claim, with the next transition', async () => {
+    const db = new FakeDb();
+    const pm = { actorId: 'pm-1', actorRoles: ['pm'] };
+    const a = await tickets.createTicket(db, { ...pm, title: 'a', description: 'd' });
+    const b = await tickets.createTicket(db, { ...pm, title: 'b', description: 'd' });
+    const c = await tickets.createTicket(db, { ...pm, title: 'c', description: 'd' });
+    // B waits for an engineer; C is already in progress with an engineer.
+    await tickets.transitionTicket(db, b.ticket.id, { actorId: 'leader-1', actorRoles: ['leader'], toStatus: 'decomposing', reason: '' });
+    await tickets.transitionTicket(db, b.ticket.id, {
+      actorId: 'leader-1', actorRoles: ['leader'], toStatus: 'pending_dev', reason: 'done', handoff: 'work list',
+    });
+    await tickets.transitionTicket(db, c.ticket.id, { actorId: 'leader-1', actorRoles: ['leader'], toStatus: 'decomposing', reason: '' });
+    await tickets.transitionTicket(db, c.ticket.id, {
+      actorId: 'leader-1', actorRoles: ['leader'], toStatus: 'pending_dev', reason: 'done', handoff: 'work list',
+    });
+    await tickets.transitionTicket(db, c.ticket.id, { actorId: 'dev-1', actorRoles: ['engineer'], toStatus: 'in_dev', reason: '' });
+
+    const leaderQueue = await tickets.listClaimable(db, ['leader']);
+    assert.equal(leaderQueue.length, 1);
+    assert.equal(leaderQueue[0].id, a.ticket.id);
+    assert.deepEqual(leaderQueue[0].next_transition, {
+      to: 'decomposing', role: 'leader', kind: 'forward', requires_reason: false, requires_handoff: false,
+    });
+
+    const engineerQueue = await tickets.listClaimable(db, ['engineer']);
+    assert.equal(engineerQueue.length, 1);
+    assert.equal(engineerQueue[0].id, b.ticket.id);
+    assert.deepEqual(engineerQueue[0].next_transition, {
+      to: 'in_dev', role: 'engineer', kind: 'pickup', requires_reason: false, requires_handoff: false,
+    });
+
+    // In-progress tickets are not claimable by anyone, and the PM has no
+    // claimable queue in the trial stages.
+    assert.deepEqual(await tickets.listClaimable(db, ['pm']), []);
+    assert.deepEqual(await tickets.listClaimable(db, ['reviewer']), []);
+    assert.deepEqual(await tickets.listClaimable(db, []), []);
+
+    // An account holding both trial roles sees both queues.
+    const both = await tickets.listClaimable(db, ['leader', 'engineer']);
+    assert.deepEqual(both.map((t) => t.id).sort(), [a.ticket.id, b.ticket.id].sort());
   });
 
   console.log(`\n${passed} ticket service tests passed.`);

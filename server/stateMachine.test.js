@@ -23,9 +23,9 @@ const LEGAL = [
   { from: 'needs_clarification', to: 'decomposing', role: 'pm', reason: 'clarified the metric' },
   { from: 'requirement', to: 'decomposing', role: 'leader' },
   { from: 'decomposing', to: 'needs_clarification', role: 'leader', reason: 'what does this mean?' },
-  { from: 'decomposing', to: 'pending_dev', role: 'leader' },
+  { from: 'decomposing', to: 'pending_dev', role: 'leader', handoff: 'work list: 1) build 2) test' },
   { from: 'pending_dev', to: 'in_dev', role: 'engineer' },
-  { from: 'in_dev', to: 'pending_review', role: 'engineer' },
+  { from: 'in_dev', to: 'pending_review', role: 'engineer', handoff: 'changed the search index; tests pass' },
   { from: 'in_dev', to: 'needs_clarification', role: 'engineer', reason: 'spec is unclear' },
   { from: 'pending_review', to: 'in_review', role: 'reviewer' },
   { from: 'in_review', to: 'pending_test', role: 'reviewer' },
@@ -58,6 +58,7 @@ async function main() {
         actorRoles: [t.role],
         toStatus: t.to,
         reason: t.reason || '',
+        handoff: t.handoff || '',
       });
       assert.equal(res.ok, true, `${t.from} -> ${t.to} as ${t.role} should be legal: ${res.message || ''}`);
     }
@@ -165,11 +166,33 @@ async function main() {
     }
   });
 
-  await ok('forward transitions do not require a reason', async () => {
-    const res = sm.validateTransition({
-      ticket: ticket('in_dev', 'dev-1'), actorId: 'dev-1', actorRoles: ['engineer'], toStatus: 'pending_review', reason: '',
+  await ok('forward transitions do not require a reason, but the trial handoffs require a handoff note', async () => {
+    const noReason = sm.validateTransition({
+      ticket: ticket('pending_dev', 'dev-1'), actorId: 'dev-1', actorRoles: ['engineer'], toStatus: 'in_dev', reason: '', handoff: '',
     });
-    assert.equal(res.ok, true);
+    assert.equal(noReason.ok, true);
+    for (const [from, to, role] of [
+      ['decomposing', 'pending_dev', 'leader'],
+      ['in_dev', 'pending_review', 'engineer'],
+    ]) {
+      const without = sm.validateTransition({
+        ticket: ticket(from, 'dev-1'), actorId: 'someone-else', actorRoles: [role], toStatus: to, reason: '', handoff: '   ',
+      });
+      assert.equal(without.ok, false, `${from} -> ${to} without a handoff should fail`);
+      assert.equal(without.error, 'handoff_required');
+      const withHandoff = sm.validateTransition({
+        ticket: ticket(from, 'dev-1'), actorId: 'someone-else', actorRoles: [role], toStatus: to, reason: '', handoff: 'what was produced',
+      });
+      assert.equal(withHandoff.ok, true, `${from} -> ${to} with a handoff should pass`);
+    }
+    // The transition table exposes the requirement to the UI.
+    const table = sm.legalTransitions();
+    const decomposingHandoff = table.find((t) => t.from === 'decomposing' && t.to === 'pending_dev');
+    assert.equal(decomposingHandoff.requiresHandoff, true);
+    const reviewHandoff = table.find((t) => t.from === 'in_dev' && t.to === 'pending_review');
+    assert.equal(reviewHandoff.requiresHandoff, true);
+    const pickup = table.find((t) => t.from === 'pending_dev' && t.to === 'in_dev');
+    assert.equal(pickup.requiresHandoff, false);
   });
 
   await ok('terminal tickets cannot transition, and cannot be cancelled', async () => {

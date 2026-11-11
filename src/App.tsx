@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api, getToken, onUnauthorized, setToken } from './api';
-import type { AdminOverview, LegalTransition, Ticket, TicketWithHistory, User } from './api';
+import type { AdminOverview, ApiKey, LegalTransition, QueueEntry, Ticket, TicketWithHistory, User } from './api';
 
 const STATUS_LABELS: Record<string, string> = {
   requirement: 'Requirement',
@@ -34,8 +34,11 @@ const ALL_ROLES = ['pm', 'leader', 'engineer', 'reviewer', 'tester', 'deployer',
 
 // Queue tabs: every "waiting" state is its own queue; done groups the two
 // terminal states. `status` is the ?status= filter value (or null for all).
+// The claimable tab is different: it calls /api/queue, which returns only
+// the tickets the current user's roles can pick up in the trial stages.
 const QUEUE_TABS: { key: string; label: string; status: string | null }[] = [
   { key: 'all', label: 'All', status: null },
+  { key: 'claimable', label: '待接單', status: '__claimable__' },
   { key: 'requirement', label: 'Requirement', status: 'requirement' },
   { key: 'needs_clarification', label: 'Needs clarification', status: 'needs_clarification' },
   { key: 'pending_dev', label: 'Pending dev', status: 'pending_dev' },
@@ -88,7 +91,7 @@ export default function App() {
 
   const [adminView, setAdminView] = useState(false);
   const [tab, setTab] = useState('all');
-  const [tickets, setTickets] = useState<Ticket[]>([]);
+  const [tickets, setTickets] = useState<QueueEntry[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<TicketWithHistory | null>(null);
   const [meta, setMeta] = useState<LegalTransition[]>([]);
@@ -107,6 +110,7 @@ export default function App() {
   const [newSource, setNewSource] = useState('project');
   const [targetStatus, setTargetStatus] = useState('');
   const [reason, setReason] = useState('');
+  const [handoff, setHandoff] = useState('');
   const [artifactsText, setArtifactsText] = useState('');
 
   // First-run bootstrap: setup screen if no users exist yet, else restore
@@ -140,6 +144,10 @@ export default function App() {
   const loadTickets = useCallback(async (tabKey: string) => {
     const found = QUEUE_TABS.find((t) => t.key === tabKey);
     try {
+      if (tabKey === 'claimable') {
+        setTickets(await api.getQueue());
+        return;
+      }
       const rows = await api.listTickets(found && found.status ? found.status : undefined);
       setTickets(rows);
     } catch (err) {
@@ -154,6 +162,7 @@ export default function App() {
       setDetail(data);
       setTargetStatus('');
       setReason('');
+      setHandoff('');
       setArtifactsText('');
     } catch (err) {
       if ((err as { status?: number }).status === 401) return;
@@ -265,6 +274,7 @@ export default function App() {
       const res = await api.transitionTicket(detail.id, {
         to_status: targetStatus,
         reason,
+        handoff,
         artifacts,
       });
       setNotice(`Transition applied: ${statusLabel(res.transition.from_status || '')} → ${statusLabel(res.transition.to_status)}`);
@@ -366,6 +376,9 @@ export default function App() {
   }
 
   const targets = detail ? targetsForUser(meta, detail.status, user) : [];
+  const latestHandoff = detail
+    ? [...detail.transitions].reverse().find((tr) => tr.handoff && tr.handoff.trim())
+    : undefined;
   const selectedTarget = targets.find((t) => t.to === targetStatus);
   const isAdmin = user.roles.includes('admin');
   const isPm = user.roles.includes('pm');
@@ -470,7 +483,11 @@ export default function App() {
               ))}
             </div>
             {tickets.length === 0 ? (
-              <p className="muted">No tickets in this queue.</p>
+              <p className="muted">
+                {tab === 'claimable'
+                  ? 'Nothing waiting for your roles right now.'
+                  : 'No tickets in this queue.'}
+              </p>
             ) : (
               <table>
                 <thead>
@@ -478,6 +495,7 @@ export default function App() {
                     <th>Title</th>
                     <th>Status</th>
                     <th>Assignee</th>
+                    {tab === 'claimable' && <th>Next step for you</th>}
                     <th>Updated</th>
                   </tr>
                 </thead>
@@ -493,6 +511,13 @@ export default function App() {
                         <span className={`badge ${t.status}`}>{statusLabel(t.status)}</span>
                       </td>
                       <td title={t.assignee_id || ''}>{shortId(t.assignee_id)}</td>
+                      {tab === 'claimable' && (
+                        <td>
+                          {t.next_transition
+                            ? `→ ${statusLabel(t.next_transition.to)} (${ROLE_LABELS[t.next_transition.role] || t.next_transition.role})`
+                            : '—'}
+                        </td>
+                      )}
                       <td>{formatTime(t.updated_at)}</td>
                     </tr>
                   ))}
@@ -523,6 +548,20 @@ export default function App() {
                 <dd>{detail.description}</dd>
               </dl>
 
+              {latestHandoff && (
+                <>
+                  <h2>Latest handoff</h2>
+                  <p>{latestHandoff.handoff}</p>
+                  <p className="muted">
+                    Handed off {formatTime(latestHandoff.created_at)} by{' '}
+                    <span title={latestHandoff.actor_id}>{shortId(latestHandoff.actor_id)}</span> (
+                    {ROLE_LABELS[latestHandoff.actor_role] || latestHandoff.actor_role}). If this is not
+                    enough to proceed, send the ticket back to Needs clarification with a specific
+                    question — the handoff can be judged from the history below.
+                  </p>
+                </>
+              )}
+
               <h2>Transition</h2>
               {targets.length === 0 ? (
                 <p className="muted">
@@ -544,6 +583,7 @@ export default function App() {
                           <option key={t.to} value={t.to}>
                             {statusLabel(t.to)}
                             {t.requiresReason ? ' (reason required)' : ''}
+                            {t.requiresHandoff ? ' (handoff required)' : ''}
                           </option>
                         ))}
                       </select>
@@ -557,6 +597,15 @@ export default function App() {
                     value={reason}
                     onChange={(e) => setReason(e.target.value)}
                     placeholder="Why this transition, or what was produced."
+                  />
+                  <label className="field" htmlFor="handoff">
+                    Handoff note {selectedTarget && selectedTarget.requiresHandoff ? '(required)' : '(optional)'}
+                  </label>
+                  <textarea
+                    id="handoff"
+                    value={handoff}
+                    onChange={(e) => setHandoff(e.target.value)}
+                    placeholder="What the next role needs to continue: work list, what changed, test results."
                   />
                   <label className="field" htmlFor="artifacts">Evidence / output (one per line, optional)</label>
                   <textarea
@@ -583,6 +632,7 @@ export default function App() {
                       <th>Role</th>
                       <th>From → To</th>
                       <th>Reason</th>
+                      <th>Handoff</th>
                       <th>Result</th>
                     </tr>
                   </thead>
@@ -597,6 +647,7 @@ export default function App() {
                           {statusLabel(tr.to_status)}
                         </td>
                         <td>{tr.reason || '—'}</td>
+                        <td>{tr.handoff || '—'}</td>
                         <td>
                           <span className={`badge ${tr.result}`}>{tr.result}</span>
                         </td>
@@ -632,6 +683,13 @@ function AdminPanel() {
 
   const [resetId, setResetId] = useState<string | null>(null);
   const [resetPassword, setResetPassword] = useState('');
+
+  const [keysUser, setKeysUser] = useState<User | null>(null);
+  const [keys, setKeys] = useState<ApiKey[]>([]);
+  const [newKeyName, setNewKeyName] = useState('');
+  const [createdKey, setCreatedKey] = useState<string | null>(null);
+  const [keysNotice, setKeysNotice] = useState('');
+  const [copied, setCopied] = useState(false);
 
   const loadAdmin = useCallback(async () => {
     try {
@@ -720,6 +778,70 @@ function AdminPanel() {
       setAdminError(err instanceof Error ? err.message : 'Failed to reset password.');
     } finally {
       setBusy(false);
+    }
+  }
+
+  const loadKeys = useCallback(async (userId: string) => {
+    try {
+      setKeys(await api.adminListApiKeys(userId));
+    } catch (err) {
+      if ((err as { status?: number }).status === 401) return;
+      setKeysNotice(err instanceof Error ? err.message : 'Failed to load API keys.');
+    }
+  }, []);
+
+  function openKeys(u: User) {
+    setKeysUser(u);
+    setCreatedKey(null);
+    setKeysNotice('');
+    setCopied(false);
+    setNewKeyName('');
+    setEditingId(null);
+    setResetId(null);
+    loadKeys(u.id);
+  }
+
+  async function handleCreateKey(e: React.FormEvent) {
+    e.preventDefault();
+    if (!keysUser) return;
+    setKeysNotice('');
+    setBusy(true);
+    try {
+      const created = await api.adminCreateApiKey(keysUser.id, newKeyName.trim());
+      setCreatedKey(created.key || null);
+      setNewKeyName('');
+      setCopied(false);
+      setKeysNotice('Key created. Copy it now — the full key is shown only once.');
+      await loadKeys(keysUser.id);
+    } catch (err) {
+      setKeysNotice(err instanceof Error ? err.message : 'Failed to create API key.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleRevokeKey(keyId: string) {
+    if (!keysUser) return;
+    setKeysNotice('');
+    setBusy(true);
+    try {
+      await api.adminRevokeApiKey(keyId);
+      setKeysNotice('Key revoked. It stops working immediately.');
+      await loadKeys(keysUser.id);
+    } catch (err) {
+      setKeysNotice(err instanceof Error ? err.message : 'Failed to revoke API key.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleCopyKey() {
+    if (!createdKey) return;
+    try {
+      await navigator.clipboard.writeText(createdKey);
+      setCopied(true);
+    } catch {
+      setKeysNotice('Copy failed — select the key text and copy it manually.');
     }
   }
 
@@ -833,6 +955,9 @@ function AdminPanel() {
                       }}
                     >
                       Reset password
+                    </button>{' '}
+                    <button className="link" onClick={() => openKeys(u)}>
+                      Keys
                     </button>
                   </td>
                 </tr>
@@ -915,6 +1040,87 @@ function AdminPanel() {
           </form>
         )}
       </div>
+
+      {keysUser && (
+        <div className="card">
+          <h2>API keys — {keysUser.username}</h2>
+          <p className="muted">
+            Keys authenticate as {keysUser.username} and inherit that account's roles. Use them for
+            agent processes: send the key as the X-API-Key header. A revoked key stops working
+            immediately.
+          </p>
+          {keysNotice && <div className="banner notice">{keysNotice}</div>}
+          {createdKey && (
+            <div className="banner notice">
+              <strong>New key (shown only once):</strong>
+              <br />
+              <code>{createdKey}</code>{' '}
+              <button type="button" className="link" onClick={handleCopyKey}>
+                {copied ? 'Copied' : 'Copy'}
+              </button>
+            </div>
+          )}
+          {keys.length === 0 ? (
+            <p className="muted">No API keys for this account.</p>
+          ) : (
+            <table>
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Prefix</th>
+                  <th>Created</th>
+                  <th>Last used</th>
+                  <th>Status</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {keys.map((k) => (
+                  <tr key={k.id}>
+                    <td>{k.name || '—'}</td>
+                    <td>
+                      <code>{k.key_prefix}…</code>
+                    </td>
+                    <td>{formatTime(k.created_at)}</td>
+                    <td>{k.last_used_at ? formatTime(k.last_used_at) : 'Never'}</td>
+                    <td>{k.revoked_at ? 'Revoked' : 'Active'}</td>
+                    <td>
+                      {!k.revoked_at && (
+                        <button className="link" onClick={() => handleRevokeKey(k.id)} disabled={busy}>
+                          Revoke
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          <form onSubmit={handleCreateKey}>
+            <label className="field" htmlFor="new-key-name">New key name (optional)</label>
+            <input
+              id="new-key-name"
+              type="text"
+              value={newKeyName}
+              onChange={(e) => setNewKeyName(e.target.value)}
+              placeholder="e.g. decomposer agent"
+            />
+            <button className="primary" type="submit" disabled={busy}>
+              Create API key
+            </button>{' '}
+            <button
+              type="button"
+              className="link"
+              onClick={() => {
+                setKeysUser(null);
+                setCreatedKey(null);
+              }}
+            >
+              Close
+            </button>
+          </form>
+        </div>
+      )}
 
       <div className="card">
         <h2>Create user</h2>
