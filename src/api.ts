@@ -19,6 +19,7 @@ export interface Transition {
   from_status: string | null;
   to_status: string;
   reason: string;
+  handoff: string;
   artifacts: string[];
   result: string;
   created_at: string;
@@ -28,11 +29,25 @@ export interface TicketWithHistory extends Ticket {
   transitions: Transition[];
 }
 
+// A ticket waiting to be claimed, with the transition the caller would
+// take next (Phase 2 claim queue). Plain ticket lists do not carry the
+// field, so it is optional.
+export interface QueueEntry extends Ticket {
+  next_transition?: {
+    to: string;
+    role: string;
+    kind: string;
+    requires_reason: boolean;
+    requires_handoff: boolean;
+  } | null;
+}
+
 export interface LegalTransition {
   from: string | null;
   to: string;
   role: string;
   requiresReason: boolean;
+  requiresHandoff: boolean;
   selfCheck: boolean;
   kind: string;
 }
@@ -62,6 +77,19 @@ export interface AdminOverview {
   tickets: { total: number; byStatus: Record<string, number> };
   transitions: { total: number; recent: Transition[] };
   db: { ok: boolean };
+}
+
+// An API key as the API ever shows it: no hash, and no full key except in
+// the single create response (where `key` is present, exactly once).
+export interface ApiKey {
+  id: string;
+  user_id: string;
+  name: string;
+  key_prefix: string;
+  created_at: string;
+  last_used_at: string | null;
+  revoked_at: string | null;
+  key?: string;
 }
 
 const TOKEN_KEY = 'relay_token';
@@ -128,12 +156,13 @@ export const api = {
     request<Ticket>('/api/tickets', { method: 'POST', body: JSON.stringify(payload) }),
   transitionTicket: (
     id: string,
-    payload: { to_status: string; reason: string; artifacts: string[] }
+    payload: { to_status: string; reason: string; handoff: string; artifacts: string[] }
   ) =>
     request<{ ticket: Ticket; transition: Transition }>(
       `/api/tickets/${encodeURIComponent(id)}/transitions`,
       { method: 'POST', body: JSON.stringify(payload) }
     ),
+  getQueue: () => request<QueueEntry[]>('/api/queue'),
   adminOverview: () => request<AdminOverview>('/api/admin/overview'),
   adminListUsers: () => request<User[]>('/api/admin/users'),
   adminCreateUser: (payload: { username: string; password: string; display_name: string; roles: string[] }) =>
@@ -147,5 +176,16 @@ export const api = {
     request<{ ok: boolean }>(`/api/admin/users/${encodeURIComponent(id)}/reset-password`, {
       method: 'POST',
       body: JSON.stringify({ password }),
+    }),
+  adminListApiKeys: (userId: string) =>
+    request<ApiKey[]>(`/api/admin/users/${encodeURIComponent(userId)}/api-keys`),
+  adminCreateApiKey: (userId: string, name: string) =>
+    request<ApiKey>(`/api/admin/users/${encodeURIComponent(userId)}/api-keys`, {
+      method: 'POST',
+      body: JSON.stringify({ name }),
+    }),
+  adminRevokeApiKey: (keyId: string) =>
+    request<ApiKey>(`/api/admin/api-keys/${encodeURIComponent(keyId)}/revoke`, {
+      method: 'POST',
     }),
 };

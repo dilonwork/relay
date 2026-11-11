@@ -40,6 +40,18 @@ audit rules and the data model.
   but admin does not bypass the workflow role checks on transitions. See
   [Accounts & authentication](#accounts--authentication) and design doc
   ch. 11.
+- **Agent access (locked 2026-11-11, Phase 2):** agent processes
+  authenticate with long-lived API keys (`rl_…`, `X-API-Key` header)
+  issued per account by an admin; a key inherits its account's roles and
+  is subject to the same role and self-work checks as a session. Keys are
+  revocable and only a scrypt hash is stored — the full key is shown
+  exactly once, at creation. `GET /api/queue` lists the tickets the
+  caller's roles can claim in the trial stages (decomposing and
+  development). The two trial handoffs (`decomposing` → `pending_dev`,
+  `in_dev` → `pending_review`) require a handoff note describing what was
+  produced for the next role; the note is stored on the audit row, and the
+  next role can send the ticket back to `needs_clarification` when it is
+  not enough. See [Agent access](#agent-access) and design doc ch. 12.
 
 ## Project structure
 
@@ -54,15 +66,16 @@ relay/
 │   ├── index.js          # entry point, API routes
 │   ├── database.js       # pg Pool, auto-creates tables on startup
 │   ├── stateMachine.js   # 13 states, 18 legal transitions, role checks
-│   ├── tickets.js        # ticket service: create / transition / history
-│   ├── auth.js           # users, scrypt passwords, sessions, auth middleware
+│   ├── tickets.js        # ticket service: create / transition / history / claim queue
+│   ├── auth.js           # users, scrypt passwords, sessions, API keys, auth middleware
 │   ├── admin.js          # admin overview aggregation
 │   ├── stateMachine.test.js
 │   ├── tickets.test.js
 │   ├── auth.test.js
-│   └── admin.test.js
+│   ├── admin.test.js
+│   └── apikeys.test.js
 ├── db/
-│   └── migrations/       # schema as SQL migrations (001-004)
+│   └── migrations/       # schema as SQL migrations (001-006)
 ├── doc/
 │   └── design.md         # design document (Traditional Chinese)
 ├── index.html
@@ -87,7 +100,7 @@ the same dev servers.
 The backend needs a PostgreSQL database named `relay` (see `.env.example`).
 Creating that database is a separate deployment step and is not done by the
 code in this repo; the server creates the `tickets`, `ticket_transitions`,
-`users` and `sessions` tables itself on startup.
+`users`, `sessions` and `api_keys` tables itself on startup.
 
 On first run the users table is empty, so the app shows a setup screen:
 create the first admin account there (username, display name, password).
@@ -137,12 +150,43 @@ ticket service is tested against an in-memory fake implementing the same
   bypass workflow role checks: to move a ticket, the admin's account must
   hold the role that transition requires, like anyone else.
 
+## Agent access
+
+- **API keys:** an admin issues a key for an account from the Admin
+  panel (per account: list, create, revoke). A key looks like
+  `rl_` + 32 random hex characters and is sent as the `X-API-Key`
+  header. Only a scrypt hash of the key is stored; the full key is shown
+  exactly once, when it is created, and is never logged. A key inherits
+  its account's roles and is subject to exactly the same role checks,
+  self-work check and audit rules as a password session — including the
+  rule that a key cannot use admin endpoints unless its account holds the
+  `admin` role. Revoking a key (or deactivating its account) makes it
+  stop working immediately. Last use is recorded per key.
+- **Claim queue:** `GET /api/queue` returns the tickets the caller can
+  currently pick up, each with the transition they would take next. The
+  trial covers decomposing and development only: a ticket in
+  `requirement` waits for a leader, a ticket in `pending_dev` waits for
+  an engineer. Tickets already in progress are not claimable. The
+  frontend has a 待接單 (claimable) tab for this queue.
+- **Handoff notes:** the two trial handoffs — `decomposing` →
+  `pending_dev` and `in_dev` → `pending_review` — require a non-empty
+  `handoff` note in the transition request (missing or blank → 400
+  `handoff_required`). On every other transition a handoff note is
+  optional and is stored when given. The note is returned with the ticket
+  history and shown in the ticket detail view, next to the path for
+  judging it: if the handoff is not enough to proceed, the next role
+  sends the ticket back to `needs_clarification` with a specific
+  question. A missing required reason or handoff note is a validation
+  error (400); a wrong role, illegal transition or self-work attempt is
+  an authorization error (403). Both are audited as rejected attempts.
+
 ## API
 
 Every `/api` endpoint except `/api/health`, `/api/auth/status`,
-`/api/auth/setup` and `/api/auth/login` requires a valid session
-(`Authorization: Bearer <token>`). The actor of every ticket operation is
-the authenticated user; the server derives the required role from the
+`/api/auth/setup` and `/api/auth/login` requires authentication: a
+session (`Authorization: Bearer <token>`) or an API key
+(`X-API-Key: <key>`). The actor of every ticket operation is the
+authenticated user; the server derives the required role from the
 state machine and ignores any `actor_role` sent by the client. The audit
 log records the role actually exercised.
 
@@ -159,12 +203,16 @@ log records the role actually exercised.
 | `GET` | `/api/tickets?status=<state>` | List tickets, optionally filtered by state |
 | `GET` | `/api/tickets/:id` | One ticket with its full transition history |
 | `GET` | `/api/tickets/:id/transitions` | Transition history of one ticket |
-| `POST` | `/api/tickets/:id/transitions` | Transition a ticket (`to_status`, `reason`, `artifacts`) |
+| `POST` | `/api/tickets/:id/transitions` | Transition a ticket (`to_status`, `reason`, `handoff`, `artifacts`) |
+| `GET` | `/api/queue` | Tickets the caller can claim in the trial stages, with the next transition |
 | `GET` | `/api/admin/overview` | System overview (admin only) |
 | `GET` | `/api/admin/users` | List accounts (admin only) |
 | `POST` | `/api/admin/users` | Create an account (admin only) |
 | `PATCH` | `/api/admin/users/:id` | Edit display name, roles, active flag (admin only) |
 | `POST` | `/api/admin/users/:id/reset-password` | Set a new password, revokes sessions (admin only) |
+| `GET` | `/api/admin/users/:id/api-keys` | List an account's API keys, without hashes (admin only) |
+| `POST` | `/api/admin/users/:id/api-keys` | Issue an API key; full key returned exactly once (admin only) |
+| `POST` | `/api/admin/api-keys/:id/revoke` | Revoke an API key (admin only) |
 
 ## License
 

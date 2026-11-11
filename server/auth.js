@@ -1,5 +1,6 @@
-// Relay authentication: users, password hashing, sessions, middleware.
-// Design doc ch. 11 (locked).
+// Relay authentication: users, password hashing, sessions, API keys,
+// middleware.
+// Design doc ch. 11 (locked) and ch. 12 (Phase 2, locked).
 //
 // Passwords are hashed with Node's built-in crypto.scrypt and a per-user
 // random salt; no hashing dependency. The stored value is
@@ -254,16 +255,151 @@ function parseBearerToken(req) {
   return match ? match[1].trim() : null;
 }
 
+// --- API keys (design doc ch. 12, Phase 2) ---
+// A long-lived credential for an agent process: `rl_` + 32 random hex
+// characters. Only a scrypt hash is stored (same format as passwords);
+// the full key is returned exactly once, when the key is created. A key
+// inherits its account's roles and is subject to the same role and
+// self-work checks as a session. `key_prefix` (`rl_` + the first 4 hex
+// characters) identifies the key in lists and narrows the lookup; the
+// hash is verified against every candidate sharing that prefix.
+
+const API_KEY_PREFIX = 'rl_';
+const API_KEY_PREFIX_CHARS = 4;
+const MAX_API_KEY_NAME_LENGTH = 64;
+
+function newApiKey() {
+  return API_KEY_PREFIX + crypto.randomBytes(16).toString('hex');
+}
+
+function apiKeyPrefix(key) {
+  return String(key || '').slice(0, API_KEY_PREFIX.length + API_KEY_PREFIX_CHARS);
+}
+
+// The key as the API ever shows it: no hash, and no full key except in
+// the single create response that carries it.
+function publicApiKey(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    user_id: row.user_id,
+    name: row.name,
+    key_prefix: row.key_prefix,
+    created_at: row.created_at,
+    last_used_at: row.last_used_at,
+    revoked_at: row.revoked_at,
+  };
+}
+
+async function createApiKey(db, { userId, name }) {
+  const user = await findUserById(db, userId);
+  if (!user) {
+    return { ok: false, status: 404, error: 'user_not_found', message: 'User not found.' };
+  }
+  const cleanName = typeof name === 'string' ? name.trim() : '';
+  if (cleanName.length > MAX_API_KEY_NAME_LENGTH) {
+    return { ok: false, status: 400, error: 'bad_request', message: `Key name must be at most ${MAX_API_KEY_NAME_LENGTH} characters.` };
+  }
+  const fullKey = newApiKey();
+  const { rows } = await db.query(
+    'INSERT INTO api_keys (user_id, name, key_hash, key_prefix) VALUES ($1, $2, $3, $4) RETURNING *',
+    [user.id, cleanName, hashPassword(fullKey), apiKeyPrefix(fullKey)]
+  );
+  // The full key is returned exactly once, here. It is never stored.
+  return { ok: true, status: 201, key: { ...publicApiKey(rows[0]), key: fullKey } };
+}
+
+async function listApiKeys(db, userId) {
+  const user = await findUserById(db, userId);
+  if (!user) {
+    return { ok: false, status: 404, error: 'user_not_found', message: 'User not found.' };
+  }
+  const { rows } = await db.query(
+    'SELECT * FROM api_keys WHERE user_id = $1 ORDER BY created_at ASC, id ASC',
+    [user.id]
+  );
+  return { ok: true, status: 200, keys: rows.map(publicApiKey) };
+}
+
+async function revokeApiKey(db, keyId) {
+  const { rows } = await db.query('SELECT * FROM api_keys WHERE id = $1', [keyId]);
+  const key = rows[0];
+  if (!key) {
+    return { ok: false, status: 404, error: 'api_key_not_found', message: 'API key not found.' };
+  }
+  if (key.revoked_at) {
+    return { ok: true, status: 200, key: publicApiKey(key) };
+  }
+  const { rows: updated } = await db.query(
+    'UPDATE api_keys SET revoked_at = CURRENT_TIMESTAMP WHERE id = $1 RETURNING *',
+    [keyId]
+  );
+  return { ok: true, status: 200, key: publicApiKey(updated[0]) };
+}
+
+// Resolve an API key to its user, or null. Revocation and deactivation
+// are checked on every call: a revoked key, or a key whose account is
+// deactivated, authenticates nothing.
+async function authenticateApiKey(db, key) {
+  if (!key || typeof key !== 'string') return null;
+  const { rows } = await db.query(
+    'SELECT * FROM api_keys WHERE key_prefix = $1 AND revoked_at IS NULL',
+    [apiKeyPrefix(key)]
+  );
+  let matched = null;
+  for (const row of rows) {
+    if (verifyPassword(key, row.key_hash)) {
+      matched = row;
+      break;
+    }
+  }
+  if (!matched) {
+    // Same scrypt work as a real check, so a wrong key costs the same
+    // whether or not its prefix exists.
+    verifyPassword(key, DUMMY_HASH);
+    return null;
+  }
+  const user = await findUserById(db, matched.user_id);
+  if (!user || !user.is_active) return null;
+  // Best-effort: record last use. It must never break the request.
+  try {
+    await db.query('UPDATE api_keys SET last_used_at = CURRENT_TIMESTAMP WHERE id = $1', [matched.id]);
+  } catch (err) {
+    // Ignore: last_used_at is informational only.
+  }
+  return publicUser(user);
+}
+
+function parseApiKey(req) {
+  const header = req.headers && req.headers['x-api-key'];
+  if (!header || typeof header !== 'string') return null;
+  return header.trim() || null;
+}
+
+// Resolve the caller by session token first, then by API key. Either
+// credential resolves to the same user and roles; downstream role and
+// self-work checks cannot tell which one was used.
+async function authenticateAny(db, req) {
+  const sessionUser = await authenticate(db, parseBearerToken(req));
+  if (sessionUser) return { user: sessionUser, authType: 'session' };
+  const keyUser = await authenticateApiKey(db, parseApiKey(req));
+  if (keyUser) return { user: keyUser, authType: 'api_key' };
+  return null;
+}
+
 // Express middleware: every route after this point requires a valid
-// session. Attaches req.user (public user) and req.token.
+// session or API key. Attaches req.user (public user), req.authType
+// ('session' | 'api_key') and req.token (session token, or null when the
+// caller authenticated with an API key).
 function requireAuth(db) {
   return async (req, res, next) => {
     try {
-      const user = await authenticate(db, parseBearerToken(req));
-      if (!user) {
+      const resolved = await authenticateAny(db, req);
+      if (!resolved) {
         return res.status(401).json({ error: 'unauthorized', message: 'Authentication required.' });
       }
-      req.user = user;
+      req.user = resolved.user;
+      req.authType = resolved.authType;
       req.token = parseBearerToken(req);
       return next();
     } catch (err) {
@@ -305,7 +441,16 @@ module.exports = {
   login,
   logout,
   authenticate,
+  authenticateApiKey,
+  authenticateAny,
   parseBearerToken,
+  parseApiKey,
   requireAuth,
   requireAdmin,
+  newApiKey,
+  apiKeyPrefix,
+  publicApiKey,
+  createApiKey,
+  listApiKeys,
+  revokeApiKey,
 };

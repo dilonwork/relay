@@ -38,31 +38,35 @@ const ROLES = ['pm', 'leader', 'engineer', 'reviewer', 'tester', 'deployer'];
 
 // requiresReason follows design doc ch. 7: return, cancel and clarification
 // transitions must carry a reason; other transitions may carry one.
+// requiresHandoff follows design doc ch. 12 (Phase 2, trial): the two
+// trial handoffs — decomposing -> pending_dev and in_dev ->
+// pending_review — must carry a handoff note describing what was produced
+// for the next role; other transitions may carry one.
 const TRANSITIONS = [
-  { from: null, to: 'requirement', role: 'pm', requiresReason: false, selfCheck: false, kind: 'create' },
-  { from: 'needs_clarification', to: 'decomposing', role: 'pm', requiresReason: true, selfCheck: false, kind: 'clarify' },
-  { from: 'requirement', to: 'decomposing', role: 'leader', requiresReason: false, selfCheck: false, kind: 'forward' },
-  { from: 'decomposing', to: 'needs_clarification', role: 'leader', requiresReason: true, selfCheck: false, kind: 'clarify' },
-  { from: 'decomposing', to: 'pending_dev', role: 'leader', requiresReason: false, selfCheck: false, kind: 'forward' },
-  { from: 'pending_dev', to: 'in_dev', role: 'engineer', requiresReason: false, selfCheck: false, kind: 'pickup' },
-  { from: 'in_dev', to: 'pending_review', role: 'engineer', requiresReason: false, selfCheck: false, kind: 'forward' },
-  { from: 'in_dev', to: 'needs_clarification', role: 'engineer', requiresReason: true, selfCheck: false, kind: 'clarify' },
-  { from: 'pending_review', to: 'in_review', role: 'reviewer', requiresReason: false, selfCheck: true, kind: 'pickup' },
-  { from: 'in_review', to: 'pending_test', role: 'reviewer', requiresReason: false, selfCheck: true, kind: 'forward' },
-  { from: 'in_review', to: 'in_dev', role: 'reviewer', requiresReason: true, selfCheck: true, kind: 'return' },
-  { from: 'pending_test', to: 'in_test', role: 'tester', requiresReason: false, selfCheck: true, kind: 'pickup' },
-  { from: 'in_test', to: 'pending_deploy', role: 'tester', requiresReason: false, selfCheck: true, kind: 'forward' },
-  { from: 'in_test', to: 'in_dev', role: 'tester', requiresReason: true, selfCheck: true, kind: 'return' },
-  { from: 'pending_deploy', to: 'deploying', role: 'deployer', requiresReason: false, selfCheck: true, kind: 'pickup' },
-  { from: 'deploying', to: 'delivered', role: 'deployer', requiresReason: false, selfCheck: true, kind: 'forward' },
-  { from: 'deploying', to: 'in_test', role: 'deployer', requiresReason: true, selfCheck: true, kind: 'return' },
+  { from: null, to: 'requirement', role: 'pm', requiresReason: false, requiresHandoff: false, selfCheck: false, kind: 'create' },
+  { from: 'needs_clarification', to: 'decomposing', role: 'pm', requiresReason: true, requiresHandoff: false, selfCheck: false, kind: 'clarify' },
+  { from: 'requirement', to: 'decomposing', role: 'leader', requiresReason: false, requiresHandoff: false, selfCheck: false, kind: 'forward' },
+  { from: 'decomposing', to: 'needs_clarification', role: 'leader', requiresReason: true, requiresHandoff: false, selfCheck: false, kind: 'clarify' },
+  { from: 'decomposing', to: 'pending_dev', role: 'leader', requiresReason: false, requiresHandoff: true, selfCheck: false, kind: 'forward' },
+  { from: 'pending_dev', to: 'in_dev', role: 'engineer', requiresReason: false, requiresHandoff: false, selfCheck: false, kind: 'pickup' },
+  { from: 'in_dev', to: 'pending_review', role: 'engineer', requiresReason: false, requiresHandoff: true, selfCheck: false, kind: 'forward' },
+  { from: 'in_dev', to: 'needs_clarification', role: 'engineer', requiresReason: true, requiresHandoff: false, selfCheck: false, kind: 'clarify' },
+  { from: 'pending_review', to: 'in_review', role: 'reviewer', requiresReason: false, requiresHandoff: false, selfCheck: true, kind: 'pickup' },
+  { from: 'in_review', to: 'pending_test', role: 'reviewer', requiresReason: false, requiresHandoff: false, selfCheck: true, kind: 'forward' },
+  { from: 'in_review', to: 'in_dev', role: 'reviewer', requiresReason: true, requiresHandoff: false, selfCheck: true, kind: 'return' },
+  { from: 'pending_test', to: 'in_test', role: 'tester', requiresReason: false, requiresHandoff: false, selfCheck: true, kind: 'pickup' },
+  { from: 'in_test', to: 'pending_deploy', role: 'tester', requiresReason: false, requiresHandoff: false, selfCheck: true, kind: 'forward' },
+  { from: 'in_test', to: 'in_dev', role: 'tester', requiresReason: true, requiresHandoff: false, selfCheck: true, kind: 'return' },
+  { from: 'pending_deploy', to: 'deploying', role: 'deployer', requiresReason: false, requiresHandoff: false, selfCheck: true, kind: 'pickup' },
+  { from: 'deploying', to: 'delivered', role: 'deployer', requiresReason: false, requiresHandoff: false, selfCheck: true, kind: 'forward' },
+  { from: 'deploying', to: 'in_test', role: 'deployer', requiresReason: true, requiresHandoff: false, selfCheck: true, kind: 'return' },
 ];
 
 // Cancel is the 18th legal transition: PM only, from any non-terminal state,
 // reason required (design doc ch. 6). It is a rule, not one row per state.
 const CANCEL_RULE = {
   from: '*', to: 'cancelled', role: 'pm',
-  requiresReason: true, selfCheck: false, kind: 'cancel',
+  requiresReason: true, requiresHandoff: false, selfCheck: false, kind: 'cancel',
 };
 
 function isTerminal(status) {
@@ -91,7 +95,10 @@ function attemptedRoleFallback(actorRoles) {
 // Validate one transition attempt. Returns { ok: true, rule, attemptedRole }
 // or { ok: false, error, message, attemptedRole }. `ticket` needs
 // { status, developer_id }; `actorRoles` is the actor's full role list.
-function validateTransition({ ticket, actorId, actorRoles, toStatus, reason }) {
+// Missing-content failures (reason_required, handoff_required) are
+// validation errors, not authorization failures: the caller distinguishes
+// them by error code, and the service maps them to 400 (see tickets.js).
+function validateTransition({ ticket, actorId, actorRoles, toStatus, reason, handoff }) {
   const roles = Array.isArray(actorRoles) ? actorRoles : [];
   if (!STATUSES.includes(toStatus)) {
     return { ok: false, error: 'unknown_status', message: `Unknown status: ${toStatus}.`, attemptedRole: attemptedRoleFallback(roles) };
@@ -125,6 +132,9 @@ function validateTransition({ ticket, actorId, actorRoles, toStatus, reason }) {
   if (rule.requiresReason && (!reason || !String(reason).trim())) {
     return { ok: false, error: 'reason_required', message: `Moving from ${from} to ${toStatus} requires a reason.`, attemptedRole: rule.role };
   }
+  if (rule.requiresHandoff && (!handoff || !String(handoff).trim())) {
+    return { ok: false, error: 'handoff_required', message: `Moving from ${from} to ${toStatus} requires a handoff note describing what was produced for the next role.`, attemptedRole: rule.role };
+  }
   return { ok: true, rule, attemptedRole: rule.role };
 }
 
@@ -135,11 +145,11 @@ function allowedTransitions(ticket, actorRole) {
   const out = [];
   for (const rule of TRANSITIONS) {
     if (rule.from === ticket.status && rule.role === actorRole) {
-      out.push({ to: rule.to, requiresReason: rule.requiresReason, kind: rule.kind });
+      out.push({ to: rule.to, requiresReason: rule.requiresReason, requiresHandoff: rule.requiresHandoff, kind: rule.kind });
     }
   }
   if (actorRole === 'pm') {
-    out.push({ to: 'cancelled', requiresReason: true, kind: 'cancel' });
+    out.push({ to: 'cancelled', requiresReason: true, requiresHandoff: false, kind: 'cancel' });
   }
   return out;
 }

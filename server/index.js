@@ -56,10 +56,11 @@ app.post('/api/auth/login', async (req, res) => {
   }
 });
 
-// --- Everything below requires a valid session ---
+// --- Everything below requires a valid session or API key ---
 // The actor is always the authenticated user (req.user): the server
 // derives the required role from the state machine and ignores any
-// actor_role the client sends (design doc ch. 11).
+// actor_role the client sends (design doc ch. 11). An API key
+// authenticates exactly like a session (design doc ch. 12).
 app.use('/api', auth.requireAuth(db));
 app.use('/api/admin', auth.requireAdmin);
 
@@ -138,10 +139,21 @@ app.post('/api/tickets/:id/transitions', async (req, res) => {
       actorRoles: req.user.roles,
       toStatus: req.body ? req.body.to_status : undefined,
       reason: req.body ? req.body.reason : undefined,
+      handoff: req.body ? req.body.handoff : undefined,
       artifacts: req.body ? req.body.artifacts : undefined,
     });
     if (!result.ok) return res.status(result.status).json({ error: result.error, message: result.message });
     res.json({ ticket: result.ticket, transition: result.transition });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Trial-stage claim queue (design doc ch. 12): the tickets the caller
+// can currently pick up, each with the transition they would take next.
+app.get('/api/queue', async (req, res) => {
+  try {
+    res.json(await tickets.listClaimable(db, req.user.roles));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -201,6 +213,42 @@ app.post('/api/admin/users/:id/reset-password', async (req, res) => {
     const result = await auth.resetPassword(db, req.params.id, req.body ? req.body.password : undefined);
     if (!result.ok) return res.status(result.status).json({ error: result.error, message: result.message });
     res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- Admin API key endpoints (design doc ch. 12) ---
+// The full key is returned exactly once, in the create response.
+
+app.post('/api/admin/users/:id/api-keys', async (req, res) => {
+  try {
+    const result = await auth.createApiKey(db, {
+      userId: req.params.id,
+      name: req.body ? req.body.name : undefined,
+    });
+    if (!result.ok) return res.status(result.status).json({ error: result.error, message: result.message });
+    res.status(201).json(result.key);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/admin/users/:id/api-keys', async (req, res) => {
+  try {
+    const result = await auth.listApiKeys(db, req.params.id);
+    if (!result.ok) return res.status(result.status).json({ error: result.error, message: result.message });
+    res.json(result.keys);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/admin/api-keys/:id/revoke', async (req, res) => {
+  try {
+    const result = await auth.revokeApiKey(db, req.params.id);
+    if (!result.ok) return res.status(result.status).json({ error: result.error, message: result.message });
+    res.json(result.key);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

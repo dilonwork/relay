@@ -78,9 +78,9 @@ async function createTicket(db, { actorId, actorRoles, title, description, sourc
     );
     const created = rows[0];
     await client.query(
-      `INSERT INTO ticket_transitions (ticket_id, actor_id, actor_role, from_status, to_status, reason, artifacts, result)
-       VALUES ($1, $2, $3, NULL, 'requirement', $4, $5, 'applied') RETURNING *`,
-      [created.id, String(actorId).trim(), 'pm', (reason && String(reason).trim()) || 'Ticket created', JSON.stringify([])]
+      `INSERT INTO ticket_transitions (ticket_id, actor_id, actor_role, from_status, to_status, reason, handoff, artifacts, result)
+       VALUES ($1, $2, $3, NULL, 'requirement', $4, $5, $6, 'applied') RETURNING *`,
+      [created.id, String(actorId).trim(), 'pm', (reason && String(reason).trim()) || 'Ticket created', '', JSON.stringify([])]
     );
     return created;
   });
@@ -112,11 +112,12 @@ function nextOwnership(ticket, rule, actorId) {
   return { assigneeId: null, developerId: ticket.developer_id || null };
 }
 
-async function transitionTicket(db, ticketId, { actorId, actorRoles, toStatus, reason, artifacts }) {
+async function transitionTicket(db, ticketId, { actorId, actorRoles, toStatus, reason, handoff, artifacts }) {
   if (!actorId || !String(actorId).trim() || !Array.isArray(actorRoles) || !toStatus) {
     return { ok: false, status: 400, error: 'bad_request', message: 'actor_id, actor roles and to_status are required.' };
   }
   const cleanReason = reason === undefined || reason === null ? '' : String(reason);
+  const cleanHandoff = handoff === undefined || handoff === null ? '' : String(handoff);
   const cleanArtifacts = normalizeArtifacts(artifacts);
 
   return db.withTransaction(async (client) => {
@@ -139,17 +140,21 @@ async function transitionTicket(db, ticketId, { actorId, actorRoles, toStatus, r
       actorRoles,
       toStatus,
       reason: cleanReason,
+      handoff: cleanHandoff,
     });
 
     if (!check.ok) {
       // Rejected attempts are audited too (design doc ch. 7), under the
-      // role the attempt was made as.
+      // role the attempt was made as. Missing-content failures (a required
+      // reason or handoff note) are validation errors, so they answer 400;
+      // authorization failures answer 403.
+      const status = (check.error === 'reason_required' || check.error === 'handoff_required') ? 400 : 403;
       const { rows: rejectedRows } = await client.query(
-        `INSERT INTO ticket_transitions (ticket_id, actor_id, actor_role, from_status, to_status, reason, artifacts, result)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, 'rejected') RETURNING *`,
-        [ticket.id, String(actorId).trim(), check.attemptedRole, ticket.status, toStatus, check.message, JSON.stringify([])]
+        `INSERT INTO ticket_transitions (ticket_id, actor_id, actor_role, from_status, to_status, reason, handoff, artifacts, result)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'rejected') RETURNING *`,
+        [ticket.id, String(actorId).trim(), check.attemptedRole, ticket.status, toStatus, check.message, cleanHandoff.trim(), JSON.stringify([])]
       );
-      return { ok: false, status: 403, error: check.error, message: check.message, transition: rejectedRows[0] };
+      return { ok: false, status, error: check.error, message: check.message, transition: rejectedRows[0] };
     }
 
     const { assigneeId, developerId } = nextOwnership(ticket, check.rule, String(actorId).trim());
@@ -159,11 +164,47 @@ async function transitionTicket(db, ticketId, { actorId, actorRoles, toStatus, r
       [toStatus, assigneeId, developerId, ticket.id]
     );
     const { rows: transitionRows } = await client.query(
-      `INSERT INTO ticket_transitions (ticket_id, actor_id, actor_role, from_status, to_status, reason, artifacts, result)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, 'applied') RETURNING *`,
-      [ticket.id, String(actorId).trim(), check.rule.role, ticket.status, toStatus, cleanReason.trim(), JSON.stringify(cleanArtifacts)]
+      `INSERT INTO ticket_transitions (ticket_id, actor_id, actor_role, from_status, to_status, reason, handoff, artifacts, result)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'applied') RETURNING *`,
+      [ticket.id, String(actorId).trim(), check.rule.role, ticket.status, toStatus, cleanReason.trim(), cleanHandoff.trim(), JSON.stringify(cleanArtifacts)]
     );
     return { ok: true, status: 200, ticket: updatedRows[0], transition: transitionRows[0] };
+  });
+}
+
+// Trial-stage claim queue (design doc ch. 12): tickets waiting for the
+// caller's roles to pick them up. The trial covers decomposing and
+// development only: a ticket in `requirement` waits for a leader to
+// decompose it, and a ticket in `pending_dev` waits for an engineer to
+// start it. In-progress states (decomposing, in_dev, ...) are not
+// claimable — they already have an owner. Each entry carries the
+// transition the caller would take next.
+const CLAIMABLE = [
+  { status: 'requirement', role: 'leader' },
+  { status: 'pending_dev', role: 'engineer' },
+];
+
+async function listClaimable(db, actorRoles) {
+  const roles = Array.isArray(actorRoles) ? actorRoles : [];
+  const wanted = CLAIMABLE.filter((c) => roles.includes(c.role));
+  if (wanted.length === 0) return [];
+  const statuses = [...new Set(wanted.map((c) => c.status))];
+  const rows = await listTickets(db, statuses);
+  return rows.map((t) => {
+    const claim = wanted.find((c) => c.status === t.status);
+    const rule = sm.TRANSITIONS.find((r) => r.from === t.status && r.role === claim.role);
+    return {
+      ...t,
+      next_transition: rule
+        ? {
+            to: rule.to,
+            role: rule.role,
+            kind: rule.kind,
+            requires_reason: rule.requiresReason,
+            requires_handoff: rule.requiresHandoff,
+          }
+        : null,
+    };
   });
 }
 
@@ -172,6 +213,7 @@ module.exports = {
   getTicket,
   listTickets,
   listTransitions,
+  listClaimable,
   getTicketWithHistory,
   createTicket,
   transitionTicket,
