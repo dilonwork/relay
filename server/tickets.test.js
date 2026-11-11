@@ -246,6 +246,34 @@ async function main() {
     assert.equal(res.ticket.developer_id, 'dev-1');
   });
 
+  await ok('ownership: acceptance-clarification round-trip stays with the tester', async () => {
+    const db = new FakeDb();
+    const created = await tickets.createTicket(db, {
+      actorId: 'pm-1', actorRoles: ['pm'], title: 't', description: 'd',
+    });
+    const id = created.ticket.id;
+    await tickets.transitionTicket(db, id, { actorId: 'leader-1', actorRoles: ['leader'], toStatus: 'decomposing', reason: '' });
+    await tickets.transitionTicket(db, id, { actorId: 'leader-1', actorRoles: ['leader'], toStatus: 'pending_dev', reason: 'split done', handoff: 'work list: 1) build 2) test' });
+    await tickets.transitionTicket(db, id, { actorId: 'dev-1', actorRoles: ['engineer'], toStatus: 'in_dev', reason: '' });
+    await tickets.transitionTicket(db, id, { actorId: 'dev-1', actorRoles: ['engineer'], toStatus: 'pending_review', reason: 'done', handoff: 'built + self-tested' });
+    await tickets.transitionTicket(db, id, { actorId: 'rev-2', actorRoles: ['reviewer'], toStatus: 'in_review', reason: '' });
+    await tickets.transitionTicket(db, id, { actorId: 'rev-2', actorRoles: ['reviewer'], toStatus: 'pending_test', reason: '' });
+    let res = await tickets.transitionTicket(db, id, { actorId: 'tester-1', actorRoles: ['tester'], toStatus: 'in_test', reason: '' });
+    assert.equal(res.ticket.status, 'in_test');
+    assert.equal(res.ticket.assignee_id, 'tester-1');
+    assert.equal(res.ticket.developer_id, 'dev-1');
+    // Tester asks the PM to clarify the acceptance criteria: the ticket
+    // stays with the tester while it waits.
+    res = await tickets.transitionTicket(db, id, { actorId: 'tester-1', actorRoles: ['tester'], toStatus: 'needs_acceptance_clarification', reason: 'what does "fast" mean?' });
+    assert.equal(res.ticket.status, 'needs_acceptance_clarification');
+    assert.equal(res.ticket.assignee_id, 'tester-1');
+    // PM answers and sends it back to the same tester, not the queue.
+    res = await tickets.transitionTicket(db, id, { actorId: 'pm-1', actorRoles: ['pm'], toStatus: 'in_test', reason: 'fast means p95 under 200ms' });
+    assert.equal(res.ticket.status, 'in_test');
+    assert.equal(res.ticket.assignee_id, 'tester-1');
+    assert.equal(res.ticket.developer_id, 'dev-1');
+  });
+
   await ok('illegal transitions are rejected, ticket unchanged, rejection audited', async () => {
     const db = new FakeDb();
     const created = await tickets.createTicket(db, {

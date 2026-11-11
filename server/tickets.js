@@ -148,6 +148,12 @@ function nextOwnership(ticket, rule, actorId) {
     // Sent back for rework: back to the developer who wrote it.
     return { assigneeId: ticket.developer_id || null, developerId: ticket.developer_id || null };
   }
+  if (rule.kind === 'clarify' && (to === 'needs_acceptance_clarification' || to === 'in_test')) {
+    // Acceptance-clarification round-trip: the ticket stays with the
+    // tester who raised the question, so the PM's answer goes back to
+    // the same tester instead of the queue.
+    return { assigneeId: ticket.assignee_id || null, developerId: ticket.developer_id || null };
+  }
   if (rule.kind === 'cancel') {
     return { assigneeId: actorId, developerId: ticket.developer_id || null };
   }

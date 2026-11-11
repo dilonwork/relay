@@ -26,6 +26,7 @@ const STATUSES = [
   'in_review',
   'pending_test',
   'in_test',
+  'needs_acceptance_clarification',
   'pending_deploy',
   'deploying',
   'delivered',
@@ -57,12 +58,14 @@ const TRANSITIONS = [
   { from: 'pending_test', to: 'in_test', role: 'tester', requiresReason: false, requiresHandoff: false, selfCheck: true, kind: 'pickup' },
   { from: 'in_test', to: 'pending_deploy', role: 'tester', requiresReason: false, requiresHandoff: false, selfCheck: true, kind: 'forward' },
   { from: 'in_test', to: 'in_dev', role: 'tester', requiresReason: true, requiresHandoff: false, selfCheck: true, kind: 'return' },
+  { from: 'in_test', to: 'needs_acceptance_clarification', role: 'tester', requiresReason: true, requiresHandoff: false, selfCheck: true, kind: 'clarify' },
+  { from: 'needs_acceptance_clarification', to: 'in_test', role: 'pm', requiresReason: true, requiresHandoff: false, selfCheck: false, kind: 'clarify' },
   { from: 'pending_deploy', to: 'deploying', role: 'deployer', requiresReason: false, requiresHandoff: false, selfCheck: true, kind: 'pickup' },
   { from: 'deploying', to: 'delivered', role: 'deployer', requiresReason: false, requiresHandoff: false, selfCheck: true, kind: 'forward' },
   { from: 'deploying', to: 'in_test', role: 'deployer', requiresReason: true, requiresHandoff: false, selfCheck: true, kind: 'return' },
 ];
 
-// Cancel is the 18th legal transition: PM only, from any non-terminal state,
+// Cancel is the 20th legal transition: PM only, from any non-terminal state,
 // reason required (design doc ch. 6). It is a rule, not one row per state.
 const CANCEL_RULE = {
   from: '*', to: 'cancelled', role: 'pm',
@@ -77,7 +80,7 @@ function findRule(from, to) {
   return TRANSITIONS.find((t) => t.from === from && t.to === to) || null;
 }
 
-// Full legal transition table (17 explicit rules + cancel), for the
+// Full legal transition table (19 explicit rules + cancel), for the
 // GET /api/meta/transitions endpoint and the UI.
 function legalTransitions() {
   return [...TRANSITIONS, CANCEL_RULE].map((t) => ({ ...t }));

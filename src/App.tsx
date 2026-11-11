@@ -12,6 +12,7 @@ const STATUS_LABELS: Record<string, string> = {
   in_review: 'In review',
   pending_test: 'Pending test',
   in_test: 'In test',
+  needs_acceptance_clarification: 'Needs acceptance clarification',
   pending_deploy: 'Pending deploy',
   deploying: 'Deploying',
   delivered: 'Delivered',
@@ -44,6 +45,7 @@ const QUEUE_TABS: { key: string; label: string; status: string | null }[] = [
   { key: 'pending_dev', label: 'Pending dev', status: 'pending_dev' },
   { key: 'pending_review', label: 'Pending review', status: 'pending_review' },
   { key: 'pending_test', label: 'Pending test', status: 'pending_test' },
+  { key: 'needs_acceptance_clarification', label: 'Needs acceptance clarification', status: 'needs_acceptance_clarification' },
   { key: 'pending_deploy', label: 'Pending deploy', status: 'pending_deploy' },
   { key: 'done', label: 'Done', status: 'delivered,cancelled' },
 ];
@@ -82,6 +84,7 @@ const STATUS_COLORS: Record<string, string> = {
   in_review: '#805ad5',
   pending_test: '#d69e2e',
   in_test: '#dd6b20',
+  needs_acceptance_clarification: '#975a16',
   pending_deploy: '#3182ce',
   deploying: '#2b6cb0',
   delivered: '#1d6b3c',

@@ -1,6 +1,6 @@
 // Relay state machine unit tests (no database needed).
 // Run: node server/stateMachine.test.js
-// Covers: all 18 legal transitions, illegal transitions, wrong roles,
+// Covers: all 20 legal transitions, illegal transitions, wrong roles,
 // the no-self-work rule, reason-required transitions, terminal states,
 // and the allowed-transitions helper used by the UI.
 const assert = require('node:assert/strict');
@@ -18,7 +18,7 @@ function ticket(status, developerId) {
   return { status, developer_id: developerId || null };
 }
 
-// The 18 legal transitions from design doc ch. 6 (17 explicit + cancel).
+// The 20 legal transitions from design doc ch. 6 (19 explicit + cancel).
 const LEGAL = [
   { from: 'needs_clarification', to: 'decomposing', role: 'pm', reason: 'clarified the metric' },
   { from: 'requirement', to: 'decomposing', role: 'leader' },
@@ -33,6 +33,8 @@ const LEGAL = [
   { from: 'pending_test', to: 'in_test', role: 'tester' },
   { from: 'in_test', to: 'pending_deploy', role: 'tester' },
   { from: 'in_test', to: 'in_dev', role: 'tester', reason: 'login test fails' },
+  { from: 'in_test', to: 'needs_acceptance_clarification', role: 'tester', reason: 'acceptance criteria unclear: what does "fast" mean?' },
+  { from: 'needs_acceptance_clarification', to: 'in_test', role: 'pm', reason: 'fast means p95 under 200ms' },
   { from: 'pending_deploy', to: 'deploying', role: 'deployer' },
   { from: 'deploying', to: 'delivered', role: 'deployer' },
   { from: 'deploying', to: 'in_test', role: 'deployer', reason: 'deploy failed: health check' },
@@ -44,13 +46,13 @@ const LEGAL = [
 async function main() {
   console.log('Relay state machine tests:');
 
-  await ok('13 states, 2 terminal states', async () => {
-    assert.equal(sm.STATUSES.length, 13);
+  await ok('14 states, 2 terminal states', async () => {
+    assert.equal(sm.STATUSES.length, 14);
     assert.deepEqual(sm.TERMINAL_STATUSES, ['delivered', 'cancelled']);
     assert.equal(sm.ROLES.length, 6);
   });
 
-  await ok('all 17 explicit legal transitions validate for the right role', async () => {
+  await ok('all 19 explicit legal transitions validate for the right role', async () => {
     for (const t of LEGAL.filter((x) => x.to !== 'cancelled')) {
       const res = sm.validateTransition({
         ticket: ticket(t.from, 'dev-1'),
@@ -107,6 +109,8 @@ async function main() {
       ['pending_review', 'in_review', 'engineer'],
       ['in_review', 'pending_test', 'tester'],
       ['pending_test', 'in_test', 'reviewer'],
+      ['in_test', 'needs_acceptance_clarification', 'engineer'],
+      ['needs_acceptance_clarification', 'in_test', 'tester'],
       ['deploying', 'delivered', 'tester'],
       ['in_dev', 'cancelled', 'leader'],
     ];
@@ -126,6 +130,7 @@ async function main() {
       ['in_review', 'in_dev', 'reviewer'],
       ['pending_test', 'in_test', 'tester'],
       ['in_test', 'pending_deploy', 'tester'],
+      ['in_test', 'needs_acceptance_clarification', 'tester'],
       ['pending_deploy', 'deploying', 'deployer'],
       ['deploying', 'delivered', 'deployer'],
     ];
@@ -151,6 +156,8 @@ async function main() {
       ['decomposing', 'needs_clarification', 'leader'],
       ['in_dev', 'needs_clarification', 'engineer'],
       ['needs_clarification', 'decomposing', 'pm'],
+      ['in_test', 'needs_acceptance_clarification', 'tester'],
+      ['needs_acceptance_clarification', 'in_test', 'pm'],
       ['in_dev', 'cancelled', 'pm'],
     ];
     for (const [from, to, role] of needsReason) {
@@ -264,9 +271,9 @@ async function main() {
     assert.deepEqual(sm.allowedTransitions(ticket('delivered', null), 'pm'), []);
   });
 
-  await ok('legalTransitions exposes the full 18-transition table', async () => {
+  await ok('legalTransitions exposes the full 20-transition table', async () => {
     const table = sm.legalTransitions();
-    assert.equal(table.length, 18);
+    assert.equal(table.length, 20);
     assert.ok(table.some((t) => t.kind === 'cancel' && t.to === 'cancelled'));
   });
 
