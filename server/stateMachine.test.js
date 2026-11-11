@@ -55,7 +55,7 @@ async function main() {
       const res = sm.validateTransition({
         ticket: ticket(t.from, 'dev-1'),
         actorId: 'someone-else',
-        actorRole: t.role,
+        actorRoles: [t.role],
         toStatus: t.to,
         reason: t.reason || '',
       });
@@ -69,7 +69,7 @@ async function main() {
       const res = sm.validateTransition({
         ticket: ticket(status, 'dev-1'),
         actorId: 'pm-1',
-        actorRole: 'pm',
+        actorRoles: ['pm'],
         toStatus: 'cancelled',
         reason: 'no longer needed',
       });
@@ -91,7 +91,7 @@ async function main() {
     ];
     for (const [from, to, role] of illegal) {
       const res = sm.validateTransition({
-        ticket: ticket(from, 'dev-1'), actorId: 'someone-else', actorRole: role, toStatus: to, reason: 'x',
+        ticket: ticket(from, 'dev-1'), actorId: 'someone-else', actorRoles: [role], toStatus: to, reason: 'x',
       });
       assert.equal(res.ok, false, `${from} -> ${to} as ${role} should be illegal`);
       assert.ok(['illegal_transition', 'terminal'].includes(res.error), `unexpected error ${res.error}`);
@@ -111,7 +111,7 @@ async function main() {
     ];
     for (const [from, to, role] of cases) {
       const res = sm.validateTransition({
-        ticket: ticket(from, 'dev-1'), actorId: 'someone-else', actorRole: role, toStatus: to, reason: 'x',
+        ticket: ticket(from, 'dev-1'), actorId: 'someone-else', actorRoles: [role], toStatus: to, reason: 'x',
       });
       assert.equal(res.ok, false, `${from} -> ${to} as ${role} should be wrong_role`);
       assert.equal(res.error, 'wrong_role');
@@ -130,14 +130,14 @@ async function main() {
     ];
     for (const [from, to, role] of cases) {
       const res = sm.validateTransition({
-        ticket: ticket(from, 'dev-1'), actorId: 'dev-1', actorRole: role, toStatus: to, reason: 'x',
+        ticket: ticket(from, 'dev-1'), actorId: 'dev-1', actorRoles: [role], toStatus: to, reason: 'x',
       });
       assert.equal(res.ok, false, `${from} -> ${to} by the developer should be self_work`);
       assert.equal(res.error, 'self_work');
     }
     // A different reviewer is fine.
     const res = sm.validateTransition({
-      ticket: ticket('pending_review', 'dev-1'), actorId: 'rev-2', actorRole: 'reviewer', toStatus: 'in_review', reason: '',
+      ticket: ticket('pending_review', 'dev-1'), actorId: 'rev-2', actorRoles: ['reviewer'], toStatus: 'in_review', reason: '',
     });
     assert.equal(res.ok, true);
   });
@@ -154,12 +154,12 @@ async function main() {
     ];
     for (const [from, to, role] of needsReason) {
       const without = sm.validateTransition({
-        ticket: ticket(from, 'dev-1'), actorId: 'someone-else', actorRole: role, toStatus: to, reason: '',
+        ticket: ticket(from, 'dev-1'), actorId: 'someone-else', actorRoles: [role], toStatus: to, reason: '',
       });
       assert.equal(without.ok, false, `${from} -> ${to} without reason should fail`);
       assert.equal(without.error, 'reason_required');
       const withReason = sm.validateTransition({
-        ticket: ticket(from, 'dev-1'), actorId: 'someone-else', actorRole: role, toStatus: to, reason: 'because',
+        ticket: ticket(from, 'dev-1'), actorId: 'someone-else', actorRoles: [role], toStatus: to, reason: 'because',
       });
       assert.equal(withReason.ok, true, `${from} -> ${to} with reason should pass`);
     }
@@ -167,7 +167,7 @@ async function main() {
 
   await ok('forward transitions do not require a reason', async () => {
     const res = sm.validateTransition({
-      ticket: ticket('in_dev', 'dev-1'), actorId: 'dev-1', actorRole: 'engineer', toStatus: 'pending_review', reason: '',
+      ticket: ticket('in_dev', 'dev-1'), actorId: 'dev-1', actorRoles: ['engineer'], toStatus: 'pending_review', reason: '',
     });
     assert.equal(res.ok, true);
   });
@@ -175,22 +175,56 @@ async function main() {
   await ok('terminal tickets cannot transition, and cannot be cancelled', async () => {
     for (const status of ['delivered', 'cancelled']) {
       const res = sm.validateTransition({
-        ticket: ticket(status, 'dev-1'), actorId: 'pm-1', actorRole: 'pm', toStatus: 'cancelled', reason: 'x',
+        ticket: ticket(status, 'dev-1'), actorId: 'pm-1', actorRoles: ['pm'], toStatus: 'cancelled', reason: 'x',
       });
       assert.equal(res.ok, false);
       assert.equal(res.error, 'terminal');
     }
   });
 
-  await ok('unknown role and unknown status are rejected', async () => {
+  await ok('a role the actor does not hold is rejected; unknown status is rejected', async () => {
+    // 'admin' is an account role, not a workflow role: it cannot take a
+    // leader transition, and the rejection names the required role.
     const badRole = sm.validateTransition({
-      ticket: ticket('requirement', null), actorId: 'x', actorRole: 'admin', toStatus: 'decomposing', reason: '',
+      ticket: ticket('requirement', null), actorId: 'x', actorRoles: ['admin'], toStatus: 'decomposing', reason: '',
     });
-    assert.equal(badRole.error, 'unknown_role');
+    assert.equal(badRole.error, 'wrong_role');
+    assert.equal(badRole.attemptedRole, 'leader');
     const badStatus = sm.validateTransition({
-      ticket: ticket('requirement', null), actorId: 'x', actorRole: 'leader', toStatus: 'done', reason: '',
+      ticket: ticket('requirement', null), actorId: 'x', actorRoles: ['leader'], toStatus: 'done', reason: '',
     });
     assert.equal(badStatus.error, 'unknown_status');
+  });
+
+  await ok('one account holding several roles may use any of them', async () => {
+    const both = sm.validateTransition({
+      ticket: ticket('pending_review', 'dev-1'), actorId: 'rev-2', actorRoles: ['engineer', 'reviewer'], toStatus: 'in_review', reason: '',
+    });
+    assert.equal(both.ok, true);
+    assert.equal(both.attemptedRole, 'reviewer');
+    const devStep = sm.validateTransition({
+      ticket: ticket('pending_dev', 'dev-1'), actorId: 'rev-2', actorRoles: ['engineer', 'reviewer'], toStatus: 'in_dev', reason: '',
+    });
+    assert.equal(devStep.ok, true);
+    assert.equal(devStep.attemptedRole, 'engineer');
+    const missing = sm.validateTransition({
+      ticket: ticket('pending_test', 'dev-1'), actorId: 'rev-2', actorRoles: ['engineer', 'reviewer'], toStatus: 'in_test', reason: '',
+    });
+    assert.equal(missing.ok, false);
+    assert.equal(missing.error, 'wrong_role');
+  });
+
+  await ok('rejected attempts carry the role to audit', async () => {
+    const illegal = sm.validateTransition({
+      ticket: ticket('requirement', 'dev-1'), actorId: 'x', actorRoles: ['engineer', 'reviewer'], toStatus: 'in_dev', reason: '',
+    });
+    assert.equal(illegal.ok, false);
+    assert.equal(illegal.error, 'illegal_transition');
+    assert.equal(illegal.attemptedRole, 'engineer');
+    const noWorkflowRole = sm.validateTransition({
+      ticket: ticket('requirement', 'dev-1'), actorId: 'x', actorRoles: ['admin'], toStatus: 'in_dev', reason: '',
+    });
+    assert.equal(noWorkflowRole.attemptedRole, 'pm');
   });
 
   await ok('allowedTransitions lists only what the role may do from the current state', async () => {

@@ -52,8 +52,8 @@ async function getTicketWithHistory(db, id) {
   return { ...ticket, transitions };
 }
 
-async function createTicket(db, { actorId, actorRole, title, description, source, reason }) {
-  if (actorRole !== 'pm') {
+async function createTicket(db, { actorId, actorRoles, title, description, source, reason }) {
+  if (!actorRoles || !actorRoles.includes('pm')) {
     return { ok: false, status: 403, error: 'wrong_role', message: 'Only the PM may create a ticket.' };
   }
   if (!actorId || !String(actorId).trim()) {
@@ -112,9 +112,9 @@ function nextOwnership(ticket, rule, actorId) {
   return { assigneeId: null, developerId: ticket.developer_id || null };
 }
 
-async function transitionTicket(db, ticketId, { actorId, actorRole, toStatus, reason, artifacts }) {
-  if (!actorId || !String(actorId).trim() || !actorRole || !toStatus) {
-    return { ok: false, status: 400, error: 'bad_request', message: 'actor_id, actor_role and to_status are required.' };
+async function transitionTicket(db, ticketId, { actorId, actorRoles, toStatus, reason, artifacts }) {
+  if (!actorId || !String(actorId).trim() || !Array.isArray(actorRoles) || !toStatus) {
+    return { ok: false, status: 400, error: 'bad_request', message: 'actor_id, actor roles and to_status are required.' };
   }
   const cleanReason = reason === undefined || reason === null ? '' : String(reason);
   const cleanArtifacts = normalizeArtifacts(artifacts);
@@ -130,20 +130,24 @@ async function transitionTicket(db, ticketId, { actorId, actorRole, toStatus, re
       return { ok: false, status: 404, error: 'ticket_not_found', message: 'Ticket not found.' };
     }
 
+    // The required role comes from the state machine, not from the caller:
+    // the actor is the authenticated user, and the role actually exercised
+    // is the rule's role (design doc ch. 11).
     const check = sm.validateTransition({
       ticket,
       actorId: String(actorId).trim(),
-      actorRole,
+      actorRoles,
       toStatus,
       reason: cleanReason,
     });
 
     if (!check.ok) {
-      // Rejected attempts are audited too (design doc ch. 7).
+      // Rejected attempts are audited too (design doc ch. 7), under the
+      // role the attempt was made as.
       const { rows: rejectedRows } = await client.query(
         `INSERT INTO ticket_transitions (ticket_id, actor_id, actor_role, from_status, to_status, reason, artifacts, result)
          VALUES ($1, $2, $3, $4, $5, $6, $7, 'rejected') RETURNING *`,
-        [ticket.id, String(actorId).trim(), actorRole, ticket.status, toStatus, check.message, JSON.stringify([])]
+        [ticket.id, String(actorId).trim(), check.attemptedRole, ticket.status, toStatus, check.message, JSON.stringify([])]
       );
       return { ok: false, status: 403, error: check.error, message: check.message, transition: rejectedRows[0] };
     }
@@ -157,7 +161,7 @@ async function transitionTicket(db, ticketId, { actorId, actorRole, toStatus, re
     const { rows: transitionRows } = await client.query(
       `INSERT INTO ticket_transitions (ticket_id, actor_id, actor_role, from_status, to_status, reason, artifacts, result)
        VALUES ($1, $2, $3, $4, $5, $6, $7, 'applied') RETURNING *`,
-      [ticket.id, String(actorId).trim(), actorRole, ticket.status, toStatus, cleanReason.trim(), JSON.stringify(cleanArtifacts)]
+      [ticket.id, String(actorId).trim(), check.rule.role, ticket.status, toStatus, cleanReason.trim(), JSON.stringify(cleanArtifacts)]
     );
     return { ok: true, status: 200, ticket: updatedRows[0], transition: transitionRows[0] };
   });
