@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api, getToken, onUnauthorized, setToken } from './api';
-import type { AdminOverview, ApiKey, LegalTransition, QueueEntry, Ticket, TicketWithHistory, User } from './api';
+import type { AdminOverview, ApiKey, LegalTransition, Project, QueueEntry, Ticket, TicketWithHistory, User } from './api';
 
 const STATUS_LABELS: Record<string, string> = {
   requirement: 'Requirement',
@@ -99,6 +99,15 @@ export default function App() {
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
 
+  // Projects (Project view): the formal list tickets belong to.
+  // 'all' shows every project; 'none' shows uncategorized tickets only;
+  // a project id shows that one project (single-project view).
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [projectFilter, setProjectFilter] = useState('all');
+  const [newProjectName, setNewProjectName] = useState('');
+  const [newProjectDescription, setNewProjectDescription] = useState('');
+  const [assignProjectId, setAssignProjectId] = useState('');
+
   const [loginUsername, setLoginUsername] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [setupUsername, setSetupUsername] = useState('');
@@ -108,6 +117,7 @@ export default function App() {
   const [newTitle, setNewTitle] = useState('');
   const [newDescription, setNewDescription] = useState('');
   const [newSource, setNewSource] = useState('project');
+  const [newProjectId, setNewProjectId] = useState('');
   const [targetStatus, setTargetStatus] = useState('');
   const [reason, setReason] = useState('');
   const [handoff, setHandoff] = useState('');
@@ -141,20 +151,32 @@ export default function App() {
     })();
   }, []);
 
+  const loadProjects = useCallback(async () => {
+    try {
+      setProjects(await api.listProjects());
+    } catch (err) {
+      if ((err as { status?: number }).status === 401) return; // handled by onUnauthorized
+      setError(err instanceof Error ? err.message : 'Failed to load projects.');
+    }
+  }, []);
+
   const loadTickets = useCallback(async (tabKey: string) => {
     const found = QUEUE_TABS.find((t) => t.key === tabKey);
+    // The project filter applies to every tab, including the claimable
+    // queue, so one project view is consistent across the page.
+    const projectId = projectFilter === 'all' ? undefined : projectFilter;
     try {
       if (tabKey === 'claimable') {
-        setTickets(await api.getQueue());
+        setTickets(await api.getQueue(projectId));
         return;
       }
-      const rows = await api.listTickets(found && found.status ? found.status : undefined);
+      const rows = await api.listTickets(found && found.status ? found.status : undefined, projectId);
       setTickets(rows);
     } catch (err) {
       if ((err as { status?: number }).status === 401) return; // handled by onUnauthorized
       setError(err instanceof Error ? err.message : 'Failed to load tickets.');
     }
-  }, []);
+  }, [projectFilter]);
 
   const loadDetail = useCallback(async (id: string) => {
     try {
@@ -164,6 +186,7 @@ export default function App() {
       setReason('');
       setHandoff('');
       setArtifactsText('');
+      setAssignProjectId(data.project_id || '');
     } catch (err) {
       if ((err as { status?: number }).status === 401) return;
       setError(err instanceof Error ? err.message : 'Failed to load ticket.');
@@ -174,6 +197,11 @@ export default function App() {
     if (authState !== 'app') return;
     api.metaTransitions().then(setMeta).catch(() => setMeta([]));
   }, [authState]);
+
+  useEffect(() => {
+    if (authState !== 'app') return;
+    loadProjects();
+  }, [authState, loadProjects]);
 
   useEffect(() => {
     if (authState !== 'app') return;
@@ -247,14 +275,60 @@ export default function App() {
         title: newTitle,
         description: newDescription,
         source: newSource,
+        project_id: newProjectId || null,
       });
       setNewTitle('');
       setNewDescription('');
+      setNewProjectId('');
       setNotice(`Ticket created: ${created.title}`);
       setSelectedId(created.id);
       await loadTickets(tab);
+      await loadProjects();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create ticket.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleCreateProject(e: React.FormEvent) {
+    e.preventDefault();
+    setError('');
+    setNotice('');
+    setBusy(true);
+    try {
+      const created = await api.createProject({
+        name: newProjectName,
+        description: newProjectDescription,
+      });
+      setNewProjectName('');
+      setNewProjectDescription('');
+      setNotice(`Project created: ${created.name}`);
+      await loadProjects();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create project.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleAssignProject(e: React.FormEvent) {
+    e.preventDefault();
+    if (!detail) return;
+    setError('');
+    setNotice('');
+    setBusy(true);
+    try {
+      const updated = await api.assignTicketProject(detail.id, assignProjectId || null);
+      const name = updated.project_id
+        ? projects.find((p) => p.id === updated.project_id)?.name || 'a project'
+        : 'Uncategorized';
+      setNotice(`Ticket moved to ${name}.`);
+      await loadDetail(detail.id);
+      await loadTickets(tab);
+      await loadProjects();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to assign project.');
     } finally {
       setBusy(false);
     }
@@ -382,6 +456,18 @@ export default function App() {
   const selectedTarget = targets.find((t) => t.to === targetStatus);
   const isAdmin = user.roles.includes('admin');
   const isPm = user.roles.includes('pm');
+  const canManageProjects = isPm || isAdmin;
+  // The project currently in view: a specific project (single-project
+  // view), 'none' for uncategorized, or undefined for all projects.
+  const selectedProject =
+    projectFilter !== 'all' && projectFilter !== 'none'
+      ? projects.find((p) => p.id === projectFilter)
+      : undefined;
+
+  function projectName(id: string | null): string {
+    if (!id) return '—';
+    return projects.find((p) => p.id === id)?.name || '—';
+  }
 
   return (
     <div className="container">
@@ -428,6 +514,68 @@ export default function App() {
         <AdminPanel />
       ) : (
         <>
+          {canManageProjects && (
+            <div className="card">
+              <h2>Projects</h2>
+              {projects.length === 0 ? (
+                <p className="muted">
+                  No projects yet. Create one below — tickets can then belong to it.
+                </p>
+              ) : (
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Name</th>
+                      <th>Description</th>
+                      <th>Tickets</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {projects.map((p) => (
+                      <tr
+                        key={p.id}
+                        className={projectFilter === p.id ? 'selected' : ''}
+                        onClick={() => setProjectFilter(p.id)}
+                      >
+                        <td>{p.name}</td>
+                        <td>{p.description || '—'}</td>
+                        <td>{p.ticket_count ?? 0}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+              <form onSubmit={handleCreateProject}>
+                <div className="form-row">
+                  <div>
+                    <label className="field" htmlFor="new-project-name">Name</label>
+                    <input
+                      id="new-project-name"
+                      type="text"
+                      value={newProjectName}
+                      onChange={(e) => setNewProjectName(e.target.value)}
+                      placeholder="e.g. WebTracker"
+                    />
+                  </div>
+                  <div>
+                    <label className="field" htmlFor="new-project-description">Description</label>
+                    <input
+                      id="new-project-description"
+                      type="text"
+                      value={newProjectDescription}
+                      onChange={(e) => setNewProjectDescription(e.target.value)}
+                      placeholder="What this project is for"
+                    />
+                  </div>
+                </div>
+                <button className="primary" type="submit" disabled={busy || !newProjectName.trim()}>
+                  Create project
+                </button>
+                <span className="muted"> Click a project to view only its tickets.</span>
+              </form>
+            </div>
+          )}
+
           <div className="card">
             <h2>New ticket</h2>
             <form onSubmit={handleCreate}>
@@ -447,6 +595,17 @@ export default function App() {
                   <select id="new-source" value={newSource} onChange={(e) => setNewSource(e.target.value)}>
                     <option value="project">Project</option>
                     <option value="oncall">On-call</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="field" htmlFor="new-project">Project</label>
+                  <select id="new-project" value={newProjectId} onChange={(e) => setNewProjectId(e.target.value)}>
+                    <option value="">Uncategorized</option>
+                    {projects.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name}
+                      </option>
+                    ))}
                   </select>
                 </div>
               </div>
@@ -471,6 +630,42 @@ export default function App() {
 
           <div className="card">
             <h2>Tickets</h2>
+            <div className="form-row">
+              <div>
+                <label className="field" htmlFor="project-filter">Project</label>
+                <select
+                  id="project-filter"
+                  value={projectFilter}
+                  onChange={(e) => setProjectFilter(e.target.value)}
+                >
+                  <option value="all">All projects</option>
+                  <option value="none">Uncategorized</option>
+                  {projects.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            {selectedProject && (
+              <div>
+                <h3>{selectedProject.name}</h3>
+                <p>{selectedProject.description || 'No description.'}</p>
+                <p className="muted">
+                  {selectedProject.ticket_count ?? 0} tickets ·{' '}
+                  <button className="link" onClick={() => setProjectFilter('all')}>
+                    Show all projects
+                  </button>
+                </p>
+              </div>
+            )}
+            {projectFilter === 'none' && (
+              <p className="muted">
+                Uncategorized — tickets with no project yet. A PM can assign them from the ticket
+                detail below.
+              </p>
+            )}
             <div className="tabs">
               {QUEUE_TABS.map((t) => (
                 <button
@@ -493,6 +688,7 @@ export default function App() {
                 <thead>
                   <tr>
                     <th>Title</th>
+                    <th>Project</th>
                     <th>Status</th>
                     <th>Assignee</th>
                     {tab === 'claimable' && <th>Next step for you</th>}
@@ -507,6 +703,7 @@ export default function App() {
                       onClick={() => setSelectedId(t.id)}
                     >
                       <td>{t.title}</td>
+                      <td>{projectName(t.project_id)}</td>
                       <td>
                         <span className={`badge ${t.status}`}>{statusLabel(t.status)}</span>
                       </td>
@@ -536,6 +733,8 @@ export default function App() {
                 </dd>
                 <dt>Source</dt>
                 <dd>{detail.source}</dd>
+                <dt>Project</dt>
+                <dd>{projectName(detail.project_id)}</dd>
                 <dt>Created by</dt>
                 <dd title={detail.creator_id}>{shortId(detail.creator_id)}</dd>
                 <dt>Assignee</dt>
@@ -559,6 +758,34 @@ export default function App() {
                     enough to proceed, send the ticket back to Needs clarification with a specific
                     question — the handoff can be judged from the history below.
                   </p>
+                </>
+              )}
+
+              {isPm && (
+                <>
+                  <h2>Project</h2>
+                  <form onSubmit={handleAssignProject}>
+                    <div className="form-row">
+                      <div>
+                        <label className="field" htmlFor="assign-project">Move to project</label>
+                        <select
+                          id="assign-project"
+                          value={assignProjectId}
+                          onChange={(e) => setAssignProjectId(e.target.value)}
+                        >
+                          <option value="">Uncategorized</option>
+                          {projects.map((p) => (
+                            <option key={p.id} value={p.id}>
+                              {p.name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                    <button className="primary" type="submit" disabled={busy}>
+                      Assign project
+                    </button>
+                  </form>
                 </>
               )}
 

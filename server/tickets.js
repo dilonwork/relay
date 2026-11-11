@@ -31,11 +31,40 @@ async function listTransitions(db, ticketId) {
   return rows;
 }
 
-async function listTickets(db, statuses) {
-  if (statuses && statuses.length > 0) {
+async function listTickets(db, statuses, projectFilter) {
+  const hasStatuses = statuses && statuses.length > 0;
+  const hasProject = projectFilter !== undefined && projectFilter !== null && projectFilter !== '';
+  if (hasStatuses && hasProject) {
+    if (projectFilter === 'none') {
+      const { rows } = await db.query(
+        'SELECT * FROM tickets WHERE status = ANY($1) AND project_id IS NULL ORDER BY created_at ASC, id ASC',
+        [statuses]
+      );
+      return rows;
+    }
+    const { rows } = await db.query(
+      'SELECT * FROM tickets WHERE status = ANY($1) AND project_id = $2 ORDER BY created_at ASC, id ASC',
+      [statuses, projectFilter]
+    );
+    return rows;
+  }
+  if (hasStatuses) {
     const { rows } = await db.query(
       'SELECT * FROM tickets WHERE status = ANY($1) ORDER BY created_at ASC, id ASC',
       [statuses]
+    );
+    return rows;
+  }
+  if (hasProject) {
+    if (projectFilter === 'none') {
+      const { rows } = await db.query(
+        'SELECT * FROM tickets WHERE project_id IS NULL ORDER BY created_at ASC, id ASC'
+      );
+      return rows;
+    }
+    const { rows } = await db.query(
+      'SELECT * FROM tickets WHERE project_id = $1 ORDER BY created_at ASC, id ASC',
+      [projectFilter]
     );
     return rows;
   }
@@ -52,7 +81,7 @@ async function getTicketWithHistory(db, id) {
   return { ...ticket, transitions };
 }
 
-async function createTicket(db, { actorId, actorRoles, title, description, source, reason }) {
+async function createTicket(db, { actorId, actorRoles, title, description, source, reason, projectId }) {
   if (!actorRoles || !actorRoles.includes('pm')) {
     return { ok: false, status: 403, error: 'wrong_role', message: 'Only the PM may create a ticket.' };
   }
@@ -69,12 +98,27 @@ async function createTicket(db, { actorId, actorRoles, title, description, sourc
   if (!SOURCES.includes(src)) {
     return { ok: false, status: 400, error: 'bad_request', message: `Unknown source: ${src}.` };
   }
+  // A ticket may be created uncategorized (no projectId) — that is how
+  // tickets from before projects existed stay visible. When a project is
+  // given it must exist.
+  const cleanProjectId = projectId === undefined || projectId === null || !String(projectId).trim()
+    ? null
+    : String(projectId).trim();
+  if (cleanProjectId) {
+    const { rows: projectRows } = await db.query(
+      'SELECT * FROM projects WHERE id = $1',
+      [cleanProjectId]
+    );
+    if (!projectRows[0]) {
+      return { ok: false, status: 400, error: 'unknown_project', message: `Unknown project: ${cleanProjectId}.` };
+    }
+  }
 
   const ticket = await db.withTransaction(async (client) => {
     const { rows } = await client.query(
-      `INSERT INTO tickets (title, source, status, creator_id, assignee_id, developer_id, description)
-       VALUES ($1, $2, 'requirement', $3, NULL, NULL, $4) RETURNING *`,
-      [String(title).trim(), src, String(actorId).trim(), String(description).trim()]
+      `INSERT INTO tickets (title, source, status, creator_id, assignee_id, developer_id, description, project_id)
+       VALUES ($1, $2, 'requirement', $3, NULL, NULL, $4, $5) RETURNING *`,
+      [String(title).trim(), src, String(actorId).trim(), String(description).trim(), cleanProjectId]
     );
     const created = rows[0];
     await client.query(
@@ -184,12 +228,12 @@ const CLAIMABLE = [
   { status: 'pending_dev', role: 'engineer' },
 ];
 
-async function listClaimable(db, actorRoles) {
+async function listClaimable(db, actorRoles, projectFilter) {
   const roles = Array.isArray(actorRoles) ? actorRoles : [];
   const wanted = CLAIMABLE.filter((c) => roles.includes(c.role));
   if (wanted.length === 0) return [];
   const statuses = [...new Set(wanted.map((c) => c.status))];
-  const rows = await listTickets(db, statuses);
+  const rows = await listTickets(db, statuses, projectFilter);
   return rows.map((t) => {
     const claim = wanted.find((c) => c.status === t.status);
     const rule = sm.TRANSITIONS.find((r) => r.from === t.status && r.role === claim.role);

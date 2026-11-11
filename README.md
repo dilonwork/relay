@@ -180,6 +180,24 @@ ticket service is tested against an in-memory fake implementing the same
   error (400); a wrong role, illegal transition or self-work attempt is
   an authorization error (403). Both are audited as rejected attempts.
 
+## Projects
+
+- **Project list:** projects are a formal list every ticket belongs to.
+  The PM or an Admin creates a project (name + description); project
+  names are unique. A ticket created without a project is
+  *uncategorized* and can be assigned later by the PM.
+- **Single-project view:** the ticket list has a project filter (all
+  projects / uncategorized / one project). Picking a project shows only
+  its tickets, with the project name, description and ticket count on
+  top; the same filter applies to the 待接單 (claimable) queue. The
+  ticket list also shows a Project column, and the detail view shows
+  the ticket's project with a PM-only control to move it.
+- **Endpoints:** see the API table (`/api/projects`,
+  `/api/tickets/:id/project`). Creating a project is PM or Admin;
+  assigning a ticket is PM only. A duplicate name answers 409
+  `project_name_taken`; an unknown project on create or assign answers
+  400 `unknown_project`.
+
 ## API
 
 Every `/api` endpoint except `/api/health`, `/api/auth/status`,
@@ -199,12 +217,16 @@ log records the role actually exercised.
 | `POST` | `/api/auth/logout` | Log out (revokes the session) |
 | `GET` | `/api/auth/me` | Current account and roles |
 | `GET` | `/api/meta/transitions` | Legal transition table (source of truth for the UI) |
-| `POST` | `/api/tickets` | Create a ticket (PM role required) |
-| `GET` | `/api/tickets?status=<state>` | List tickets, optionally filtered by state |
+| `POST` | `/api/tickets` | Create a ticket (PM role required; optional `project_id`) |
+| `GET` | `/api/tickets?status=<state>&project_id=<id\|none>` | List tickets, optionally filtered by state and project |
 | `GET` | `/api/tickets/:id` | One ticket with its full transition history |
 | `GET` | `/api/tickets/:id/transitions` | Transition history of one ticket |
 | `POST` | `/api/tickets/:id/transitions` | Transition a ticket (`to_status`, `reason`, `handoff`, `artifacts`) |
-| `GET` | `/api/queue` | Tickets the caller can claim in the trial stages, with the next transition |
+| `PATCH` | `/api/tickets/:id/project` | Assign a ticket to a project, or back to uncategorized (`project_id` null; PM only) |
+| `GET` | `/api/queue?project_id=<id\|none>` | Tickets the caller can claim in the trial stages, with the next transition; optionally filtered by project |
+| `GET` | `/api/projects` | List projects with ticket counts |
+| `POST` | `/api/projects` | Create a project (PM or Admin) |
+| `GET` | `/api/projects/:id` | One project |
 | `GET` | `/api/admin/overview` | System overview (admin only) |
 | `GET` | `/api/admin/users` | List accounts (admin only) |
 | `POST` | `/api/admin/users` | Create an account (admin only) |

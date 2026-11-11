@@ -19,6 +19,10 @@ class FakeDb {
   constructor() {
     this.tickets = [];
     this.transitions = [];
+    this.projects = [
+      { id: 'proj-1', name: 'WebTracker', description: '' },
+      { id: 'proj-2', name: 'Drydock', description: '' },
+    ];
     this.seq = 0;
   }
 
@@ -34,7 +38,23 @@ class FakeDb {
       return { rows: t ? [{ ...t }] : [] };
     }
     if (sql.startsWith('SELECT * FROM tickets WHERE status = ANY($1)')) {
-      return { rows: this.tickets.filter((t) => params[0].includes(t.status)).map((t) => ({ ...t })) };
+      let rows = this.tickets.filter((t) => params[0].includes(t.status));
+      if (sql.includes('AND project_id IS NULL')) {
+        rows = rows.filter((t) => !t.project_id);
+      } else if (sql.includes('AND project_id = $2')) {
+        rows = rows.filter((t) => t.project_id === params[1]);
+      }
+      return { rows: rows.map((t) => ({ ...t })) };
+    }
+    if (sql.startsWith('SELECT * FROM tickets WHERE project_id = $1')) {
+      return { rows: this.tickets.filter((t) => t.project_id === params[0]).map((t) => ({ ...t })) };
+    }
+    if (sql.startsWith('SELECT * FROM tickets WHERE project_id IS NULL')) {
+      return { rows: this.tickets.filter((t) => !t.project_id).map((t) => ({ ...t })) };
+    }
+    if (/^SELECT \* FROM projects WHERE id = \$1/.test(sql)) {
+      const p = this.projects.find((x) => x.id === params[0]);
+      return { rows: p ? [{ ...p }] : [] };
     }
     if (sql === 'SELECT * FROM tickets ORDER BY created_at ASC, id ASC') {
       return { rows: this.tickets.map((t) => ({ ...t })) };
@@ -49,6 +69,7 @@ class FakeDb {
         assignee_id: null,
         developer_id: null,
         description: params[3],
+        project_id: params[4] === undefined ? null : params[4],
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       };
@@ -471,6 +492,69 @@ async function main() {
     // An account holding both trial roles sees both queues.
     const both = await tickets.listClaimable(db, ['leader', 'engineer']);
     assert.deepEqual(both.map((t) => t.id).sort(), [a.ticket.id, b.ticket.id].sort());
+  });
+
+  await ok('create with a project stores it; unknown project is 400', async () => {
+    const db = new FakeDb();
+    const withProject = await tickets.createTicket(db, {
+      actorId: 'pm-1', actorRoles: ['pm'],
+      title: 'in project', description: 'd', projectId: 'proj-1',
+    });
+    assert.equal(withProject.ok, true);
+    assert.equal(withProject.ticket.project_id, 'proj-1');
+    const uncategorized = await tickets.createTicket(db, {
+      actorId: 'pm-1', actorRoles: ['pm'], title: 'no project', description: 'd',
+    });
+    assert.equal(uncategorized.ok, true);
+    assert.equal(uncategorized.ticket.project_id, null);
+    const unknown = await tickets.createTicket(db, {
+      actorId: 'pm-1', actorRoles: ['pm'],
+      title: 'bad project', description: 'd', projectId: 'no-such-project',
+    });
+    assert.equal(unknown.ok, false);
+    assert.equal(unknown.status, 400);
+    assert.equal(unknown.error, 'unknown_project');
+    assert.equal((await tickets.listTickets(db, null)).length, 2);
+  });
+
+  await ok('list filters by project, including uncategorized', async () => {
+    const db = new FakeDb();
+    const pm = { actorId: 'pm-1', actorRoles: ['pm'] };
+    const a = await tickets.createTicket(db, { ...pm, title: 'a', description: 'd', projectId: 'proj-1' });
+    await tickets.createTicket(db, { ...pm, title: 'b', description: 'd', projectId: 'proj-2' });
+    await tickets.createTicket(db, { ...pm, title: 'c', description: 'd' });
+    await tickets.transitionTicket(db, a.ticket.id, { actorId: 'leader-1', actorRoles: ['leader'], toStatus: 'decomposing', reason: '' });
+    const inProj1 = await tickets.listTickets(db, null, 'proj-1');
+    assert.equal(inProj1.length, 1);
+    assert.equal(inProj1[0].title, 'a');
+    const uncategorized = await tickets.listTickets(db, null, 'none');
+    assert.equal(uncategorized.length, 1);
+    assert.equal(uncategorized[0].title, 'c');
+    const proj2Decomposing = await tickets.listTickets(db, ['decomposing'], 'proj-2');
+    assert.equal(proj2Decomposing.length, 0);
+    const proj1Decomposing = await tickets.listTickets(db, ['decomposing'], 'proj-1');
+    assert.equal(proj1Decomposing.length, 1);
+    assert.equal((await tickets.listTickets(db, null)).length, 3);
+  });
+
+  await ok('queue filters by project', async () => {
+    const db = new FakeDb();
+    const pm = { actorId: 'pm-1', actorRoles: ['pm'] };
+    const a = await tickets.createTicket(db, { ...pm, title: 'a', description: 'd', projectId: 'proj-1' });
+    const b = await tickets.createTicket(db, { ...pm, title: 'b', description: 'd', projectId: 'proj-2' });
+    for (const t of [a, b]) {
+      await tickets.transitionTicket(db, t.ticket.id, { actorId: 'leader-1', actorRoles: ['leader'], toStatus: 'decomposing', reason: '' });
+      await tickets.transitionTicket(db, t.ticket.id, {
+        actorId: 'leader-1', actorRoles: ['leader'], toStatus: 'pending_dev', reason: 'done', handoff: 'work list',
+      });
+    }
+    const proj1Queue = await tickets.listClaimable(db, ['engineer'], 'proj-1');
+    assert.equal(proj1Queue.length, 1);
+    assert.equal(proj1Queue[0].id, a.ticket.id);
+    const uncategorizedQueue = await tickets.listClaimable(db, ['engineer'], 'none');
+    assert.equal(uncategorizedQueue.length, 0);
+    const allQueue = await tickets.listClaimable(db, ['engineer']);
+    assert.equal(allQueue.length, 2);
   });
 
   console.log(`\n${passed} ticket service tests passed.`);

@@ -7,8 +7,22 @@ export interface Ticket {
   assignee_id: string | null;
   developer_id: string | null;
   description: string;
+  project_id: string | null;
   created_at: string;
   updated_at: string;
+}
+
+// A project (Project view): a formal list every ticket belongs to, or
+// null on a ticket means uncategorized. ticket_count is present on the
+// list response only.
+export interface Project {
+  id: string;
+  name: string;
+  description: string;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+  ticket_count?: number;
 }
 
 export interface Transition {
@@ -149,10 +163,15 @@ export const api = {
   logout: () => request<{ ok: boolean }>('/api/auth/logout', { method: 'POST' }),
   me: () => request<User>('/api/auth/me'),
   metaTransitions: () => request<LegalTransition[]>('/api/meta/transitions'),
-  listTickets: (status?: string) =>
-    request<Ticket[]>(status ? `/api/tickets?status=${encodeURIComponent(status)}` : '/api/tickets'),
+  listTickets: (status?: string, projectId?: string) => {
+    const params = new URLSearchParams();
+    if (status) params.set('status', status);
+    if (projectId) params.set('project_id', projectId);
+    const qs = params.toString();
+    return request<Ticket[]>(qs ? `/api/tickets?${qs}` : '/api/tickets');
+  },
   getTicket: (id: string) => request<TicketWithHistory>(`/api/tickets/${encodeURIComponent(id)}`),
-  createTicket: (payload: { title: string; description: string; source: string }) =>
+  createTicket: (payload: { title: string; description: string; source: string; project_id?: string | null }) =>
     request<Ticket>('/api/tickets', { method: 'POST', body: JSON.stringify(payload) }),
   transitionTicket: (
     id: string,
@@ -162,7 +181,17 @@ export const api = {
       `/api/tickets/${encodeURIComponent(id)}/transitions`,
       { method: 'POST', body: JSON.stringify(payload) }
     ),
-  getQueue: () => request<QueueEntry[]>('/api/queue'),
+  assignTicketProject: (id: string, projectId: string | null) =>
+    request<Ticket>(`/api/tickets/${encodeURIComponent(id)}/project`, {
+      method: 'PATCH',
+      body: JSON.stringify({ project_id: projectId }),
+    }),
+  getQueue: (projectId?: string) =>
+    request<QueueEntry[]>(projectId ? `/api/queue?project_id=${encodeURIComponent(projectId)}` : '/api/queue'),
+  listProjects: () => request<Project[]>('/api/projects'),
+  createProject: (payload: { name: string; description: string }) =>
+    request<Project>('/api/projects', { method: 'POST', body: JSON.stringify(payload) }),
+  getProject: (id: string) => request<Project>(`/api/projects/${encodeURIComponent(id)}`),
   adminOverview: () => request<AdminOverview>('/api/admin/overview'),
   adminListUsers: () => request<User[]>('/api/admin/users'),
   adminCreateUser: (payload: { username: string; password: string; display_name: string; roles: string[] }) =>
