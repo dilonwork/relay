@@ -121,7 +121,7 @@ async function driveToDelivered(db, ticketId) {
     ['ops-1', 'deployer', 'delivered', 'v1.2.0 verified in prod'],
   ];
   for (const [actorId, actorRole, to, reason] of steps) {
-    const res = await tickets.transitionTicket(db, ticketId, { actorId, actorRole, toStatus: to, reason });
+    const res = await tickets.transitionTicket(db, ticketId, { actorId, actorRoles: [actorRole], toStatus: to, reason });
     assert.equal(res.ok, true, `step to ${to} as ${actorRole} failed: ${res.message || ''}`);
   }
 }
@@ -132,7 +132,7 @@ async function main() {
   await ok('PM creates a ticket; creation is audited', async () => {
     const db = new FakeDb();
     const res = await tickets.createTicket(db, {
-      actorId: 'pm-1', actorRole: 'pm',
+      actorId: 'pm-1', actorRoles: ['pm'],
       title: 'Add ticket search', description: 'Goal, scope and acceptance criteria.',
       source: 'project',
     });
@@ -149,17 +149,17 @@ async function main() {
   await ok('only the PM may create; bad input is rejected without a ticket', async () => {
     const db = new FakeDb();
     const notPm = await tickets.createTicket(db, {
-      actorId: 'dev-1', actorRole: 'engineer', title: 'x', description: 'y',
+      actorId: 'dev-1', actorRoles: ['engineer'], title: 'x', description: 'y',
     });
     assert.equal(notPm.ok, false);
     assert.equal(notPm.status, 403);
     assert.equal(notPm.error, 'wrong_role');
     const noTitle = await tickets.createTicket(db, {
-      actorId: 'pm-1', actorRole: 'pm', title: '  ', description: 'y',
+      actorId: 'pm-1', actorRoles: ['pm'], title: '  ', description: 'y',
     });
     assert.equal(noTitle.status, 400);
     const badSource = await tickets.createTicket(db, {
-      actorId: 'pm-1', actorRole: 'pm', title: 'x', description: 'y', source: 'email',
+      actorId: 'pm-1', actorRoles: ['pm'], title: 'x', description: 'y', source: 'email',
     });
     assert.equal(badSource.status, 400);
     assert.equal((await tickets.listTickets(db, null)).length, 0);
@@ -168,7 +168,7 @@ async function main() {
   await ok('full lifecycle to delivered replays the design doc example', async () => {
     const db = new FakeDb();
     const created = await tickets.createTicket(db, {
-      actorId: 'pm-1', actorRole: 'pm',
+      actorId: 'pm-1', actorRoles: ['pm'],
       title: 'Add ticket search', description: 'Goal, scope and acceptance criteria.',
     });
     const id = created.ticket.id;
@@ -204,19 +204,19 @@ async function main() {
   await ok('ownership: pickup assigns, handoff unassigns, return goes back to the developer', async () => {
     const db = new FakeDb();
     const created = await tickets.createTicket(db, {
-      actorId: 'pm-1', actorRole: 'pm', title: 't', description: 'd',
+      actorId: 'pm-1', actorRoles: ['pm'], title: 't', description: 'd',
     });
     const id = created.ticket.id;
-    await tickets.transitionTicket(db, id, { actorId: 'leader-1', actorRole: 'leader', toStatus: 'decomposing', reason: '' });
-    await tickets.transitionTicket(db, id, { actorId: 'leader-1', actorRole: 'leader', toStatus: 'pending_dev', reason: 'split done' });
-    let res = await tickets.transitionTicket(db, id, { actorId: 'dev-1', actorRole: 'engineer', toStatus: 'in_dev', reason: '' });
+    await tickets.transitionTicket(db, id, { actorId: 'leader-1', actorRoles: ['leader'], toStatus: 'decomposing', reason: '' });
+    await tickets.transitionTicket(db, id, { actorId: 'leader-1', actorRoles: ['leader'], toStatus: 'pending_dev', reason: 'split done' });
+    let res = await tickets.transitionTicket(db, id, { actorId: 'dev-1', actorRoles: ['engineer'], toStatus: 'in_dev', reason: '' });
     assert.equal(res.ticket.assignee_id, 'dev-1');
     assert.equal(res.ticket.developer_id, 'dev-1');
-    res = await tickets.transitionTicket(db, id, { actorId: 'dev-1', actorRole: 'engineer', toStatus: 'pending_review', reason: 'done' });
+    res = await tickets.transitionTicket(db, id, { actorId: 'dev-1', actorRoles: ['engineer'], toStatus: 'pending_review', reason: 'done' });
     assert.equal(res.ticket.assignee_id, null);
     assert.equal(res.ticket.developer_id, 'dev-1');
-    await tickets.transitionTicket(db, id, { actorId: 'rev-2', actorRole: 'reviewer', toStatus: 'in_review', reason: '' });
-    res = await tickets.transitionTicket(db, id, { actorId: 'rev-2', actorRole: 'reviewer', toStatus: 'in_dev', reason: 'fix this' });
+    await tickets.transitionTicket(db, id, { actorId: 'rev-2', actorRoles: ['reviewer'], toStatus: 'in_review', reason: '' });
+    res = await tickets.transitionTicket(db, id, { actorId: 'rev-2', actorRoles: ['reviewer'], toStatus: 'in_dev', reason: 'fix this' });
     assert.equal(res.ticket.assignee_id, 'dev-1');
     assert.equal(res.ticket.developer_id, 'dev-1');
   });
@@ -224,11 +224,11 @@ async function main() {
   await ok('illegal transitions are rejected, ticket unchanged, rejection audited', async () => {
     const db = new FakeDb();
     const created = await tickets.createTicket(db, {
-      actorId: 'pm-1', actorRole: 'pm', title: 't', description: 'd',
+      actorId: 'pm-1', actorRoles: ['pm'], title: 't', description: 'd',
     });
     const id = created.ticket.id;
     const res = await tickets.transitionTicket(db, id, {
-      actorId: 'dev-1', actorRole: 'engineer', toStatus: 'in_dev', reason: '',
+      actorId: 'dev-1', actorRoles: ['engineer'], toStatus: 'in_dev', reason: '',
     });
     assert.equal(res.ok, false);
     assert.equal(res.status, 403);
@@ -244,41 +244,70 @@ async function main() {
   await ok('self-work is enforced through the service, with a rejected audit row', async () => {
     const db = new FakeDb();
     const created = await tickets.createTicket(db, {
-      actorId: 'pm-1', actorRole: 'pm', title: 't', description: 'd',
+      actorId: 'pm-1', actorRoles: ['pm'], title: 't', description: 'd',
     });
     const id = created.ticket.id;
-    await tickets.transitionTicket(db, id, { actorId: 'leader-1', actorRole: 'leader', toStatus: 'decomposing', reason: '' });
-    await tickets.transitionTicket(db, id, { actorId: 'leader-1', actorRole: 'leader', toStatus: 'pending_dev', reason: 'done' });
-    await tickets.transitionTicket(db, id, { actorId: 'dev-1', actorRole: 'engineer', toStatus: 'in_dev', reason: '' });
-    await tickets.transitionTicket(db, id, { actorId: 'dev-1', actorRole: 'engineer', toStatus: 'pending_review', reason: 'done' });
+    await tickets.transitionTicket(db, id, { actorId: 'leader-1', actorRoles: ['leader'], toStatus: 'decomposing', reason: '' });
+    await tickets.transitionTicket(db, id, { actorId: 'leader-1', actorRoles: ['leader'], toStatus: 'pending_dev', reason: 'done' });
+    await tickets.transitionTicket(db, id, { actorId: 'dev-1', actorRoles: ['engineer'], toStatus: 'in_dev', reason: '' });
+    await tickets.transitionTicket(db, id, { actorId: 'dev-1', actorRoles: ['engineer'], toStatus: 'pending_review', reason: 'done' });
+    // The developer holds both engineer and reviewer roles, so the role
+    // check passes — but the self-work check still blocks them, using
+    // their real identity.
     const selfReview = await tickets.transitionTicket(db, id, {
-      actorId: 'dev-1', actorRole: 'reviewer', toStatus: 'in_review', reason: '',
+      actorId: 'dev-1', actorRoles: ['engineer', 'reviewer'], toStatus: 'in_review', reason: '',
     });
     assert.equal(selfReview.ok, false);
     assert.equal(selfReview.error, 'self_work');
+    // The rejected attempt is audited under the role that was exercised.
+    assert.equal(selfReview.transition.actor_role, 'reviewer');
+    assert.equal(selfReview.transition.result, 'rejected');
     const otherReview = await tickets.transitionTicket(db, id, {
-      actorId: 'rev-2', actorRole: 'reviewer', toStatus: 'in_review', reason: '',
+      actorId: 'rev-2', actorRoles: ['reviewer'], toStatus: 'in_review', reason: '',
     });
     assert.equal(otherReview.ok, true);
+    assert.equal(otherReview.transition.actor_role, 'reviewer');
+  });
+
+  await ok('a transition is rejected when the user lacks the required role', async () => {
+    const db = new FakeDb();
+    const created = await tickets.createTicket(db, {
+      actorId: 'pm-1', actorRoles: ['pm'], title: 't', description: 'd',
+    });
+    const id = created.ticket.id;
+    await tickets.transitionTicket(db, id, { actorId: 'leader-1', actorRoles: ['leader'], toStatus: 'decomposing', reason: '' });
+    await tickets.transitionTicket(db, id, { actorId: 'leader-1', actorRoles: ['leader'], toStatus: 'pending_dev', reason: 'done' });
+    await tickets.transitionTicket(db, id, { actorId: 'dev-1', actorRoles: ['engineer'], toStatus: 'in_dev', reason: '' });
+    await tickets.transitionTicket(db, id, { actorId: 'dev-1', actorRoles: ['engineer'], toStatus: 'pending_review', reason: 'done' });
+    // Engineer-only account: no reviewer role, so the pickup is refused
+    // even though the transition itself is legal.
+    const noRole = await tickets.transitionTicket(db, id, {
+      actorId: 'dev-1', actorRoles: ['engineer'], toStatus: 'in_review', reason: '',
+    });
+    assert.equal(noRole.ok, false);
+    assert.equal(noRole.error, 'wrong_role');
+    assert.equal(noRole.transition.actor_role, 'reviewer');
+    const ticket = await tickets.getTicket(db, id);
+    assert.equal(ticket.status, 'pending_review');
   });
 
   await ok('reason-required transitions fail without a reason and pass with one', async () => {
     const db = new FakeDb();
     const created = await tickets.createTicket(db, {
-      actorId: 'pm-1', actorRole: 'pm', title: 't', description: 'd',
+      actorId: 'pm-1', actorRoles: ['pm'], title: 't', description: 'd',
     });
     const id = created.ticket.id;
     const res = await tickets.transitionTicket(db, id, {
-      actorId: 'leader-1', actorRole: 'leader', toStatus: 'decomposing', reason: '',
+      actorId: 'leader-1', actorRoles: ['leader'], toStatus: 'decomposing', reason: '',
     });
     assert.equal(res.ok, true); // forward transitions need no reason
     const noReason = await tickets.transitionTicket(db, id, {
-      actorId: 'leader-1', actorRole: 'leader', toStatus: 'needs_clarification', reason: '   ',
+      actorId: 'leader-1', actorRoles: ['leader'], toStatus: 'needs_clarification', reason: '   ',
     });
     assert.equal(noReason.ok, false);
     assert.equal(noReason.error, 'reason_required');
     const withReason = await tickets.transitionTicket(db, id, {
-      actorId: 'leader-1', actorRole: 'leader', toStatus: 'needs_clarification', reason: 'what is the scope?',
+      actorId: 'leader-1', actorRoles: ['leader'], toStatus: 'needs_clarification', reason: 'what is the scope?',
     });
     assert.equal(withReason.ok, true);
   });
@@ -286,26 +315,26 @@ async function main() {
   await ok('cancel: PM only, reason required, terminal afterwards', async () => {
     const db = new FakeDb();
     const created = await tickets.createTicket(db, {
-      actorId: 'pm-1', actorRole: 'pm', title: 't', description: 'd',
+      actorId: 'pm-1', actorRoles: ['pm'], title: 't', description: 'd',
     });
     const id = created.ticket.id;
     const byLeader = await tickets.transitionTicket(db, id, {
-      actorId: 'leader-1', actorRole: 'leader', toStatus: 'cancelled', reason: 'x',
+      actorId: 'leader-1', actorRoles: ['leader'], toStatus: 'cancelled', reason: 'x',
     });
     assert.equal(byLeader.ok, false);
     assert.equal(byLeader.error, 'wrong_role');
     const noReason = await tickets.transitionTicket(db, id, {
-      actorId: 'pm-1', actorRole: 'pm', toStatus: 'cancelled', reason: '',
+      actorId: 'pm-1', actorRoles: ['pm'], toStatus: 'cancelled', reason: '',
     });
     assert.equal(noReason.ok, false);
     assert.equal(noReason.error, 'reason_required');
     const cancelled = await tickets.transitionTicket(db, id, {
-      actorId: 'pm-1', actorRole: 'pm', toStatus: 'cancelled', reason: 'duplicate',
+      actorId: 'pm-1', actorRoles: ['pm'], toStatus: 'cancelled', reason: 'duplicate',
     });
     assert.equal(cancelled.ok, true);
     assert.equal(cancelled.ticket.status, 'cancelled');
     const after = await tickets.transitionTicket(db, id, {
-      actorId: 'pm-1', actorRole: 'pm', toStatus: 'cancelled', reason: 'again',
+      actorId: 'pm-1', actorRoles: ['pm'], toStatus: 'cancelled', reason: 'again',
     });
     assert.equal(after.ok, false);
     assert.equal(after.error, 'terminal');
@@ -314,7 +343,7 @@ async function main() {
   await ok('transition on a missing ticket is 404 and writes no audit row', async () => {
     const db = new FakeDb();
     const res = await tickets.transitionTicket(db, 'no-such-id', {
-      actorId: 'pm-1', actorRole: 'pm', toStatus: 'cancelled', reason: 'x',
+      actorId: 'pm-1', actorRoles: ['pm'], toStatus: 'cancelled', reason: 'x',
     });
     assert.equal(res.ok, false);
     assert.equal(res.status, 404);
@@ -325,9 +354,9 @@ async function main() {
 
   await ok('list filters by status', async () => {
     const db = new FakeDb();
-    const a = await tickets.createTicket(db, { actorId: 'pm-1', actorRole: 'pm', title: 'a', description: 'd' });
-    await tickets.createTicket(db, { actorId: 'pm-1', actorRole: 'pm', title: 'b', description: 'd' });
-    await tickets.transitionTicket(db, a.ticket.id, { actorId: 'leader-1', actorRole: 'leader', toStatus: 'decomposing', reason: '' });
+    const a = await tickets.createTicket(db, { actorId: 'pm-1', actorRoles: ['pm'], title: 'a', description: 'd' });
+    await tickets.createTicket(db, { actorId: 'pm-1', actorRoles: ['pm'], title: 'b', description: 'd' });
+    await tickets.transitionTicket(db, a.ticket.id, { actorId: 'leader-1', actorRoles: ['leader'], toStatus: 'decomposing', reason: '' });
     const decomposing = await tickets.listTickets(db, ['decomposing']);
     assert.equal(decomposing.length, 1);
     assert.equal(decomposing[0].id, a.ticket.id);

@@ -1,13 +1,20 @@
-// Relay ticket state machine (design doc ch. 5-6).
+// Relay ticket state machine (design doc ch. 5-6, 11).
 // Pure logic, no database access: the server and the tests share this module,
 // so the permission matrix has exactly one source of truth.
 //
 // Checks run in the order the design doc prescribes (ch. 6):
 //   1. the current state allows this transition,
-//   2. the actor's role is listed for it,
+//   2. the actor holds the role the transition requires,
 //   3. the actor is not handling their own work (review/test/deploy).
 // Any failure rejects the transition; the rejection itself is audited
 // (see server/tickets.js).
+//
+// Accounts hold roles, not the other way round (ch. 11): one account may
+// hold several roles, so validation takes the actor's full role list and
+// checks membership. The result carries `attemptedRole` — the role the
+// transition requires when one applies, otherwise the actor's first
+// workflow role (or 'pm' when they hold none) — so the audit log always
+// records a role for the attempt.
 
 const STATUSES = [
   'requirement',
@@ -72,45 +79,53 @@ function legalTransitions() {
   return [...TRANSITIONS, CANCEL_RULE].map((t) => ({ ...t }));
 }
 
-// Validate one transition attempt. Returns { ok: true, rule } or
-// { ok: false, error, message }. `ticket` needs { status, developer_id }.
-function validateTransition({ ticket, actorId, actorRole, toStatus, reason }) {
-  if (!ROLES.includes(actorRole)) {
-    return { ok: false, error: 'unknown_role', message: `Unknown role: ${actorRole}.` };
-  }
+// The role recorded for an attempt that has no applicable transition
+// rule: the actor's first workflow role, or 'pm' when they hold none.
+// (The audit table requires one of the six workflow roles; 'admin' alone
+// is not a workflow role, so it can never be the role of a transition.)
+function attemptedRoleFallback(actorRoles) {
+  const roles = Array.isArray(actorRoles) ? actorRoles : [];
+  return roles.find((r) => ROLES.includes(r)) || 'pm';
+}
+
+// Validate one transition attempt. Returns { ok: true, rule, attemptedRole }
+// or { ok: false, error, message, attemptedRole }. `ticket` needs
+// { status, developer_id }; `actorRoles` is the actor's full role list.
+function validateTransition({ ticket, actorId, actorRoles, toStatus, reason }) {
+  const roles = Array.isArray(actorRoles) ? actorRoles : [];
   if (!STATUSES.includes(toStatus)) {
-    return { ok: false, error: 'unknown_status', message: `Unknown status: ${toStatus}.` };
+    return { ok: false, error: 'unknown_status', message: `Unknown status: ${toStatus}.`, attemptedRole: attemptedRoleFallback(roles) };
   }
   const from = ticket.status;
   if (isTerminal(from)) {
-    return { ok: false, error: 'terminal', message: `Ticket is ${from}; terminal tickets cannot transition.` };
+    return { ok: false, error: 'terminal', message: `Ticket is ${from}; terminal tickets cannot transition.`, attemptedRole: attemptedRoleFallback(roles) };
   }
 
   // Cancel: PM, any non-terminal state, reason required.
   if (toStatus === 'cancelled') {
-    if (actorRole !== 'pm') {
-      return { ok: false, error: 'wrong_role', message: 'Only the PM may cancel a ticket.' };
+    if (!roles.includes('pm')) {
+      return { ok: false, error: 'wrong_role', message: 'Only the PM may cancel a ticket.', attemptedRole: 'pm' };
     }
     if (!reason || !String(reason).trim()) {
-      return { ok: false, error: 'reason_required', message: 'Cancelling a ticket requires a reason.' };
+      return { ok: false, error: 'reason_required', message: 'Cancelling a ticket requires a reason.', attemptedRole: 'pm' };
     }
-    return { ok: true, rule: CANCEL_RULE };
+    return { ok: true, rule: CANCEL_RULE, attemptedRole: 'pm' };
   }
 
   const rule = findRule(from, toStatus);
   if (!rule) {
-    return { ok: false, error: 'illegal_transition', message: `Cannot move a ticket from ${from} to ${toStatus}.` };
+    return { ok: false, error: 'illegal_transition', message: `Cannot move a ticket from ${from} to ${toStatus}.`, attemptedRole: attemptedRoleFallback(roles) };
   }
-  if (rule.role !== actorRole) {
-    return { ok: false, error: 'wrong_role', message: `Moving from ${from} to ${toStatus} requires role ${rule.role}, not ${actorRole}.` };
+  if (!roles.includes(rule.role)) {
+    return { ok: false, error: 'wrong_role', message: `Moving from ${from} to ${toStatus} requires role ${rule.role}, which you do not hold.`, attemptedRole: rule.role };
   }
   if (rule.selfCheck && ticket.developer_id && actorId === ticket.developer_id) {
-    return { ok: false, error: 'self_work', message: 'You cannot review, test or deploy your own work.' };
+    return { ok: false, error: 'self_work', message: 'You cannot review, test or deploy your own work.', attemptedRole: rule.role };
   }
   if (rule.requiresReason && (!reason || !String(reason).trim())) {
-    return { ok: false, error: 'reason_required', message: `Moving from ${from} to ${toStatus} requires a reason.` };
+    return { ok: false, error: 'reason_required', message: `Moving from ${from} to ${toStatus} requires a reason.`, attemptedRole: rule.role };
   }
-  return { ok: true, rule };
+  return { ok: true, rule, attemptedRole: rule.role };
 }
 
 // Transitions the given role may take from the ticket's current state.

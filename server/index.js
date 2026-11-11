@@ -5,24 +5,75 @@ const cors = require('cors');
 const db = require('./database');
 const { legalTransitions } = require('./stateMachine');
 const tickets = require('./tickets');
+const auth = require('./auth');
+const admin = require('./admin');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Phase 1 has no login: the caller declares actor_id and actor_role with
-// each request, and the server enforces the permission matrix on every
-// transition (design doc ch. 6). Authentication is a later phase.
-function actorFromBody(req) {
-  const body = req.body || {};
-  return {
-    actorId: typeof body.actor_id === 'string' ? body.actor_id : '',
-    actorRole: typeof body.actor_role === 'string' ? body.actor_role : '',
-  };
-}
-
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', service: 'relay' });
+});
+
+// --- Public auth endpoints (no session needed) ---
+
+// Tells the frontend whether first-run setup is still open.
+app.get('/api/auth/status', async (req, res) => {
+  try {
+    res.json({ setup_required: await auth.setupRequired(db) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// First-run setup: creates the first admin, and only while the users
+// table is empty. There is no pre-seeded account or password.
+app.post('/api/auth/setup', async (req, res) => {
+  try {
+    const result = await auth.createFirstAdmin(db, {
+      username: req.body ? req.body.username : undefined,
+      password: req.body ? req.body.password : undefined,
+      displayName: req.body ? req.body.display_name : undefined,
+    });
+    if (!result.ok) return res.status(result.status).json({ error: result.error, message: result.message });
+    res.status(201).json(result.user);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const result = await auth.login(db, {
+      username: req.body ? req.body.username : undefined,
+      password: req.body ? req.body.password : undefined,
+    });
+    if (!result.ok) return res.status(result.status).json({ error: result.error, message: result.message });
+    res.json({ token: result.token, user: result.user, expires_at: result.expires_at });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- Everything below requires a valid session ---
+// The actor is always the authenticated user (req.user): the server
+// derives the required role from the state machine and ignores any
+// actor_role the client sends (design doc ch. 11).
+app.use('/api', auth.requireAuth(db));
+app.use('/api/admin', auth.requireAdmin);
+
+app.post('/api/auth/logout', async (req, res) => {
+  try {
+    await auth.logout(db, req.token);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/auth/me', (req, res) => {
+  res.json(req.user);
 });
 
 // Legal transition table: the single source of truth for the UI.
@@ -32,10 +83,9 @@ app.get('/api/meta/transitions', (req, res) => {
 
 app.post('/api/tickets', async (req, res) => {
   try {
-    const { actorId, actorRole } = actorFromBody(req);
     const result = await tickets.createTicket(db, {
-      actorId,
-      actorRole,
+      actorId: req.user.id,
+      actorRoles: req.user.roles,
       title: req.body ? req.body.title : undefined,
       description: req.body ? req.body.description : undefined,
       source: req.body ? req.body.source : undefined,
@@ -83,16 +133,74 @@ app.get('/api/tickets/:id/transitions', async (req, res) => {
 
 app.post('/api/tickets/:id/transitions', async (req, res) => {
   try {
-    const { actorId, actorRole } = actorFromBody(req);
     const result = await tickets.transitionTicket(db, req.params.id, {
-      actorId,
-      actorRole,
+      actorId: req.user.id,
+      actorRoles: req.user.roles,
       toStatus: req.body ? req.body.to_status : undefined,
       reason: req.body ? req.body.reason : undefined,
       artifacts: req.body ? req.body.artifacts : undefined,
     });
     if (!result.ok) return res.status(result.status).json({ error: result.error, message: result.message });
     res.json({ ticket: result.ticket, transition: result.transition });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- Admin endpoints (admin role only) ---
+// Admin is an account-management role: full visibility plus user
+// management. It does not bypass the workflow role checks above.
+
+app.get('/api/admin/overview', async (req, res) => {
+  try {
+    res.json(await admin.getOverview(db));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/admin/users', async (req, res) => {
+  try {
+    res.json(await auth.listUsers(db));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/admin/users', async (req, res) => {
+  try {
+    const result = await auth.createUser(db, {
+      username: req.body ? req.body.username : undefined,
+      password: req.body ? req.body.password : undefined,
+      displayName: req.body ? req.body.display_name : undefined,
+      roles: req.body ? req.body.roles : undefined,
+    });
+    if (!result.ok) return res.status(result.status).json({ error: result.error, message: result.message });
+    res.status(201).json(result.user);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.patch('/api/admin/users/:id', async (req, res) => {
+  try {
+    const result = await auth.updateUser(db, req.params.id, {
+      displayName: req.body ? req.body.display_name : undefined,
+      roles: req.body ? req.body.roles : undefined,
+      isActive: req.body && req.body.is_active !== undefined ? req.body.is_active : undefined,
+    });
+    if (!result.ok) return res.status(result.status).json({ error: result.error, message: result.message });
+    res.json(result.user);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/admin/users/:id/reset-password', async (req, res) => {
+  try {
+    const result = await auth.resetPassword(db, req.params.id, req.body ? req.body.password : undefined);
+    if (!result.ok) return res.status(result.status).json({ error: result.error, message: result.message });
+    res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
