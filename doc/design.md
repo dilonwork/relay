@@ -442,7 +442,7 @@ api_keys
 
 ### 備註
 
-- migration 009 是 `monitor_reminders` 表。先前討論的 CHECK 約束補漏（第 14 個狀態 `needs_acceptance_clarification`）若另開 migration，編號順延為 011（010 已是 workflows 表，本單不碰那個問題）。
+- migration 009 是 `monitor_reminders` 表。CHECK 約束補漏（第 14 個狀態 `needs_acceptance_clarification`）由 migration 011 處理（工單 16f227ff）：001／002 的三處 CHECK 清單補上第 14 個狀態，011 另以 DROP＋ADD 修正既有資料庫的約束。
 - 未驗證：migration SQL 與 upsert 語句未在 live PostgreSQL 上實際執行（本機無資料庫）；合併部署前應在 develop 預覽環境以真實工單跑一次完整週期（卡住 → 提醒 → 3 次 → 升級）。
 
 ---
@@ -510,7 +510,7 @@ api_keys
 ### 備註
 
 - 未驗證：migration 010 的 SQL 未在 live PostgreSQL 上實際執行（本機無資料庫）；合併部署前應在 develop 預覽環境確認預設 workflow 正常寫入，且既有工單的轉換、佇列與監控行為不變。
-- live DB CHECK 約束漏第 14 個狀態的問題（另開 migration 待決定）本單不碰；若另開，編號順延為 011。
+- live DB CHECK 約束漏第 14 個狀態的問題由 migration 011 處理（工單 16f227ff，本單不碰）。
 
 ---
 

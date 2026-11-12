@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS ticket_transitions (
       'requirement', 'decomposing', 'needs_clarification',
       'pending_dev', 'in_dev',
       'pending_review', 'in_review',
-      'pending_test', 'in_test',
+      'pending_test', 'in_test', 'needs_acceptance_clarification',
       'pending_deploy', 'deploying',
       'delivered', 'cancelled'
     )),
@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS ticket_transitions (
       'requirement', 'decomposing', 'needs_clarification',
       'pending_dev', 'in_dev',
       'pending_review', 'in_review',
-      'pending_test', 'in_test',
+      'pending_test', 'in_test', 'needs_acceptance_clarification',
       'pending_deploy', 'deploying',
       'delivered', 'cancelled'
     )),
