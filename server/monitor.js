@@ -18,6 +18,7 @@
 // zero — no hook in the transition path is needed.
 const sm = require('./stateMachine');
 const tickets = require('./tickets');
+const workflows = require('./workflows');
 
 // Working states plus the one waiting state the spec counts as
 // stalled. Deliberately NOT included: requirement, pending_dev,
@@ -103,7 +104,18 @@ async function listStalled(db, { assignedProjectId, now = new Date() } = {}) {
     [stalled.map((s) => s.ticket.id)]
   );
   const byTicket = new Map(rows.map((r) => [r.ticket_id, r]));
-  return stalled.map(({ ticket, info }) => {
+  // One role-map lookup per project: tickets of the same project share
+  // their active workflow (design doc ch. 14).
+  const roleMaps = new Map();
+  async function roleMapFor(projectId) {
+    const key = projectId || '__default__';
+    if (!roleMaps.has(key)) {
+      roleMaps.set(key, await workflows.getRoleMap(db, projectId || null));
+    }
+    return roleMaps.get(key);
+  }
+  const out = [];
+  for (const { ticket, info } of stalled) {
     const row = byTicket.get(ticket.id);
     const sameEpisode = !!(row && row.last_transition_id === info.lastTransitionId);
     const reminderCount = sameEpisode ? row.reminder_count : 0;
@@ -115,8 +127,13 @@ async function listStalled(db, { assignedProjectId, now = new Date() } = {}) {
     const needsEscalation = sameEpisode
       && reminderCount >= ESCALATE_AFTER_REMINDERS
       && !escalatedAt;
-    const notifyRole = responsibleRole(ticket.status);
-    return {
+    // The role that owns the ticket in its current state comes from the
+    // ticket's project workflow; the built-in map is the fallback when
+    // the workflow names no role for the state.
+    const roleMap = await roleMapFor(ticket.project_id);
+    const entry = roleMap ? roleMap[ticket.status] : null;
+    const notifyRole = (entry && entry.role) || responsibleRole(ticket.status);
+    out.push({
       ticket_id: ticket.id,
       title: ticket.title,
       status: ticket.status,
@@ -130,10 +147,12 @@ async function listStalled(db, { assignedProjectId, now = new Date() } = {}) {
       needs_reminder: needsReminder,
       needs_escalation: needsEscalation,
       notify_role: notifyRole,
-      // What would unblock it: the legal moves for the responsible role.
-      next_actions: notifyRole ? sm.allowedTransitions(ticket, notifyRole) : [],
-    };
-  });
+      // What would unblock it: the legal moves for the responsible role,
+      // under the same workflow override.
+      next_actions: notifyRole ? sm.allowedTransitions(ticket, notifyRole, roleMap) : [],
+    });
+  }
+  return out;
 }
 
 // Shared preamble for the two ack endpoints: PM only, ticket must

@@ -305,6 +305,61 @@ async function main() {
     assert.deepEqual(sm.allowedTransitions(ticket('delivered', null), 'pm'), []);
   });
 
+  await ok('roleOverrides (workflow): the active workflow reassigns the required role, cancel stays PM-only', async () => {
+    // pending_dev is engineer-built-in; an override naming tester
+    // makes the tester the only role that may pick it up, and the
+    // returned rule carries the overridden role for the audit row.
+    const overrides = { pending_dev: { role: 'tester', responsibilities: 'Test first.' } };
+    const byTester = sm.validateTransition({
+      ticket: ticket('pending_dev', 'dev-1'), actorId: 'qa-1', actorRoles: ['tester'],
+      toStatus: 'in_dev', reason: '', roleOverrides: overrides,
+    });
+    assert.equal(byTester.ok, true);
+    assert.equal(byTester.rule.role, 'tester');
+    assert.equal(byTester.attemptedRole, 'tester');
+    const byEngineer = sm.validateTransition({
+      ticket: ticket('pending_dev', 'dev-1'), actorId: 'dev-1', actorRoles: ['engineer'],
+      toStatus: 'in_dev', reason: '', roleOverrides: overrides,
+    });
+    assert.equal(byEngineer.ok, false);
+    assert.equal(byEngineer.error, 'wrong_role');
+    assert.equal(byEngineer.attemptedRole, 'tester');
+    // An override naming an invalid role is ignored: built-in applies.
+    const badOverride = sm.validateTransition({
+      ticket: ticket('pending_dev', 'dev-1'), actorId: 'dev-1', actorRoles: ['engineer'],
+      toStatus: 'in_dev', reason: '', roleOverrides: { pending_dev: { role: 'admin', responsibilities: 'x' } },
+    });
+    assert.equal(badOverride.ok, true);
+    assert.equal(badOverride.rule.role, 'engineer');
+    // Without overrides behaviour is unchanged.
+    const plain = sm.validateTransition({
+      ticket: ticket('pending_dev', 'dev-1'), actorId: 'dev-1', actorRoles: ['engineer'],
+      toStatus: 'in_dev', reason: '',
+    });
+    assert.equal(plain.ok, true);
+    assert.equal(plain.rule.role, 'engineer');
+    // Cancel ignores overrides: still PM-only.
+    const cancel = sm.validateTransition({
+      ticket: ticket('pending_dev', 'dev-1'), actorId: 'qa-1', actorRoles: ['tester'],
+      toStatus: 'cancelled', reason: 'no longer needed', roleOverrides: overrides,
+    });
+    assert.equal(cancel.ok, false);
+    assert.equal(cancel.error, 'wrong_role');
+  });
+
+  await ok('allowedTransitions honours roleOverrides', async () => {
+    const overrides = { pending_dev: { role: 'tester', responsibilities: 'Test first.' } };
+    assert.deepEqual(
+      sm.allowedTransitions(ticket('pending_dev', null), 'tester', overrides).map((x) => x.to),
+      ['in_dev']
+    );
+    assert.deepEqual(sm.allowedTransitions(ticket('pending_dev', null), 'engineer', overrides), []);
+    assert.deepEqual(
+      sm.allowedTransitions(ticket('pending_dev', null), 'engineer').map((x) => x.to),
+      ['in_dev']
+    );
+  });
+
   await ok('legalTransitions exposes the full 20-transition table', async () => {
     const table = sm.legalTransitions();
     assert.equal(table.length, 20);

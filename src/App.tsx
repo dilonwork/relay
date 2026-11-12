@@ -6,6 +6,7 @@ import AdminPanel from './AdminPanel';
 import Dashboard from './Dashboard';
 import NewTicketForm from './NewTicketForm';
 import ProjectsPanel from './ProjectsPanel';
+import WorkflowsPanel from './WorkflowsPanel';
 import TicketDetail from './TicketDetail';
 import TicketGantt from './TicketGantt';
 import TicketList from './TicketList';
@@ -17,7 +18,7 @@ import TicketList from './TicketList';
 // 'dashboard' is the default landing page (project overview).
 // Tickets has two sub-pages, reached from the sidebar group:
 // 'tickets-list' (All tickets) and 'tickets-gantt' (Gantt).
-type MainView = 'dashboard' | 'tickets-list' | 'tickets-gantt' | 'new' | 'projects' | 'admin' | 'detail';
+type MainView = 'dashboard' | 'tickets-list' | 'tickets-gantt' | 'new' | 'projects' | 'workflows' | 'admin' | 'detail';
 
 export default function App() {
   const [authState, setAuthState] = useState<'loading' | 'login' | 'setup' | 'app'>('loading');
@@ -631,6 +632,16 @@ export default function App() {
               <span className="nav-label">Projects</span>
             </button>
           )}
+          {canManageProjects && (
+            <button
+              className={mainView === 'workflows' ? 'active' : ''}
+              onClick={() => setMainView('workflows')}
+              title="Workflows"
+            >
+              <span className="nav-icon" aria-hidden="true">⇄</span>
+              <span className="nav-label">Workflows</span>
+            </button>
+          )}
           {isAdmin && (
             <button
               className={mainView === 'admin' ? 'active' : ''}
@@ -737,6 +748,8 @@ export default function App() {
           onCreateProject={handleCreateProject}
           onSelectProject={selectProject}
         />
+      ) : mainView === 'workflows' && canManageProjects ? (
+        <WorkflowsPanel projects={projects} />
       ) : mainView === 'new' ? (
         <NewTicketForm
           title={newTitle}

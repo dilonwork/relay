@@ -8,6 +8,7 @@
 // tested at their boundaries without waiting.
 const assert = require('node:assert/strict');
 const monitor = require('./monitor.js');
+const workflows = require('./workflows.js');
 
 const NOW = new Date('2026-11-12T12:00:00.000Z');
 function at(minutesFromNow) {
@@ -33,7 +34,29 @@ class FakeDb {
     this.tickets = [];
     this.transitions = [];
     this.reminders = [];
+    this.workflows = [];
     this.seq = 0;
+  }
+
+  // Seed an active custom workflow for a project (design doc ch. 14).
+  seedActiveWorkflow(projectId, overrides = {}) {
+    const roles = JSON.parse(JSON.stringify(workflows.DEFAULT_WORKFLOW_ROLES));
+    for (const [status, entry] of Object.entries(overrides)) {
+      roles[status] = { ...roles[status], ...entry };
+    }
+    const row = {
+      id: `wf-${++this.seq}`,
+      project_id: projectId,
+      name: 'Custom',
+      roles,
+      is_default: false,
+      is_active: true,
+      created_by: 'pm-1',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    this.workflows.push(row);
+    return row;
   }
 
   _norm(sql) {
@@ -102,6 +125,17 @@ class FakeDb {
       row.escalated_at = params[0];
       row.updated_at = params[1];
       return { rows: [{ ...row }] };
+    }
+    // Workflow role maps (design doc ch. 14): getRoleMap's two fixed
+    // queries. An empty workflows table means the built-in fallback,
+    // which is what proves the existing tests are unaffected.
+    if (sql === 'SELECT * FROM workflows WHERE project_id = $1 AND is_active = true LIMIT 1') {
+      const w = this.workflows.find((x) => x.project_id === params[0] && x.is_active);
+      return { rows: w ? [{ ...w }] : [] };
+    }
+    if (sql === 'SELECT * FROM workflows WHERE is_default = true LIMIT 1') {
+      const w = this.workflows.find((x) => x.is_default);
+      return { rows: w ? [{ ...w }] : [] };
     }
     throw new Error(`FakeDb: unhandled query: ${sql}`);
   }
@@ -346,6 +380,23 @@ async function main() {
     const final = await poll(at(45));
     assert.equal(final.reminder_count, 4);
     assert.equal(final.needs_escalation, false);
+  });
+
+  await ok('notify_role follows the ticket project active workflow', async () => {
+    const db = new FakeDb();
+    // proj-1 runs a custom workflow where in_dev belongs to the
+    // reviewer instead of the engineer; a proj-2 ticket stays default.
+    db.seedActiveWorkflow('proj-1', { in_dev: { role: 'reviewer' } });
+    seedTicket(db, { title: 'custom', status: 'in_dev', project_id: 'proj-1', transitionMinutesAgo: 60 });
+    seedTicket(db, { title: 'default', status: 'in_dev', project_id: 'proj-2', transitionMinutesAgo: 60 });
+    const rows = await monitor.listStalled(db, { now: NOW });
+    assert.equal(rows.length, 2);
+    const custom = rows.find((r) => r.title === 'custom');
+    assert.equal(custom.notify_role, 'reviewer');
+    assert.ok(custom.next_actions.some((a) => a.to === 'pending_review'));
+    const plain = rows.find((r) => r.title === 'default');
+    assert.equal(plain.notify_role, 'engineer');
+    assert.ok(plain.next_actions.some((a) => a.to === 'pending_review'));
   });
 
   await ok('responsibleRole maps each stalled state to its owning role', async () => {
