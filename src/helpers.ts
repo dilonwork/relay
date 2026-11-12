@@ -144,6 +144,49 @@ export function groupGanttTickets(
   return [...byId.values(), uncategorized].filter((g) => g.rows.length > 0);
 }
 
+// Dashboard (default page): ticket counts per project, grouped into
+// three buckets — in progress, waiting, done — computed from
+// GET /api/tickets. Terminal states are done; the active (in-*) states
+// are in progress; everything else (requirement, pending_*, needs_*) is
+// waiting on someone.
+export type TicketBucket = 'active' | 'pending' | 'done';
+
+export function statusBucket(status: string): TicketBucket {
+  if (TERMINAL_STATUSES.has(status)) return 'done';
+  if (
+    status === 'decomposing' ||
+    status === 'in_dev' ||
+    status === 'in_review' ||
+    status === 'in_test' ||
+    status === 'deploying'
+  ) {
+    return 'active';
+  }
+  return 'pending';
+}
+
+export interface ProjectTicketCounts {
+  active: number;
+  pending: number;
+  done: number;
+  total: number;
+}
+
+const EMPTY_COUNTS: ProjectTicketCounts = { active: 0, pending: 0, done: 0, total: 0 };
+
+// Counts per project, keyed by project id; tickets with no project land
+// under 'none'.
+export function countTicketsByProject(tickets: Ticket[]): Record<string, ProjectTicketCounts> {
+  const out: Record<string, ProjectTicketCounts> = {};
+  for (const t of tickets) {
+    const key = t.project_id || 'none';
+    const counts = out[key] || (out[key] = { ...EMPTY_COUNTS });
+    counts[statusBucket(t.status)] += 1;
+    counts.total += 1;
+  }
+  return out;
+}
+
 // Actor ids are user UUIDs now; show a short prefix, full value on hover.
 export function shortId(id: string | null): string {
   if (!id) return '—';

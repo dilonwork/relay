@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api, getToken, onUnauthorized, setToken } from './api';
 import type { LegalTransition, Project, QueueEntry, Ticket, TicketWithHistory, User } from './api';
-import { QUEUE_TABS, ROLE_LABELS, journeyFromTransitions, statusLabel, targetsForUser } from './helpers';
+import { QUEUE_TABS, ROLE_LABELS, countTicketsByProject, journeyFromTransitions, statusLabel, targetsForUser } from './helpers';
 import AdminPanel from './AdminPanel';
+import Dashboard from './Dashboard';
 import NewTicketForm from './NewTicketForm';
 import ProjectsPanel from './ProjectsPanel';
 import TicketDetail from './TicketDetail';
@@ -11,14 +12,15 @@ import TicketList from './TicketList';
 // Top-level views: one module on screen at a time. 'detail' is the
 // ticket detail opened from the Tickets view; it is not a nav item —
 // the Tickets nav button stays active while a detail is open.
-type MainView = 'tickets' | 'new' | 'projects' | 'admin' | 'detail';
+// 'dashboard' is the default landing page (project overview).
+type MainView = 'dashboard' | 'tickets' | 'new' | 'projects' | 'admin' | 'detail';
 
 export default function App() {
   const [authState, setAuthState] = useState<'loading' | 'login' | 'setup' | 'app'>('loading');
   const [user, setUser] = useState<User | null>(null);
   const [authError, setAuthError] = useState('');
 
-  const [mainView, setMainView] = useState<MainView>('tickets');
+  const [mainView, setMainView] = useState<MainView>('dashboard');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [tab, setTab] = useState('all');
   const [display, setDisplay] = useState<'list' | 'gantt'>('list');
@@ -26,6 +28,8 @@ export default function App() {
   const [journeys, setJourneys] = useState<Record<string, string[]>>({});
   const [ganttLoading, setGanttLoading] = useState(false);
   const [tickets, setTickets] = useState<QueueEntry[]>([]);
+  const [dashboardTickets, setDashboardTickets] = useState<Ticket[]>([]);
+  const [dashboardLoading, setDashboardLoading] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<TicketWithHistory | null>(null);
   const [meta, setMeta] = useState<LegalTransition[]>([]);
@@ -62,7 +66,7 @@ export default function App() {
   useEffect(() => {
     onUnauthorized(() => {
       setUser(null);
-      setMainView('tickets');
+      setMainView('dashboard');
       setAuthState('login');
     });
     (async () => {
@@ -150,10 +154,30 @@ export default function App() {
     }
   }, [projectFilter]);
 
+  // Dashboard data: every ticket, unfiltered, so the project overview
+  // counts (in progress / waiting / done) are computed from the same
+  // source as the ticket lists.
+  const loadDashboard = useCallback(async () => {
+    setDashboardLoading(true);
+    try {
+      setDashboardTickets(await api.listTickets());
+    } catch (err) {
+      if ((err as { status?: number }).status === 401) return; // handled by onUnauthorized
+      setError(err instanceof Error ? err.message : 'Failed to load dashboard data.');
+    } finally {
+      setDashboardLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     if (authState !== 'app' || mainView !== 'tickets' || display !== 'gantt') return;
     loadGantt();
   }, [display, mainView, authState, loadGantt]);
+
+  useEffect(() => {
+    if (authState !== 'app' || mainView !== 'dashboard') return;
+    loadDashboard();
+  }, [mainView, authState, loadDashboard]);
 
   useEffect(() => {
     if (authState !== 'app') return;
@@ -185,7 +209,7 @@ export default function App() {
       setToken(res.token);
       setUser(res.user);
       setLoginPassword('');
-      setMainView('tickets');
+      setMainView('dashboard');
       setAuthState('app');
     } catch (err) {
       setAuthError(err instanceof Error ? err.message : 'Login failed.');
@@ -208,7 +232,7 @@ export default function App() {
       setToken(res.token);
       setUser(res.user);
       setSetupPassword('');
-      setMainView('tickets');
+      setMainView('dashboard');
       setAuthState('app');
     } catch (err) {
       setAuthError(err instanceof Error ? err.message : 'Setup failed.');
@@ -226,7 +250,7 @@ export default function App() {
     setToken(null);
     setUser(null);
     setSelectedId(null);
-    setMainView('tickets');
+    setMainView('dashboard');
     setAuthState('login');
   }
 
@@ -348,6 +372,15 @@ export default function App() {
     setMainView('tickets');
   }
 
+  // Clicking a project on the Dashboard opens that project's view with
+  // its Gantt chart; the Gantt/List toggle in the Tickets view switches
+  // to the ticket table (same project filter).
+  function openProjectFromDashboard(id: string) {
+    setProjectFilter(id);
+    setDisplay('gantt');
+    setMainView('tickets');
+  }
+
   // Switching the Tickets view back to List reloads the list, as the
   // toggle did before; switching to Gantt loads through the effect.
   function handleDisplayChange(next: 'list' | 'gantt') {
@@ -457,6 +490,7 @@ export default function App() {
     projectFilter !== 'all' && projectFilter !== 'none'
       ? projects.find((p) => p.id === projectFilter)
       : undefined;
+  const dashboardCounts = countTicketsByProject(dashboardTickets);
 
   function projectName(id: string | null): string {
     if (!id) return '—';
@@ -479,6 +513,14 @@ export default function App() {
         </div>
 
         <nav className="sidebar-nav" aria-label="Modules">
+          <button
+            className={activeView === 'dashboard' ? 'active' : ''}
+            onClick={() => setMainView('dashboard')}
+            title="Dashboard"
+          >
+            <span className="nav-icon" aria-hidden="true">▤</span>
+            <span className="nav-label">Dashboard</span>
+          </button>
           <button
             className={activeView === 'tickets' ? 'active' : ''}
             onClick={() => setMainView('tickets')}
@@ -562,7 +604,8 @@ export default function App() {
         <button
           className="link"
           onClick={() => {
-            if (display === 'gantt') loadGantt();
+            if (mainView === 'dashboard') loadDashboard();
+            else if (display === 'gantt') loadGantt();
             else loadTickets(tab);
             if (selectedId) loadDetail(selectedId);
           }}
@@ -574,7 +617,14 @@ export default function App() {
       {error && <div className="banner error">{error}</div>}
       {notice && <div className="banner notice">{notice}</div>}
 
-      {mainView === 'admin' && isAdmin ? (
+      {mainView === 'dashboard' ? (
+        <Dashboard
+          projects={projects}
+          counts={dashboardCounts}
+          loading={dashboardLoading}
+          onSelectProject={openProjectFromDashboard}
+        />
+      ) : mainView === 'admin' && isAdmin ? (
         <AdminPanel />
       ) : mainView === 'projects' && canManageProjects ? (
         <ProjectsPanel
