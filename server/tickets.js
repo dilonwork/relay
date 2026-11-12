@@ -31,11 +31,16 @@ async function listTransitions(db, ticketId) {
   return rows;
 }
 
-async function listTickets(db, statuses, projectFilter) {
+async function listTickets(db, statuses, projectFilter, assignedProjectId) {
+  // Project scope (Agent assignment): an assigned caller only ever sees
+  // their own project's tickets — the assignment overrides any project
+  // filter the caller passes, including 'none'. An unassigned caller
+  // (assignedProjectId null/undefined) keeps today's behavior.
+  const effectiveProject = assignedProjectId || projectFilter;
   const hasStatuses = statuses && statuses.length > 0;
-  const hasProject = projectFilter !== undefined && projectFilter !== null && projectFilter !== '';
+  const hasProject = effectiveProject !== undefined && effectiveProject !== null && effectiveProject !== '';
   if (hasStatuses && hasProject) {
-    if (projectFilter === 'none') {
+    if (effectiveProject === 'none') {
       const { rows } = await db.query(
         'SELECT * FROM tickets WHERE status = ANY($1) AND project_id IS NULL ORDER BY created_at ASC, id ASC',
         [statuses]
@@ -44,7 +49,7 @@ async function listTickets(db, statuses, projectFilter) {
     }
     const { rows } = await db.query(
       'SELECT * FROM tickets WHERE status = ANY($1) AND project_id = $2 ORDER BY created_at ASC, id ASC',
-      [statuses, projectFilter]
+      [statuses, effectiveProject]
     );
     return rows;
   }
@@ -56,7 +61,7 @@ async function listTickets(db, statuses, projectFilter) {
     return rows;
   }
   if (hasProject) {
-    if (projectFilter === 'none') {
+    if (effectiveProject === 'none') {
       const { rows } = await db.query(
         'SELECT * FROM tickets WHERE project_id IS NULL ORDER BY created_at ASC, id ASC'
       );
@@ -64,7 +69,7 @@ async function listTickets(db, statuses, projectFilter) {
     }
     const { rows } = await db.query(
       'SELECT * FROM tickets WHERE project_id = $1 ORDER BY created_at ASC, id ASC',
-      [projectFilter]
+      [effectiveProject]
     );
     return rows;
   }
@@ -162,7 +167,7 @@ function nextOwnership(ticket, rule, actorId) {
   return { assigneeId: null, developerId: ticket.developer_id || null };
 }
 
-async function transitionTicket(db, ticketId, { actorId, actorRoles, toStatus, reason, handoff, artifacts }) {
+async function transitionTicket(db, ticketId, { actorId, actorRoles, toStatus, reason, handoff, artifacts, assignedProjectId }) {
   if (!actorId || !String(actorId).trim() || !Array.isArray(actorRoles) || !toStatus) {
     return { ok: false, status: 400, error: 'bad_request', message: 'actor_id, actor roles and to_status are required.' };
   }
@@ -191,6 +196,7 @@ async function transitionTicket(db, ticketId, { actorId, actorRoles, toStatus, r
       toStatus,
       reason: cleanReason,
       handoff: cleanHandoff,
+      assignedProjectId,
     });
 
     if (!check.ok) {
@@ -234,12 +240,12 @@ const CLAIMABLE = [
   { status: 'pending_dev', role: 'engineer' },
 ];
 
-async function listClaimable(db, actorRoles, projectFilter) {
+async function listClaimable(db, actorRoles, projectFilter, assignedProjectId) {
   const roles = Array.isArray(actorRoles) ? actorRoles : [];
   const wanted = CLAIMABLE.filter((c) => roles.includes(c.role));
   if (wanted.length === 0) return [];
   const statuses = [...new Set(wanted.map((c) => c.status))];
-  const rows = await listTickets(db, statuses, projectFilter);
+  const rows = await listTickets(db, statuses, projectFilter, assignedProjectId);
   return rows.map((t) => {
     const claim = wanted.find((c) => c.status === t.status);
     const rule = sm.TRANSITIONS.find((r) => r.from === t.status && r.role === claim.role);

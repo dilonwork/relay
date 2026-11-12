@@ -585,6 +585,90 @@ async function main() {
     assert.equal(allQueue.length, 2);
   });
 
+  await ok('list is scoped to the caller\'s assigned project, overriding the query filter', async () => {
+    const db = new FakeDb();
+    const pm = { actorId: 'pm-1', actorRoles: ['pm'] };
+    await tickets.createTicket(db, { ...pm, title: 'a', description: 'd', projectId: 'proj-1' });
+    await tickets.createTicket(db, { ...pm, title: 'b', description: 'd', projectId: 'proj-2' });
+    await tickets.createTicket(db, { ...pm, title: 'c', description: 'd' });
+    // Assigned to proj-1: only that project's tickets, whatever filter is passed.
+    const onlyOwn = await tickets.listTickets(db, null, undefined, 'proj-1');
+    assert.equal(onlyOwn.length, 1);
+    assert.equal(onlyOwn[0].title, 'a');
+    assert.equal((await tickets.listTickets(db, null, 'proj-2', 'proj-1')).length, 1);
+    assert.equal((await tickets.listTickets(db, null, 'proj-2', 'proj-1'))[0].title, 'a');
+    assert.equal((await tickets.listTickets(db, null, 'none', 'proj-1')).length, 1);
+    // A status filter composes with the assignment.
+    assert.equal((await tickets.listTickets(db, ['requirement'], undefined, 'proj-2')).length, 1);
+    assert.equal((await tickets.listTickets(db, ['delivered'], undefined, 'proj-1')).length, 0);
+    // Unassigned callers keep today's behavior.
+    assert.equal((await tickets.listTickets(db, null)).length, 3);
+    assert.equal((await tickets.listTickets(db, null, 'none')).length, 1);
+  });
+
+  await ok('queue is scoped to the assigned project; unassigned queue is unchanged', async () => {
+    const db = new FakeDb();
+    const pm = { actorId: 'pm-1', actorRoles: ['pm'] };
+    const a = await tickets.createTicket(db, { ...pm, title: 'a', description: 'd', projectId: 'proj-1' });
+    const b = await tickets.createTicket(db, { ...pm, title: 'b', description: 'd', projectId: 'proj-2' });
+    for (const t of [a, b]) {
+      await tickets.transitionTicket(db, t.ticket.id, { actorId: 'leader-1', actorRoles: ['leader'], toStatus: 'decomposing', reason: '' });
+      await tickets.transitionTicket(db, t.ticket.id, {
+        actorId: 'leader-1', actorRoles: ['leader'], toStatus: 'pending_dev', reason: 'done', handoff: 'work list',
+      });
+    }
+    const scoped = await tickets.listClaimable(db, ['engineer'], undefined, 'proj-1');
+    assert.equal(scoped.length, 1);
+    assert.equal(scoped[0].id, a.ticket.id);
+    // Even asking for the other project cannot widen the queue.
+    const forced = await tickets.listClaimable(db, ['engineer'], 'proj-2', 'proj-1');
+    assert.equal(forced.length, 1);
+    assert.equal(forced[0].id, a.ticket.id);
+    const unassigned = await tickets.listClaimable(db, ['engineer']);
+    assert.equal(unassigned.length, 2);
+  });
+
+  await ok('cross-project transitions are rejected and audited; same-project transitions pass', async () => {
+    const db = new FakeDb();
+    const pm = { actorId: 'pm-1', actorRoles: ['pm'] };
+    const a = await tickets.createTicket(db, { ...pm, title: 'a', description: 'd', projectId: 'proj-1' });
+    const c = await tickets.createTicket(db, { ...pm, title: 'c', description: 'd' });
+    for (const t of [a, c]) {
+      await tickets.transitionTicket(db, t.ticket.id, { actorId: 'leader-1', actorRoles: ['leader'], toStatus: 'decomposing', reason: '' });
+      await tickets.transitionTicket(db, t.ticket.id, {
+        actorId: 'leader-1', actorRoles: ['leader'], toStatus: 'pending_dev', reason: 'done', handoff: 'work list',
+      });
+    }
+    // An engineer assigned to proj-2 cannot pick up a proj-1 ticket.
+    const cross = await tickets.transitionTicket(db, a.ticket.id, {
+      actorId: 'dev-1', actorRoles: ['engineer'], toStatus: 'in_dev', assignedProjectId: 'proj-2',
+    });
+    assert.equal(cross.ok, false);
+    assert.equal(cross.status, 403);
+    assert.equal(cross.error, 'out_of_scope');
+    assert.equal((await tickets.getTicket(db, a.ticket.id)).status, 'pending_dev');
+    const history = await tickets.listTransitions(db, a.ticket.id);
+    assert.equal(history[history.length - 1].result, 'rejected');
+    assert.equal(history[history.length - 1].to_status, 'in_dev');
+    // An uncategorized ticket is out of scope for an assigned engineer too.
+    const uncategorized = await tickets.transitionTicket(db, c.ticket.id, {
+      actorId: 'dev-1', actorRoles: ['engineer'], toStatus: 'in_dev', assignedProjectId: 'proj-1',
+    });
+    assert.equal(uncategorized.ok, false);
+    assert.equal(uncategorized.error, 'out_of_scope');
+    // The same engineer, assigned to the ticket's own project, picks it up.
+    const own = await tickets.transitionTicket(db, a.ticket.id, {
+      actorId: 'dev-1', actorRoles: ['engineer'], toStatus: 'in_dev', assignedProjectId: 'proj-1',
+    });
+    assert.equal(own.ok, true);
+    assert.equal(own.ticket.status, 'in_dev');
+    // Unassigned callers are unaffected.
+    const free = await tickets.transitionTicket(db, c.ticket.id, {
+      actorId: 'dev-1', actorRoles: ['engineer'], toStatus: 'in_dev',
+    });
+    assert.equal(free.ok, true);
+  });
+
   console.log(`\n${passed} ticket service tests passed.`);
 }
 

@@ -278,6 +278,18 @@ async function main() {
     assert.deepEqual(updated.user.roles, ['engineer', 'reviewer', 'tester']);
   });
 
+  await ok('public user data carries the assigned project (null when unassigned)', async () => {
+    const db = new FakeDb();
+    const created = await auth.createUser(db, {
+      username: 'dev', password: 'correct horse battery staple', display_name: 'Dev', roles: ['engineer'],
+    });
+    assert.equal(created.user.project_id, null);
+    // A stored assignment surfaces through the user list.
+    db.users[0].project_id = 'proj-1';
+    const list = await auth.listUsers(db);
+    assert.equal(list[0].project_id, 'proj-1');
+  });
+
   await ok('the last active admin cannot be deactivated or stripped of admin', async () => {
     const db = new FakeDb();
     const first = await auth.createFirstAdmin(db, { username: 'dylan', password: 'correct horse battery staple', displayName: 'Dylan' });

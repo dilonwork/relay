@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from './api';
-import type { AdminOverview, ApiKey, User } from './api';
+import type { AdminOverview, ApiKey, Project, User } from './api';
 import { ALL_ROLES, ALL_STATUSES, formatTime, ROLE_LABELS, shortId, statusLabel } from './helpers';
 
 export default function AdminPanel() {
   const [overview, setOverview] = useState<AdminOverview | null>(null);
   const [users, setUsers] = useState<User[]>([]);
+  const [projects, setProjects] = useState<Project[]>([]);
   const [adminError, setAdminError] = useState('');
   const [adminNotice, setAdminNotice] = useState('');
   const [busy, setBusy] = useState(false);
@@ -23,6 +24,9 @@ export default function AdminPanel() {
   const [resetId, setResetId] = useState<string | null>(null);
   const [resetPassword, setResetPassword] = useState('');
 
+  const [assignId, setAssignId] = useState<string | null>(null);
+  const [assignProjectValue, setAssignProjectValue] = useState('');
+
   const [keysUser, setKeysUser] = useState<User | null>(null);
   const [keys, setKeys] = useState<ApiKey[]>([]);
   const [newKeyName, setNewKeyName] = useState('');
@@ -32,14 +36,24 @@ export default function AdminPanel() {
 
   const loadAdmin = useCallback(async () => {
     try {
-      const [ov, list] = await Promise.all([api.adminOverview(), api.adminListUsers()]);
+      const [ov, list, projs] = await Promise.all([
+        api.adminOverview(),
+        api.adminListUsers(),
+        api.listProjects(),
+      ]);
       setOverview(ov);
       setUsers(list);
+      setProjects(projs);
     } catch (err) {
       if ((err as { status?: number }).status === 401) return;
       setAdminError(err instanceof Error ? err.message : 'Failed to load admin data.');
     }
   }, []);
+
+  function projectName(id: string | null): string {
+    if (!id) return 'Unassigned';
+    return projects.find((p) => p.id === id)?.name || 'Unknown project';
+  }
 
   useEffect(() => {
     loadAdmin();
@@ -80,6 +94,7 @@ export default function AdminPanel() {
     setEditRoles([...u.roles]);
     setEditActive(u.is_active);
     setResetId(null);
+    setAssignId(null);
   }
 
   async function handleSaveEdit(e: React.FormEvent, id: string) {
@@ -120,6 +135,31 @@ export default function AdminPanel() {
     }
   }
 
+  function startAssignProject(u: User) {
+    setAssignId(u.id);
+    setAssignProjectValue(u.project_id || '');
+    setEditingId(null);
+    setResetId(null);
+    setKeysUser(null);
+  }
+
+  async function handleSaveAssignProject(e: React.FormEvent, id: string) {
+    e.preventDefault();
+    setAdminError('');
+    setAdminNotice('');
+    setBusy(true);
+    try {
+      await api.adminAssignUserProject(id, assignProjectValue || null);
+      setAssignId(null);
+      setAdminNotice('Project assignment updated.');
+      await loadAdmin();
+    } catch (err) {
+      setAdminError(err instanceof Error ? err.message : 'Failed to update project assignment.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const loadKeys = useCallback(async (userId: string) => {
     try {
       setKeys(await api.adminListApiKeys(userId));
@@ -137,6 +177,7 @@ export default function AdminPanel() {
     setNewKeyName('');
     setEditingId(null);
     setResetId(null);
+    setAssignId(null);
     loadKeys(u.id);
   }
 
@@ -270,6 +311,7 @@ export default function AdminPanel() {
                 <th>Username</th>
                 <th>Display name</th>
                 <th>Roles</th>
+                <th>Assigned project</th>
                 <th>Active</th>
                 <th>Actions</th>
               </tr>
@@ -280,10 +322,14 @@ export default function AdminPanel() {
                   <td>{u.username}</td>
                   <td>{u.display_name || '—'}</td>
                   <td>{u.roles.map((r) => ROLE_LABELS[r] || r).join(', ')}</td>
+                  <td>{projectName(u.project_id)}</td>
                   <td>{u.is_active ? 'Yes' : 'No'}</td>
                   <td>
                     <button className="link" onClick={() => startEdit(u)}>
                       Edit
+                    </button>{' '}
+                    <button className="link" onClick={() => startAssignProject(u)}>
+                      Project
                     </button>{' '}
                     <button
                       className="link"
@@ -291,6 +337,7 @@ export default function AdminPanel() {
                         setResetId(resetId === u.id ? null : u.id);
                         setResetPassword('');
                         setEditingId(null);
+                        setAssignId(null);
                       }}
                     >
                       Reset password
@@ -345,6 +392,39 @@ export default function AdminPanel() {
               Save changes
             </button>{' '}
             <button type="button" className="link" onClick={() => setEditingId(null)}>
+              Cancel
+            </button>
+          </form>
+        )}
+
+        {assignId && (
+          <form
+            onSubmit={(e) => handleSaveAssignProject(e, assignId)}
+            style={{ marginTop: 12, borderTop: '1px solid #e2e8ee', paddingTop: 12 }}
+          >
+            <h2>Assign project</h2>
+            <p className="muted">
+              An assigned account only sees that project's queue and tickets, and cannot
+              transition other projects' tickets. Unassigned accounts see all projects,
+              as before.
+            </p>
+            <label className="field" htmlFor="assign-project">Project</label>
+            <select
+              id="assign-project"
+              value={assignProjectValue}
+              onChange={(e) => setAssignProjectValue(e.target.value)}
+            >
+              <option value="">Unassigned (all projects)</option>
+              {projects.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+            <button className="primary" type="submit" disabled={busy}>
+              Save assignment
+            </button>{' '}
+            <button type="button" className="link" onClick={() => setAssignId(null)}>
               Cancel
             </button>
           </form>
