@@ -250,6 +250,7 @@ header p { margin: 0; color: #5a6b7c; }
 
   /* Gantt: fixed 600px timeline scrolls inside its card; the label
      column sticks to the left so rows stay identifiable. */
+  .gantt-scroll { overflow-x: auto; }
   .gantt-scroll .gantt-grid { min-width: 600px; }
   .gantt-label { position: sticky; left: 0; background: #fff; z-index: 1; }
 
