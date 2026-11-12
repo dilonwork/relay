@@ -120,9 +120,15 @@ app.get('/api/tickets', async (req, res) => {
 
 app.get('/api/tickets/:id', async (req, res) => {
   try {
-    const result = await tickets.getTicketWithHistory(db, req.params.id);
-    if (!result) return res.status(404).json({ error: 'ticket_not_found', message: 'Ticket not found.' });
-    res.json(result);
+    const result = await tickets.getTicketDetail(db, req.params.id, {
+      actorId: req.user.id,
+      actorRoles: req.user.roles,
+      // An account assigned to one project may not read other projects'
+      // tickets (403 out_of_scope, audited) — same scope as transitions.
+      assignedProjectId: req.user.project_id,
+    });
+    if (!result.ok) return res.status(result.status).json({ error: result.error, message: result.message });
+    res.json(result.ticket);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -130,10 +136,14 @@ app.get('/api/tickets/:id', async (req, res) => {
 
 app.get('/api/tickets/:id/transitions', async (req, res) => {
   try {
-    const ticket = await tickets.getTicket(db, req.params.id);
-    if (!ticket) return res.status(404).json({ error: 'ticket_not_found', message: 'Ticket not found.' });
-    const rows = await tickets.listTransitions(db, req.params.id);
-    res.json(rows);
+    const result = await tickets.getTicketTransitions(db, req.params.id, {
+      actorId: req.user.id,
+      actorRoles: req.user.roles,
+      // Same project scope as the ticket detail above.
+      assignedProjectId: req.user.project_id,
+    });
+    if (!result.ok) return res.status(result.status).json({ error: result.error, message: result.message });
+    res.json(result.transitions);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

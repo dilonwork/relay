@@ -98,6 +98,19 @@ function attemptedRoleFallback(actorRoles) {
   return roles.find((r) => ROLES.includes(r)) || 'pm';
 }
 
+// Project scope (Agent assignment), shared by transitions and reads:
+// an assigned actor has no business with a ticket outside their
+// project, so nothing else about the attempt is evaluated.
+// Uncategorized tickets (project_id null) are out of scope for an
+// assigned actor as well. Unassigned callers (assignedProjectId
+// null/undefined) skip the check and keep today's behavior.
+function checkProjectScope(ticket, actorRoles, assignedProjectId) {
+  if (assignedProjectId && ticket.project_id !== assignedProjectId) {
+    return { ok: false, error: 'out_of_scope', message: 'This ticket belongs to a different project than the one you are assigned to.', attemptedRole: attemptedRoleFallback(actorRoles) };
+  }
+  return { ok: true };
+}
+
 // Validate one transition attempt. Returns { ok: true, rule, attemptedRole }
 // or { ok: false, error, message, attemptedRole }. `ticket` needs
 // { status, developer_id, project_id }; `actorRoles` is the actor's full
@@ -113,9 +126,8 @@ function validateTransition({ ticket, actorId, actorRoles, toStatus, reason, han
   // outside their project, so nothing else about the attempt is
   // evaluated. Uncategorized tickets (project_id null) are out of scope
   // for an assigned actor as well.
-  if (assignedProjectId && ticket.project_id !== assignedProjectId) {
-    return { ok: false, error: 'out_of_scope', message: 'This ticket belongs to a different project than the one you are assigned to.', attemptedRole: attemptedRoleFallback(roles) };
-  }
+  const scope = checkProjectScope(ticket, roles, assignedProjectId);
+  if (!scope.ok) return scope;
   if (!STATUSES.includes(toStatus)) {
     return { ok: false, error: 'unknown_status', message: `Unknown status: ${toStatus}.`, attemptedRole: attemptedRoleFallback(roles) };
   }
@@ -177,6 +189,7 @@ module.exports = {
   TRANSITIONS,
   CANCEL_RULE,
   isTerminal,
+  checkProjectScope,
   legalTransitions,
   validateTransition,
   allowedTransitions,

@@ -7,23 +7,54 @@ passes through review, testing and deployment until delivery. Every agent
 changing the ticket's state, and every state change is recorded so the whole
 history can be replayed.
 
+The app is a single-page app with a left sidebar: Dashboard is the default
+page, and Tickets, New ticket, Projects and Admin are one click away (see
+[Layout](#layout)).
+
 Design document (Traditional Chinese): [doc/design.md](doc/design.md).
 It is the source of truth for the state machine, the permission matrix, the
 audit rules and the data model.
 
+## Screenshots
+
+The screenshots below are placeholders for now — they must be real
+screenshots of the running app, not mockups. Capture them from the deployed
+app after this branch is released (the live site still runs an older build,
+so screenshots taken now would not match the current UI). See
+[screenshots/README.md](screenshots/README.md) for the capture list.
+
+![Dashboard — project overview](screenshots/dashboard.png)
+
+![Tickets — list view](screenshots/ticket-list.png)
+
+![Tickets — Gantt view](screenshots/ticket-gantt.png)
+
+![Ticket detail — transition history](screenshots/ticket-detail.png)
+
+![Claimable queue — 待接單](screenshots/claimable-queue.png)
+
+![Projects — project view](screenshots/projects.png)
+
+![Admin — Overview sub-page](screenshots/admin-overview.png)
+
 ## Locked design (2026-11-11)
 
-- **Pipeline states (13):** `requirement` → `decomposing` (with a
+- **Pipeline states (14):** `requirement` → `decomposing` (with a
   `needs_clarification` loop) → `pending_dev` → `in_dev` →
   `pending_review` → `in_review` → `pending_test` → `in_test` →
   `pending_deploy` → `deploying` → `delivered`; `cancelled` is the other
   terminal state. Review or test failure returns to `in_dev`; deploy failure
-  returns to `in_test`.
-- **Who may transition what (18 legal transitions):** PM, Leader, Engineer,
+  returns to `in_test`. A tester who cannot judge acceptance asks the PM
+  instead of returning the ticket to development: `in_test` →
+  `needs_acceptance_clarification` → `in_test`, with a required reason
+  each way, and the ticket stays in the testing stage throughout.
+- **Who may transition what (20 legal transitions):** PM, Leader, Engineer,
   Reviewer, Tester and Deployer each own their own transitions. Reviewer,
   Tester and Deployer may be the same engineer wearing different hats, but
   nobody may review, test or deploy their own work — the server enforces
-  this, it is not left to self-discipline.
+  this, it is not left to self-discipline. The PM may cancel a ticket
+  from any non-terminal state (reason required); that is the 20th
+  transition.
 - **Storage:** a separate, independent PostgreSQL database on the same
   PostgreSQL server as WebTracker (own database, own credentials). No Jira,
   no shared tables with WebTracker.
@@ -56,7 +87,10 @@ audit rules and the data model.
   account to a single project. An assigned account's claim queue and
   ticket list only return that project's tickets, and transitions on
   other projects' tickets are rejected server-side (403
-  `out_of_scope`, audited). An unassigned account (no project assigned)
+  `out_of_scope`, audited). The ticket detail and transition history
+  endpoints enforce the same scope (2026-11-11, ticket 8d030ed9):
+  reading another project's ticket returns 403 `out_of_scope`,
+  audited as a rejected read. An unassigned account (no project assigned)
   keeps the current behavior and sees all projects. One project per
   agent in v1; multi-project assignment is out of scope. See
   [Agent access](#agent-access) and design doc ch. 11–12.
@@ -67,16 +101,27 @@ audit rules and the data model.
 relay/
 ├── src/                  # React + TypeScript + Vite frontend
 │   ├── main.tsx
-│   ├── App.tsx
-│   ├── api.ts
+│   ├── App.tsx           # sidebar layout, module views, auth screens
+│   ├── api.ts            # typed API client (session + API key)
+│   ├── helpers.ts        # labels, queue tabs, status buckets
+│   ├── Dashboard.tsx     # default page: project overview
+│   ├── TicketList.tsx    # ticket table + Gantt toggle + claimable queue
+│   ├── TicketDetail.tsx  # ticket detail view with transition history
+│   ├── NewTicketForm.tsx # create-ticket form
+│   ├── ProjectsPanel.tsx # project list / create project
+│   ├── AdminPanel.tsx    # Admin shell: Overview / Users / API keys tabs
+│   ├── AdminOverview.tsx # system overview, tickets by status, audit
+│   ├── AdminUsers.tsx    # user list, create/edit, assign project, reset password
+│   ├── AdminApiKeys.tsx  # per-user API key management
 │   └── index.css
 ├── server/               # Express backend (Node.js)
 │   ├── index.js          # entry point, API routes
 │   ├── database.js       # pg Pool, auto-creates tables on startup
-│   ├── stateMachine.js   # 13 states, 18 legal transitions, role checks
+│   ├── stateMachine.js   # 14 states, 20 legal transitions, role checks
 │   ├── tickets.js        # ticket service: create / transition / history / claim queue
+│   ├── projects.js       # project service
 │   ├── auth.js           # users, scrypt passwords, sessions, API keys, auth middleware
-│   ├── admin.js          # admin overview aggregation
+│   ├── admin.js          # admin overview aggregation, project assignment
 │   ├── stateMachine.test.js
 │   ├── tickets.test.js
 │   ├── projects.test.js
@@ -87,6 +132,7 @@ relay/
 │   └── migrations/       # schema as SQL migrations (001-008)
 ├── doc/
 │   └── design.md         # design document (Traditional Chinese)
+├── screenshots/          # README screenshots (see screenshots/README.md)
 ├── index.html
 ├── vite.config.ts
 ├── tsconfig.json
@@ -103,18 +149,49 @@ npm install
 npm run dev            # frontend on http://localhost:8090, backend on :8890
 ```
 
-Or use `./Startup.sh` (Linux/macOS) / `Startup.bat` (Windows), which starts
-the same dev servers.
+Or use `./Startup.sh` (Linux/macOS) / `Startup.bat` (Windows), which frees
+the frontend and backend ports and then starts the same dev servers.
 
-The backend needs a PostgreSQL database named `relay` (see `.env.example`).
-Creating that database is a separate deployment step and is not done by the
-code in this repo; the server creates the `tickets`, `ticket_transitions`,
-`users`, `sessions`, `api_keys` and `projects` tables itself on startup.
+The backend needs a PostgreSQL database (default name `relay`, see
+`.env.example`). Creating that database is a separate deployment step and is
+not done by the code in this repo; the server creates the `tickets`,
+`ticket_transitions`, `users`, `sessions`, `api_keys` and `projects` tables
+itself on startup (migrations `db/migrations/001-008`).
 
 On first run the users table is empty, so the app shows a setup screen:
 create the first admin account there (username, display name, password).
 Setup closes permanently once any account exists — there is no default
 account or password anywhere in the code.
+
+## Deployment
+
+- **Ports** are configurable through `.env`: `FRONTEND_PORT` (default
+  8090) and `BACKEND_PORT` (default 8890). In development the Vite dev
+  server proxies `/api` to the backend, so the frontend and the API share
+  one origin.
+- **Build** the frontend with `npm run build` (`tsc` + `vite build`,
+  output in `dist/`); start the backend with `node server/index.js`
+  (or `nodemon` in development via `npm run dev`). The backend reads
+  `DB_HOST`, `DB_ACCOUNT`, `DB_PASSWORD` and `DB_NAME` from `.env`
+  (`.env` is git-ignored and never committed).
+- **Timezone:** the server defaults to `America/Phoenix` (`TZ` in `.env`).
+
+## Layout
+
+- **Left sidebar:** a dark sidebar holds the module navigation —
+  Dashboard, Tickets, New ticket, Projects (PM or Admin only) and Admin
+  (admin only) — plus a project filter, the signed-in user's name,
+  username and role badges, and Log out. The active module is
+  highlighted. A collapse toggle shrinks the sidebar to a 60px icon rail;
+  on narrow screens (≤720px) it collapses to the icon rail automatically.
+- **Module views:** one module is shown at a time. The Dashboard is the
+  default view; Tickets holds the ticket list with its List/Gantt toggle,
+  the 待接單 (claimable) queue tab, the project filter and the ticket
+  creation entry; New ticket is the create form; Projects is the project
+  list; Admin is the admin area (see [Admin](#admin)).
+- **Ticket detail is its own view:** clicking a ticket (from the list, a
+  Gantt bar or the claimable queue) opens the detail view with its full
+  transition history and handoff notes; a back link returns to Tickets.
 
 ## Tests
 
@@ -150,9 +227,9 @@ ticket service is tested against an in-memory fake implementing the same
   `POST /api/auth/setup` creates the first admin (roles `admin` + `pm`,
   so the account can open tickets immediately). Once any account exists,
   setup returns 403.
-- **Admin:** accounts holding the `admin` role can list/create/edit users,
-  reset passwords (which also revokes that user's sessions), and view the
-  system overview (`GET /api/admin/overview`: user count and list without
+- **Admin:** accounts holding the `admin` role manage users and API keys
+  from the Admin area (see [Admin](#admin)) and view the system
+  overview (`GET /api/admin/overview`: user count and list without
   password hashes, ticket counts by status, total transition count, the
   10 most recent audit entries, database health). The last active admin
   cannot be deactivated or stripped of the admin role. Admin does **not**
@@ -176,7 +253,11 @@ ticket service is tested against an in-memory fake implementing the same
   trial covers decomposing and development only: a ticket in
   `requirement` waits for a leader, a ticket in `pending_dev` waits for
   an engineer. Tickets already in progress are not claimable. The
-  frontend has a 待接單 (claimable) tab for this queue.
+  frontend has a 待接單 (claimable) tab for this queue. The tab is not
+  redundant with the status tabs: a status tab lists every ticket in
+  that state, while 待接單 lists only the tickets the caller can claim
+  by role (merged across roles for multi-role accounts), each with its
+  next transition.
 - **Agent assignment:** an admin assigns an agent account to one project
   from the Admin panel (per account: a project dropdown, or unassigned).
   Assignment is per account; an API key inherits its account's
@@ -185,7 +266,10 @@ ticket service is tested against an in-memory fake implementing the same
   ticket list (`GET /api/tickets`) only return that project's tickets,
   whatever project filter it passes, and a transition on another
   project's ticket is rejected server-side (403 `out_of_scope`, audited
-  as a rejected attempt). An unassigned account sees all projects, as
+  as a rejected attempt). The same scope covers reading a ticket:
+  `GET /api/tickets/:id` and `GET /api/tickets/:id/transitions` on
+  another project's ticket return 403 `out_of_scope`, audited as a
+  rejected read. An unassigned account sees all projects, as
   before. v1 assigns one project per agent; multi-project assignment is
   out of scope.
 - **Handoff notes:** the two trial handoffs — `decomposing` →
@@ -199,6 +283,23 @@ ticket service is tested against an in-memory fake implementing the same
   question. A missing required reason or handoff note is a validation
   error (400); a wrong role, illegal transition or self-work attempt is
   an authorization error (403). Both are audited as rejected attempts.
+
+## Admin
+
+The Admin area is only visible to accounts holding the `admin` role. It
+is split into three sub-pages (tabs, defaulting to Overview); the shell
+owns the shared data load, and each sub-page owns its own form state and
+handlers.
+
+- **Overview:** system overview (database health, user count, ticket
+  count, transition count), tickets by status, and the most recent audit
+  entries.
+- **Users:** user list with create, edit (display name, roles, active
+  flag), project assignment (the Agent assignment dropdown, or
+  unassigned) and password reset (which revokes that user's sessions).
+- **API keys:** per-user API key management — pick a user, view their
+  keys, create a new one (full key shown exactly once) or revoke one.
+  The Users table's Keys button jumps here with that user pre-selected.
 
 ## Projects
 
@@ -264,8 +365,8 @@ log records the role actually exercised.
 | `GET` | `/api/meta/transitions` | Legal transition table (source of truth for the UI) |
 | `POST` | `/api/tickets` | Create a ticket (PM role required; optional `project_id`) |
 | `GET` | `/api/tickets?status=<state>&project_id=<id\|none>` | List tickets, optionally filtered by state and project; an assigned caller only sees their project's tickets |
-| `GET` | `/api/tickets/:id` | One ticket with its full transition history |
-| `GET` | `/api/tickets/:id/transitions` | Transition history of one ticket |
+| `GET` | `/api/tickets/:id` | One ticket with its full transition history; reading another project's ticket is rejected 403 `out_of_scope` for an assigned caller |
+| `GET` | `/api/tickets/:id/transitions` | Transition history of one ticket; same scope check as the detail |
 | `POST` | `/api/tickets/:id/transitions` | Transition a ticket (`to_status`, `reason`, `handoff`, `artifacts`); a transition on another project's ticket is rejected 403 `out_of_scope` for an assigned caller |
 | `PATCH` | `/api/tickets/:id/project` | Assign a ticket to a project, or back to uncategorized (`project_id` null; PM only) |
 | `GET` | `/api/queue?project_id=<id\|none>` | Tickets the caller can claim in the trial stages, with the next transition; optionally filtered by project; an assigned caller only sees their project's queue |

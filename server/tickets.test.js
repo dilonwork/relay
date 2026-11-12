@@ -669,6 +669,77 @@ async function main() {
     assert.equal(free.ok, true);
   });
 
+  await ok('ticket detail is scoped: assigned accounts read only their own project, out-of-scope reads are rejected and audited', async () => {
+    const db = new FakeDb();
+    const pm = { actorId: 'pm-1', actorRoles: ['pm'] };
+    const a = await tickets.createTicket(db, { ...pm, title: 'a', description: 'd', projectId: 'proj-1' });
+    const b = await tickets.createTicket(db, { ...pm, title: 'b', description: 'd', projectId: 'proj-2' });
+    const c = await tickets.createTicket(db, { ...pm, title: 'c', description: 'd' });
+    const dev = { actorId: 'dev-1', actorRoles: ['engineer'] };
+    // Own project: 200, with the transition history attached.
+    const own = await tickets.getTicketDetail(db, a.ticket.id, { ...dev, assignedProjectId: 'proj-1' });
+    assert.equal(own.ok, true);
+    assert.equal(own.ticket.id, a.ticket.id);
+    assert.ok(Array.isArray(own.ticket.transitions));
+    // Another project: 403 out_of_scope, audited as a rejected read
+    // (from and to are both the ticket's current status — a read
+    // targets no new status).
+    const cross = await tickets.getTicketDetail(db, b.ticket.id, { ...dev, assignedProjectId: 'proj-1' });
+    assert.equal(cross.ok, false);
+    assert.equal(cross.status, 403);
+    assert.equal(cross.error, 'out_of_scope');
+    const crossHistory = await tickets.listTransitions(db, b.ticket.id);
+    const lastCross = crossHistory[crossHistory.length - 1];
+    assert.equal(lastCross.result, 'rejected');
+    assert.equal(lastCross.from_status, 'requirement');
+    assert.equal(lastCross.to_status, 'requirement');
+    assert.equal(lastCross.actor_id, 'dev-1');
+    // An uncategorized ticket is out of scope for an assigned caller too.
+    const uncategorized = await tickets.getTicketDetail(db, c.ticket.id, { ...dev, assignedProjectId: 'proj-1' });
+    assert.equal(uncategorized.ok, false);
+    assert.equal(uncategorized.error, 'out_of_scope');
+    // Unassigned callers are unaffected.
+    const free = await tickets.getTicketDetail(db, b.ticket.id, dev);
+    assert.equal(free.ok, true);
+    assert.equal(free.ticket.id, b.ticket.id);
+    // A missing ticket is 404 and leaves no audit row.
+    const missing = await tickets.getTicketDetail(db, 'no-such-ticket', { ...dev, assignedProjectId: 'proj-1' });
+    assert.equal(missing.ok, false);
+    assert.equal(missing.status, 404);
+    assert.equal(missing.error, 'ticket_not_found');
+  });
+
+  await ok('ticket transitions history is scoped the same way as the detail', async () => {
+    const db = new FakeDb();
+    const pm = { actorId: 'pm-1', actorRoles: ['pm'] };
+    const a = await tickets.createTicket(db, { ...pm, title: 'a', description: 'd', projectId: 'proj-1' });
+    const b = await tickets.createTicket(db, { ...pm, title: 'b', description: 'd', projectId: 'proj-2' });
+    const c = await tickets.createTicket(db, { ...pm, title: 'c', description: 'd' });
+    const dev = { actorId: 'dev-1', actorRoles: ['engineer'] };
+    // Own project: 200, history rows returned (creation row at least).
+    const own = await tickets.getTicketTransitions(db, a.ticket.id, { ...dev, assignedProjectId: 'proj-1' });
+    assert.equal(own.ok, true);
+    assert.ok(own.transitions.length >= 1);
+    assert.equal(own.transitions[0].ticket_id, a.ticket.id);
+    // Another project: 403 out_of_scope, audited.
+    const cross = await tickets.getTicketTransitions(db, b.ticket.id, { ...dev, assignedProjectId: 'proj-1' });
+    assert.equal(cross.ok, false);
+    assert.equal(cross.status, 403);
+    assert.equal(cross.error, 'out_of_scope');
+    const crossHistory = await tickets.listTransitions(db, b.ticket.id);
+    assert.equal(crossHistory[crossHistory.length - 1].result, 'rejected');
+    // Uncategorized: out of scope too.
+    const uncategorized = await tickets.getTicketTransitions(db, c.ticket.id, { ...dev, assignedProjectId: 'proj-1' });
+    assert.equal(uncategorized.ok, false);
+    assert.equal(uncategorized.error, 'out_of_scope');
+    // Unassigned callers are unaffected; missing ticket is 404.
+    const free = await tickets.getTicketTransitions(db, b.ticket.id, dev);
+    assert.equal(free.ok, true);
+    const missing = await tickets.getTicketTransitions(db, 'no-such-ticket', { ...dev, assignedProjectId: 'proj-1' });
+    assert.equal(missing.ok, false);
+    assert.equal(missing.status, 404);
+  });
+
   console.log(`\n${passed} ticket service tests passed.`);
 }
 

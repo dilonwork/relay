@@ -279,6 +279,18 @@ async function main() {
     assert.equal(scoped('proj-2', null).ok, true);
   });
 
+  await ok('checkProjectScope is the shared scope check used by transitions and reads', async () => {
+    const ticket = (projectId) => ({ status: 'pending_dev', developer_id: null, project_id: projectId });
+    assert.equal(sm.checkProjectScope(ticket('proj-1'), ['engineer'], 'proj-1').ok, true);
+    const cross = sm.checkProjectScope(ticket('proj-2'), ['engineer'], 'proj-1');
+    assert.equal(cross.ok, false);
+    assert.equal(cross.error, 'out_of_scope');
+    assert.equal(cross.attemptedRole, 'engineer');
+    assert.equal(sm.checkProjectScope(ticket(null), ['engineer'], 'proj-1').error, 'out_of_scope');
+    assert.equal(sm.checkProjectScope(ticket('proj-2'), ['engineer'], undefined).ok, true);
+    assert.equal(sm.checkProjectScope(ticket('proj-2'), ['engineer'], null).ok, true);
+  });
+
   await ok('allowedTransitions lists only what the role may do from the current state', async () => {
     const t = ticket('pending_review', 'dev-1');
     assert.deepEqual(

@@ -35,6 +35,17 @@ export const ALL_ROLES = ['pm', 'leader', 'engineer', 'reviewer', 'tester', 'dep
 // terminal states. `status` is the ?status= filter value (or null for all).
 // The claimable tab is different: it calls /api/queue, which returns only
 // the tickets the current user's roles can pick up in the trial stages.
+//
+// Not redundant (2026-11-11, ticket 6cac9d1f): a status tab lists every
+// ticket in that state within the caller's project scope, whatever the
+// viewer's roles; the claimable tab answers "what is waiting for me" —
+// only the two trial stages (requirement for leader, pending_dev for
+// engineer), filtered by the caller's roles, merged into one list for
+// multi-role users, and each row carries next_transition (shown as
+// "Next step for you"). For a single-role engineer the ticket set equals
+// the Pending dev tab; the value is the role filter, the merge, and the
+// next-step column. The /api/queue endpoint must stay: the leader and
+// engineer on-call checks poll it every 5 minutes.
 export const QUEUE_TABS: { key: string; label: string; status: string | null }[] = [
   { key: 'all', label: 'All', status: null },
   { key: 'claimable', label: '待接單', status: '__claimable__' },
