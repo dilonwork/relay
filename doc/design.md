@@ -31,6 +31,7 @@
 10. 實作分期與未決事項
 11. 帳號、認證與管理
 12. Agent 接入（第二期）
+13. PM 監控（防卡住）
 - 附錄 A 狀態代碼對照
 - 附錄 B 工單生命週期範例
 
@@ -200,6 +201,18 @@ ticket_transitions
   created_at    伺服器時間戳記（不可改）
 ```
 
+PM 監控另有一張提醒狀態表（第 13 章）：
+
+```
+monitor_reminders
+  ticket_id           對應工單（主鍵，刪工單時連帶刪除）
+  last_transition_id  目前卡住回合的最新 applied 轉換 id
+  reminder_count      本回合已提醒次數
+  last_reminded_at    上次提醒時間（未提醒為空）
+  escalated_at        本回合升級時間（未升級為空）
+  updated_at
+```
+
 上表為綱要而非最終 DDL；欄位型別、索引與拆解子單的關聯方式（一個需求拆成多張開發單時，父子工單如何連結）在實作第一期定案，見第 10 章。
 
 帳號與會話另有兩張表（第 11 章）：
@@ -282,7 +295,7 @@ api_keys
 - 工單的優先級與分級欄位是否需要（例如嚴重度），以及是否影響接單順序。
 - 值班來源的工單若只需處置、不需開發，是否走完整開發鏈，還是允許在特定狀態直接交付。
 - 操作介面形式：先以 API 加簡單列表頁面，還是一開始就做完整的工單看板。
-- 通知方式：狀態轉換後是否主動通知下一手負責人，透過哪個頻道。
+- 通知方式：狀態轉換後是否主動通知下一手負責人，透過哪個頻道。—— PM 監控（第 13 章）已回答其中一半：卡住偵測與提醒狀態由 server 提供，發送由 PM 值班 Agent 負責；其他狀態轉換的主動通知仍待定。
 
 ---
 
@@ -371,6 +384,47 @@ api_keys
 ### 試行範圍說明
 
 - API 金鑰本身不限階段：金鑰認證與會話認證相同，不會因為某段不在試行範圍就擋下呼叫。試行的意思是：接單佇列與交接必填目前只覆蓋拆解與開發兩段，交接是否足夠也在這兩段驗證。其他階段照原有規則走，不另外設 Agent 專用限制。
+
+### PM 監控
+
+- PM 每 15 分鐘輪詢 `GET /api/monitor/stalled` 看範圍內卡住的單（第 13 章）。三個監控端點皆須 PM 角色，並走同一條專案範圍檢查（`stateMachine.checkProjectScope`）；跨專案的提醒或升級紀錄回 403 `out_of_scope`。
+
+---
+
+## 13. PM 監控（防卡住）
+
+> 本章實作於工單 c3f13041：PM 負責整個任務順利跑完、不被卡住，每 15 分鐘檢查一次、提醒成員。
+
+### 卡住的定義
+
+- 處於工作中狀態（`decomposing`、`in_dev`、`in_review`、`in_test`、`pending_deploy`）超過 30 分鐘沒有任何轉換，或處於 `needs_clarification` 超過 30 分鐘沒人回。
+- 時鐘是最新一筆 applied 轉換紀錄（`ticket_transitions` 的 `created_at`），不是 `tickets.updated_at`：把工單移專案也會更新 `updated_at`，被拒的嘗試也不會推進工單，兩者都不該重置時鐘。
+- 刻意未納入：`requirement`、`pending_dev`、`pending_review`、`pending_test`（等接取的佇列狀態）與 `needs_acceptance_clarification`。規格只列五個工作中狀態加待澄清；若 Leader 要把等接取的佇列也納入監控，改 `server/monitor.js` 的 `STALLED_STATES` 一行即可。
+
+### 分工：伺服器偵測、值班 Agent 發送
+
+- Relay server 沒有通往 Muse 聊天室的通道，所以「通知到角色聊天室」不可能由 server 直接做。分工如下：
+  - Server：偵測卡住、保存提醒狀態（`monitor_reminders` 表）、去重、判斷是否該升級，並提供 PM 輪詢的端點。
+  - PM 值班 Agent：每 15 分鐘呼叫 `GET /api/monitor/stalled`，對 `needs_reminder` 為真的單發提醒、呼叫 `POST .../reminded` 回報；對 `needs_escalation` 為真的單升級到主聊天室給 Dylan、呼叫 `POST .../escalated` 回報。
+- 15 分鐘的節奏由 PM 值班排程控制（repo 外），server 只提供「現在該提醒誰」的狀態；server 本身不跑定時任務（不新增依賴）。
+
+### 提醒狀態與去重
+
+- 每張單在 `monitor_reminders` 最多一列，以「卡住回合」（episode）區分：回合的 key 是最新一筆 applied 轉換的 id。工單一有新轉換，回合就換了，提醒次數從 0 重新算、升級狀態清空——轉換路徑不需掛鉤子，server 在讀取時比對 key 即可。
+- 每個 15 分鐘週期每張單最多一則提醒：`needs_reminder` 只在「從未提醒」或「上次提醒已滿 15 分鐘」時為真；提醒後 PM 呼叫 ack 端點寫入 `last_reminded_at`，15 分鐘內再查就不會重複 flagged。即使 PM 沒來得及 ack，下次輪詢仍只會發一則（一個週期一則）。
+- 升級：同一回合提醒滿 3 次（約 45 分鐘）仍卡住，`needs_escalation` 為真；PM 升級後呼叫 ack 端點寫入 `escalated_at`，同一回合只升級一次。升級後提醒照常每 15 分鐘繼續（單子還卡著），直到工單移動、回合結束。提醒滿 3 次後，下一次輪詢即 flag 升級；PM 也可在發完第 3 則提醒後立刻重查一次、同一週期內升級，兩種做法都符合「提醒 3 次後升級」。
+- `needs_clarification` 的負責角色是 PM：提醒的對象就是 PM 自己——輪詢的 PM Agent 看到後應直接補充澄清（本職工作），而不是再轉發一則訊息給自己。
+
+### 端點（皆須 PM 角色，皆走專案範圍檢查）
+
+- `GET /api/monitor/stalled`：範圍內全部卡住的單，每筆附 `stalled_since`、`stalled_minutes`、`reminder_count`、`last_reminded_at`、`escalated_at`、`needs_reminder`、`needs_escalation`、`notify_role`（負責角色）與 `next_actions`（該角色下一步合法轉換，即「解開需要什麼」）。
+- `POST /api/monitor/stalled/:id/reminded`：記錄已發提醒；同一回合次數 +1，新回合重置為 1。單子當下沒卡住回 400 `not_stalled`；非 PM 回 403 `wrong_role`；跨專案回 403 `out_of_scope`。
+- `POST /api/monitor/stalled/:id/escalated`：記錄已升級；同一回合只接受一次，未滿 3 次提醒或已升級過回 400 `not_due`。
+
+### 備註
+
+- migration 009 是 `monitor_reminders` 表。先前討論的 CHECK 約束補漏（第 14 個狀態 `needs_acceptance_clarification`）若另開 migration，編號順延為 010（本單不碰那個問題）。
+- 未驗證：migration SQL 與 upsert 語句未在 live PostgreSQL 上實際執行（本機無資料庫）；合併部署前應在 develop 預覽環境以真實工單跑一次完整週期（卡住 → 提醒 → 3 次 → 升級）。
 
 ---
 

@@ -210,7 +210,9 @@ npm test
 Tests run with plain Node (`node:assert/strict`, no test framework) and do
 not need a live database: the state machine is tested directly, and the
 ticket service is tested against an in-memory fake implementing the same
-`query()` interface as the real `pg` pool.
+`query()` interface as the real `pg` pool. The PM stall monitor is tested
+the same way, with controlled clocks for the 30-minute stall rule and
+the 15-minute reminder cycle.
 
 ## Accounts & authentication
 
@@ -291,6 +293,16 @@ ticket service is tested against an in-memory fake implementing the same
   question. A missing required reason or handoff note is a validation
   error (400); a wrong role, illegal transition or self-work attempt is
   an authorization error (403). Both are audited as rejected attempts.
+- **PM monitor:** the PM duty agent polls `GET /api/monitor/stalled`
+  every 15 minutes for tickets stuck in a working state (or
+  `needs_clarification`) with no transition for over 30 minutes. The
+  server detects the stall, keeps the reminder count and the escalation
+  flag, and tells the agent who to remind and what would unblock the
+  ticket; the agent sends the reminder and records it with
+  `POST /api/monitor/stalled/:id/reminded`, and escalates to the main
+  chat after 3 reminders with `POST /api/monitor/stalled/:id/escalated`.
+  At most one reminder per ticket per 15-minute cycle. The server has
+  no channel to the chat rooms, so it never sends a message itself.
 
 ## Admin
 
@@ -378,6 +390,9 @@ log records the role actually exercised.
 | `POST` | `/api/tickets/:id/transitions` | Transition a ticket (`to_status`, `reason`, `handoff`, `artifacts`); a transition on another project's ticket is rejected 403 `out_of_scope` for an assigned caller |
 | `PATCH` | `/api/tickets/:id/project` | Assign a ticket to a project, or back to uncategorized (`project_id` null; PM only) |
 | `GET` | `/api/queue?project_id=<id\|none>` | Tickets the caller can claim in the trial stages, with the next transition; optionally filtered by project; an assigned caller only sees their project's queue |
+| `GET` | `/api/monitor/stalled` | Stalled tickets in the caller's project scope, with reminder state and flags (PM only) |
+| `POST` | `/api/monitor/stalled/:id/reminded` | Record that a reminder was sent for a stalled ticket (PM only) |
+| `POST` | `/api/monitor/stalled/:id/escalated` | Record that a stalled ticket was escalated to the main chat (PM only, after 3 reminders) |
 | `GET` | `/api/projects` | List projects with ticket counts |
 | `POST` | `/api/projects` | Create a project (PM or Admin) |
 | `GET` | `/api/projects/:id` | One project |

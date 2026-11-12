@@ -5,6 +5,7 @@ const cors = require('cors');
 const db = require('./database');
 const { legalTransitions } = require('./stateMachine');
 const tickets = require('./tickets');
+const monitor = require('./monitor');
 const projects = require('./projects');
 const auth = require('./auth');
 const admin = require('./admin');
@@ -177,6 +178,48 @@ app.get('/api/queue', async (req, res) => {
     // An account assigned to one project only ever sees that project's
     // queue, whatever project filter it passes.
     res.json(await tickets.listClaimable(db, req.user.roles, projectFilter || undefined, req.user.project_id));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- PM stall monitor (design doc ch. 13) ---
+// The server detects stalled tickets and keeps the reminder state;
+// the PM duty agent polls every 15 minutes and sends the reminders
+// and escalations itself — the server has no channel to the chat
+// rooms. All three endpoints are PM-only and scoped to the caller's
+// assigned project, like the ticket reads.
+app.get('/api/monitor/stalled', async (req, res) => {
+  try {
+    res.json(await monitor.listStalled(db, { assignedProjectId: req.user.project_id }));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/monitor/stalled/:id/reminded', async (req, res) => {
+  try {
+    const result = await monitor.acknowledgeReminder(db, req.params.id, {
+      actorId: req.user.id,
+      actorRoles: req.user.roles,
+      assignedProjectId: req.user.project_id,
+    });
+    if (!result.ok) return res.status(result.status).json({ error: result.error, message: result.message });
+    res.json({ ticket: result.ticket, reminder: result.reminder });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/monitor/stalled/:id/escalated', async (req, res) => {
+  try {
+    const result = await monitor.acknowledgeEscalation(db, req.params.id, {
+      actorId: req.user.id,
+      actorRoles: req.user.roles,
+      assignedProjectId: req.user.project_id,
+    });
+    if (!result.ok) return res.status(result.status).json({ error: result.error, message: result.message });
+    res.json({ ticket: result.ticket, reminder: result.reminder });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
