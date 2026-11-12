@@ -56,7 +56,10 @@ audit rules and the data model.
   account to a single project. An assigned account's claim queue and
   ticket list only return that project's tickets, and transitions on
   other projects' tickets are rejected server-side (403
-  `out_of_scope`, audited). An unassigned account (no project assigned)
+  `out_of_scope`, audited). The ticket detail and transition history
+  endpoints enforce the same scope (2026-11-11, ticket 8d030ed9):
+  reading another project's ticket returns 403 `out_of_scope`,
+  audited as a rejected read. An unassigned account (no project assigned)
   keeps the current behavior and sees all projects. One project per
   agent in v1; multi-project assignment is out of scope. See
   [Agent access](#agent-access) and design doc ch. 11–12.
@@ -185,7 +188,10 @@ ticket service is tested against an in-memory fake implementing the same
   ticket list (`GET /api/tickets`) only return that project's tickets,
   whatever project filter it passes, and a transition on another
   project's ticket is rejected server-side (403 `out_of_scope`, audited
-  as a rejected attempt). An unassigned account sees all projects, as
+  as a rejected attempt). The same scope covers reading a ticket:
+  `GET /api/tickets/:id` and `GET /api/tickets/:id/transitions` on
+  another project's ticket return 403 `out_of_scope`, audited as a
+  rejected read. An unassigned account sees all projects, as
   before. v1 assigns one project per agent; multi-project assignment is
   out of scope.
 - **Handoff notes:** the two trial handoffs — `decomposing` →
@@ -264,8 +270,8 @@ log records the role actually exercised.
 | `GET` | `/api/meta/transitions` | Legal transition table (source of truth for the UI) |
 | `POST` | `/api/tickets` | Create a ticket (PM role required; optional `project_id`) |
 | `GET` | `/api/tickets?status=<state>&project_id=<id\|none>` | List tickets, optionally filtered by state and project; an assigned caller only sees their project's tickets |
-| `GET` | `/api/tickets/:id` | One ticket with its full transition history |
-| `GET` | `/api/tickets/:id/transitions` | Transition history of one ticket |
+| `GET` | `/api/tickets/:id` | One ticket with its full transition history; reading another project's ticket is rejected 403 `out_of_scope` for an assigned caller |
+| `GET` | `/api/tickets/:id/transitions` | Transition history of one ticket; same scope check as the detail |
 | `POST` | `/api/tickets/:id/transitions` | Transition a ticket (`to_status`, `reason`, `handoff`, `artifacts`); a transition on another project's ticket is rejected 403 `out_of_scope` for an assigned caller |
 | `PATCH` | `/api/tickets/:id/project` | Assign a ticket to a project, or back to uncategorized (`project_id` null; PM only) |
 | `GET` | `/api/queue?project_id=<id\|none>` | Tickets the caller can claim in the trial stages, with the next transition; optionally filtered by project; an assigned caller only sees their project's queue |

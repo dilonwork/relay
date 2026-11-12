@@ -86,6 +86,60 @@ async function getTicketWithHistory(db, id) {
   return { ...ticket, transitions };
 }
 
+// A rejected read is audited like a rejected transition (design doc
+// ch. 7): a 'rejected' row under the role the attempt was made as.
+// A read targets no new status, so from_status and to_status are both
+// the ticket's current status — that is what marks the row as a read
+// rejection rather than a transition rejection.
+async function auditRejectedRead(db, ticket, actorId, scope) {
+  const { rows } = await db.query(
+    `INSERT INTO ticket_transitions (ticket_id, actor_id, actor_role, from_status, to_status, reason, handoff, artifacts, result)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'rejected') RETURNING *`,
+    [ticket.id, String(actorId).trim(), scope.attemptedRole, ticket.status, ticket.status, scope.message, '', JSON.stringify([])]
+  );
+  return rows[0];
+}
+
+// Single-ticket read with the same project scope as transitions:
+// an assigned caller may only read their own project's tickets
+// (uncategorized tickets are out of scope); unassigned callers keep
+// today's behavior. A cross-scope read is rejected 403 out_of_scope
+// and audited.
+async function getTicketDetail(db, id, { actorId, actorRoles, assignedProjectId }) {
+  if (!actorId || !String(actorId).trim() || !Array.isArray(actorRoles)) {
+    return { ok: false, status: 400, error: 'bad_request', message: 'actor_id and actor roles are required.' };
+  }
+  const ticket = await getTicket(db, id);
+  if (!ticket) {
+    return { ok: false, status: 404, error: 'ticket_not_found', message: 'Ticket not found.' };
+  }
+  const scope = sm.checkProjectScope(ticket, actorRoles, assignedProjectId);
+  if (!scope.ok) {
+    const transition = await auditRejectedRead(db, ticket, actorId, scope);
+    return { ok: false, status: 403, error: scope.error, message: scope.message, transition };
+  }
+  const result = await getTicketWithHistory(db, id);
+  return { ok: true, status: 200, ticket: result };
+}
+
+// Transition history of one ticket, under the same scope check.
+async function getTicketTransitions(db, id, { actorId, actorRoles, assignedProjectId }) {
+  if (!actorId || !String(actorId).trim() || !Array.isArray(actorRoles)) {
+    return { ok: false, status: 400, error: 'bad_request', message: 'actor_id and actor roles are required.' };
+  }
+  const ticket = await getTicket(db, id);
+  if (!ticket) {
+    return { ok: false, status: 404, error: 'ticket_not_found', message: 'Ticket not found.' };
+  }
+  const scope = sm.checkProjectScope(ticket, actorRoles, assignedProjectId);
+  if (!scope.ok) {
+    const transition = await auditRejectedRead(db, ticket, actorId, scope);
+    return { ok: false, status: 403, error: scope.error, message: scope.message, transition };
+  }
+  const transitions = await listTransitions(db, id);
+  return { ok: true, status: 200, transitions };
+}
+
 async function createTicket(db, { actorId, actorRoles, title, description, source, reason, projectId }) {
   if (!actorRoles || !actorRoles.includes('pm')) {
     return { ok: false, status: 403, error: 'wrong_role', message: 'Only the PM may create a ticket.' };
@@ -271,6 +325,8 @@ module.exports = {
   listTransitions,
   listClaimable,
   getTicketWithHistory,
+  getTicketDetail,
+  getTicketTransitions,
   createTicket,
   transitionTicket,
 };
