@@ -257,6 +257,28 @@ async function main() {
     assert.equal(noWorkflowRole.attemptedRole, 'pm');
   });
 
+  await ok('project scope: an assigned actor may only touch their own project', async () => {
+    const scoped = (projectId, assignedProjectId) =>
+      sm.validateTransition({
+        ticket: { status: 'pending_dev', developer_id: null, project_id: projectId },
+        actorId: 'dev-1',
+        actorRoles: ['engineer'],
+        toStatus: 'in_dev',
+        assignedProjectId,
+      });
+    // Same project: the transition validates as usual.
+    assert.equal(scoped('proj-1', 'proj-1').ok, true);
+    // Another project's ticket: rejected before any other check.
+    const cross = scoped('proj-2', 'proj-1');
+    assert.equal(cross.ok, false);
+    assert.equal(cross.error, 'out_of_scope');
+    // Uncategorized tickets are out of scope for an assigned actor.
+    assert.equal(scoped(null, 'proj-1').error, 'out_of_scope');
+    // Unassigned callers are unaffected.
+    assert.equal(scoped('proj-2', undefined).ok, true);
+    assert.equal(scoped('proj-2', null).ok, true);
+  });
+
   await ok('allowedTransitions lists only what the role may do from the current state', async () => {
     const t = ticket('pending_review', 'dev-1');
     assert.deepEqual(

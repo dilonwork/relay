@@ -107,9 +107,11 @@ app.get('/api/tickets', async (req, res) => {
       ? String(req.query.status).split(',').map((s) => s.trim()).filter(Boolean)
       : null;
     // ?project_id=<uuid> filters to one project; ?project_id=none lists
-    // uncategorized tickets. Absent means all projects.
+    // uncategorized tickets. Absent means all projects. An account
+    // assigned to one project only ever sees that project's tickets:
+    // the assignment overrides the query filter.
     const projectFilter = req.query.project_id ? String(req.query.project_id).trim() : undefined;
-    const rows = await tickets.listTickets(db, statuses, projectFilter || undefined);
+    const rows = await tickets.listTickets(db, statuses, projectFilter || undefined, req.user.project_id);
     res.json(rows);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -146,6 +148,9 @@ app.post('/api/tickets/:id/transitions', async (req, res) => {
       reason: req.body ? req.body.reason : undefined,
       handoff: req.body ? req.body.handoff : undefined,
       artifacts: req.body ? req.body.artifacts : undefined,
+      // An account assigned to one project may not transition tickets
+      // of any other project (403 out_of_scope, audited).
+      assignedProjectId: req.user.project_id,
     });
     if (!result.ok) return res.status(result.status).json({ error: result.error, message: result.message });
     res.json({ ticket: result.ticket, transition: result.transition });
@@ -159,7 +164,9 @@ app.post('/api/tickets/:id/transitions', async (req, res) => {
 app.get('/api/queue', async (req, res) => {
   try {
     const projectFilter = req.query.project_id ? String(req.query.project_id).trim() : undefined;
-    res.json(await tickets.listClaimable(db, req.user.roles, projectFilter || undefined));
+    // An account assigned to one project only ever sees that project's
+    // queue, whatever project filter it passes.
+    res.json(await tickets.listClaimable(db, req.user.roles, projectFilter || undefined, req.user.project_id));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -272,6 +279,20 @@ app.post('/api/admin/users/:id/reset-password', async (req, res) => {
     const result = await auth.resetPassword(db, req.params.id, req.body ? req.body.password : undefined);
     if (!result.ok) return res.status(result.status).json({ error: result.error, message: result.message });
     res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Assign an agent account to one project, or clear the assignment
+// (project_id null or blank) so the account sees all projects again.
+// Admin only (the /api/admin router enforces it); the service checks
+// that the user and the project exist.
+app.patch('/api/admin/users/:id/project', async (req, res) => {
+  try {
+    const result = await admin.assignUserProject(db, req.params.id, req.body ? req.body.project_id : undefined);
+    if (!result.ok) return res.status(result.status).json({ error: result.error, message: result.message });
+    res.json(result.user);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

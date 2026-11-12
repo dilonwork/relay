@@ -38,4 +38,45 @@ async function getOverview(db) {
   };
 }
 
-module.exports = { getOverview };
+module.exports = { getOverview, assignUserProject };
+
+// Assign an agent account to one project (Agent assignment), or clear
+// the assignment (projectId null or blank) so the account sees all
+// projects again. The caller must hold the admin role — the /api/admin
+// routes enforce that; this service only checks that the user and the
+// project exist. The user row is locked for the check-then-update so two
+// assignments cannot race. Returns the public user (no password hash).
+async function assignUserProject(db, userId, projectId) {
+  if (!userId || !String(userId).trim()) {
+    return { ok: false, status: 400, error: 'bad_request', message: 'user_id is required.' };
+  }
+  const target = projectId === undefined || projectId === null || !String(projectId).trim()
+    ? null
+    : String(projectId).trim();
+
+  return db.withTransaction(async (client) => {
+    const { rows } = await client.query(
+      'SELECT * FROM users WHERE id = $1 FOR UPDATE',
+      [String(userId).trim()]
+    );
+    const user = rows[0];
+    if (!user) {
+      return { ok: false, status: 404, error: 'user_not_found', message: 'User not found.' };
+    }
+    if (target) {
+      const { rows: projectRows } = await client.query(
+        'SELECT * FROM projects WHERE id = $1',
+        [target]
+      );
+      if (!projectRows[0]) {
+        return { ok: false, status: 400, error: 'unknown_project', message: `Unknown project: ${target}.` };
+      }
+    }
+    const { rows: updatedRows } = await client.query(
+      `UPDATE users SET project_id = $1, updated_at = CURRENT_TIMESTAMP
+       WHERE id = $2 RETURNING *`,
+      [target, user.id]
+    );
+    return { ok: true, status: 200, user: publicUser(updatedRows[0]) };
+  });
+}

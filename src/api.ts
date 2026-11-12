@@ -71,6 +71,9 @@ export interface User {
   username: string;
   display_name: string;
   roles: string[];
+  // The project the account is assigned to (Agent assignment): null
+  // means unassigned, i.e. the account sees all projects.
+  project_id: string | null;
   is_active: boolean;
   created_at: string;
   updated_at: string;
@@ -205,6 +208,13 @@ export const api = {
     request<{ ok: boolean }>(`/api/admin/users/${encodeURIComponent(id)}/reset-password`, {
       method: 'POST',
       body: JSON.stringify({ password }),
+    }),
+  // Assign an account to one project, or clear the assignment (null) so
+  // the account sees all projects again.
+  adminAssignUserProject: (id: string, projectId: string | null) =>
+    request<User>(`/api/admin/users/${encodeURIComponent(id)}/project`, {
+      method: 'PATCH',
+      body: JSON.stringify({ project_id: projectId }),
     }),
   adminListApiKeys: (userId: string) =>
     request<ApiKey[]>(`/api/admin/users/${encodeURIComponent(userId)}/api-keys`),

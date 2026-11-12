@@ -3,6 +3,9 @@
 // so the permission matrix has exactly one source of truth.
 //
 // Checks run in the order the design doc prescribes (ch. 6):
+//   0. project scope (Agent assignment): an account assigned to one
+//      project may only touch tickets of that project — checked first,
+//      so the actor learns nothing about a ticket outside their scope,
 //   1. the current state allows this transition,
 //   2. the actor holds the role the transition requires,
 //   3. the actor is not handling their own work (review/test/deploy).
@@ -97,12 +100,22 @@ function attemptedRoleFallback(actorRoles) {
 
 // Validate one transition attempt. Returns { ok: true, rule, attemptedRole }
 // or { ok: false, error, message, attemptedRole }. `ticket` needs
-// { status, developer_id }; `actorRoles` is the actor's full role list.
+// { status, developer_id, project_id }; `actorRoles` is the actor's full
+// role list. `assignedProjectId` is the project the actor's account is
+// assigned to (Agent assignment; null/undefined means unassigned, so the
+// scope check is skipped and the caller keeps today's behavior).
 // Missing-content failures (reason_required, handoff_required) are
 // validation errors, not authorization failures: the caller distinguishes
 // them by error code, and the service maps them to 400 (see tickets.js).
-function validateTransition({ ticket, actorId, actorRoles, toStatus, reason, handoff }) {
+function validateTransition({ ticket, actorId, actorRoles, toStatus, reason, handoff, assignedProjectId }) {
   const roles = Array.isArray(actorRoles) ? actorRoles : [];
+  // Project scope first: an assigned actor has no business with a ticket
+  // outside their project, so nothing else about the attempt is
+  // evaluated. Uncategorized tickets (project_id null) are out of scope
+  // for an assigned actor as well.
+  if (assignedProjectId && ticket.project_id !== assignedProjectId) {
+    return { ok: false, error: 'out_of_scope', message: 'This ticket belongs to a different project than the one you are assigned to.', attemptedRole: attemptedRoleFallback(roles) };
+  }
   if (!STATUSES.includes(toStatus)) {
     return { ok: false, error: 'unknown_status', message: `Unknown status: ${toStatus}.`, attemptedRole: attemptedRoleFallback(roles) };
   }

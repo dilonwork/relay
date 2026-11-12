@@ -52,6 +52,14 @@ audit rules and the data model.
   produced for the next role; the note is stored on the audit row, and the
   next role can send the ticket back to `needs_clarification` when it is
   not enough. See [Agent access](#agent-access) and design doc ch. 12.
+- **Agent assignment (2026-11-11):** an admin may assign an agent
+  account to a single project. An assigned account's claim queue and
+  ticket list only return that project's tickets, and transitions on
+  other projects' tickets are rejected server-side (403
+  `out_of_scope`, audited). An unassigned account (no project assigned)
+  keeps the current behavior and sees all projects. One project per
+  agent in v1; multi-project assignment is out of scope. See
+  [Agent access](#agent-access) and design doc ch. 11–12.
 
 ## Project structure
 
@@ -71,11 +79,12 @@ relay/
 │   ├── admin.js          # admin overview aggregation
 │   ├── stateMachine.test.js
 │   ├── tickets.test.js
+│   ├── projects.test.js
 │   ├── auth.test.js
 │   ├── admin.test.js
 │   └── apikeys.test.js
 ├── db/
-│   └── migrations/       # schema as SQL migrations (001-006)
+│   └── migrations/       # schema as SQL migrations (001-008)
 ├── doc/
 │   └── design.md         # design document (Traditional Chinese)
 ├── index.html
@@ -100,7 +109,7 @@ the same dev servers.
 The backend needs a PostgreSQL database named `relay` (see `.env.example`).
 Creating that database is a separate deployment step and is not done by the
 code in this repo; the server creates the `tickets`, `ticket_transitions`,
-`users`, `sessions` and `api_keys` tables itself on startup.
+`users`, `sessions`, `api_keys` and `projects` tables itself on startup.
 
 On first run the users table is empty, so the app shows a setup screen:
 create the first admin account there (username, display name, password).
@@ -168,6 +177,17 @@ ticket service is tested against an in-memory fake implementing the same
   `requirement` waits for a leader, a ticket in `pending_dev` waits for
   an engineer. Tickets already in progress are not claimable. The
   frontend has a 待接單 (claimable) tab for this queue.
+- **Agent assignment:** an admin assigns an agent account to one project
+  from the Admin panel (per account: a project dropdown, or unassigned).
+  Assignment is per account; an API key inherits its account's
+  assignment, so the scope applies whether the agent logs in with a
+  session or a key. An assigned account's queue (`GET /api/queue`) and
+  ticket list (`GET /api/tickets`) only return that project's tickets,
+  whatever project filter it passes, and a transition on another
+  project's ticket is rejected server-side (403 `out_of_scope`, audited
+  as a rejected attempt). An unassigned account sees all projects, as
+  before. v1 assigns one project per agent; multi-project assignment is
+  out of scope.
 - **Handoff notes:** the two trial handoffs — `decomposing` →
   `pending_dev` and `in_dev` → `pending_review` — require a non-empty
   `handoff` note in the transition request (missing or blank → 400
@@ -243,12 +263,12 @@ log records the role actually exercised.
 | `GET` | `/api/auth/me` | Current account and roles |
 | `GET` | `/api/meta/transitions` | Legal transition table (source of truth for the UI) |
 | `POST` | `/api/tickets` | Create a ticket (PM role required; optional `project_id`) |
-| `GET` | `/api/tickets?status=<state>&project_id=<id\|none>` | List tickets, optionally filtered by state and project |
+| `GET` | `/api/tickets?status=<state>&project_id=<id\|none>` | List tickets, optionally filtered by state and project; an assigned caller only sees their project's tickets |
 | `GET` | `/api/tickets/:id` | One ticket with its full transition history |
 | `GET` | `/api/tickets/:id/transitions` | Transition history of one ticket |
-| `POST` | `/api/tickets/:id/transitions` | Transition a ticket (`to_status`, `reason`, `handoff`, `artifacts`) |
+| `POST` | `/api/tickets/:id/transitions` | Transition a ticket (`to_status`, `reason`, `handoff`, `artifacts`); a transition on another project's ticket is rejected 403 `out_of_scope` for an assigned caller |
 | `PATCH` | `/api/tickets/:id/project` | Assign a ticket to a project, or back to uncategorized (`project_id` null; PM only) |
-| `GET` | `/api/queue?project_id=<id\|none>` | Tickets the caller can claim in the trial stages, with the next transition; optionally filtered by project |
+| `GET` | `/api/queue?project_id=<id\|none>` | Tickets the caller can claim in the trial stages, with the next transition; optionally filtered by project; an assigned caller only sees their project's queue |
 | `GET` | `/api/projects` | List projects with ticket counts |
 | `POST` | `/api/projects` | Create a project (PM or Admin) |
 | `GET` | `/api/projects/:id` | One project |
@@ -256,6 +276,7 @@ log records the role actually exercised.
 | `GET` | `/api/admin/users` | List accounts (admin only) |
 | `POST` | `/api/admin/users` | Create an account (admin only) |
 | `PATCH` | `/api/admin/users/:id` | Edit display name, roles, active flag (admin only) |
+| `PATCH` | `/api/admin/users/:id/project` | Assign an account to a project, or clear the assignment (`project_id` null; admin only) |
 | `POST` | `/api/admin/users/:id/reset-password` | Set a new password, revokes sessions (admin only) |
 | `GET` | `/api/admin/users/:id/api-keys` | List an account's API keys, without hashes (admin only) |
 | `POST` | `/api/admin/users/:id/api-keys` | Issue an API key; full key returned exactly once (admin only) |

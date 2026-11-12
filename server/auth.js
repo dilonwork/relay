@@ -60,6 +60,9 @@ function validRoles(roles) {
 }
 
 // The user as the API and the frontend ever see it: no password hash.
+// project_id is the project the account is assigned to (Agent
+// assignment): null means unassigned, i.e. the account sees all
+// projects, as before.
 function publicUser(row) {
   if (!row) return null;
   return {
@@ -67,6 +70,7 @@ function publicUser(row) {
     username: row.username,
     display_name: row.display_name,
     roles: [...(row.roles || [])],
+    project_id: row.project_id || null,
     is_active: row.is_active,
     created_at: row.created_at,
     updated_at: row.updated_at,
