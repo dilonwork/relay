@@ -85,6 +85,11 @@ header p { margin: 0; color: #5a6b7c; }
 .sidebar-nav button.active { background: #0e7c7b; color: #fff; }
 .nav-icon { width: 20px; text-align: center; flex: 0 0 auto; }
 
+/* Tickets nav group: expandable sub-pages (All tickets / Gantt). */
+.sidebar-group { display: flex; flex-direction: column; gap: 4px; }
+.sidebar-subnav { display: flex; flex-direction: column; gap: 4px; padding-left: 16px; }
+.nav-chevron { margin-left: auto; font-size: 11px; color: #9fb4c0; }
+
 .sidebar-filter label.field { color: #9fb4c0; margin: 0 0 4px 0; }
 
 .sidebar-user {
@@ -112,11 +117,13 @@ header p { margin: 0; color: #5a6b7c; }
 .layout.collapsed .sidebar { width: 60px; padding: 16px 8px; }
 .layout.collapsed .brand-text,
 .layout.collapsed .nav-label,
+.layout.collapsed .nav-chevron,
 .layout.collapsed .sidebar-filter,
 .layout.collapsed .sidebar-user .who,
 .layout.collapsed .sidebar-user .roles { display: none; }
 .layout.collapsed .sidebar-brand { justify-content: center; padding: 0; }
 .layout.collapsed .sidebar-nav button { justify-content: center; padding: 9px 0; }
+.layout.collapsed .sidebar-subnav { padding-left: 0; }
 .layout.collapsed .sidebar-user button.link { justify-content: center; padding: 0; }
 
 /* Narrow screens: the sidebar collapses to the icon rail automatically. */
@@ -124,11 +131,13 @@ header p { margin: 0; color: #5a6b7c; }
   .sidebar { width: 60px; padding: 16px 8px; }
   .brand-text,
   .nav-label,
+  .nav-chevron,
   .sidebar-filter,
   .sidebar-user .who,
   .sidebar-user .roles { display: none; }
   .sidebar-brand { justify-content: center; padding: 0; }
   .sidebar-nav button { justify-content: center; padding: 9px 0; }
+  .sidebar-subnav { padding-left: 0; }
   .sidebar-user button.link { justify-content: center; padding: 0; }
   .content { padding: 12px; }
 }
@@ -272,18 +281,7 @@ button.link {
 .dashboard-row h3 { margin: 0; font-size: 15px; color: #0f2a3d; }
 .dashboard-row .dashboard-counts { color: #5a6b7c; font-size: 13px; }
 
-/* Gantt view: list / Gantt toggle, shared time axis, one bar per ticket. */
-.gantt-view-toggle { display: flex; gap: 6px; margin-bottom: 12px; }
-.gantt-view-toggle button {
-  border: 1px solid #cfdbe4;
-  background: #fff;
-  border-radius: 999px;
-  padding: 5px 12px;
-  cursor: pointer;
-  font-size: 13px;
-  color: #1a2332;
-}
-.gantt-view-toggle button.active { background: #0e7c7b; border-color: #0e7c7b; color: #fff; }
+/* Gantt view: shared time axis, one bar per ticket. */
 
 .gantt-grid { display: grid; grid-template-columns: 240px 1fr; column-gap: 12px; }
 .gantt-axis { position: relative; height: 20px; border-bottom: 1px solid #d9e1e8; }

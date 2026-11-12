@@ -7,13 +7,17 @@ import Dashboard from './Dashboard';
 import NewTicketForm from './NewTicketForm';
 import ProjectsPanel from './ProjectsPanel';
 import TicketDetail from './TicketDetail';
+import TicketGantt from './TicketGantt';
 import TicketList from './TicketList';
 
 // Top-level views: one module on screen at a time. 'detail' is the
-// ticket detail opened from the Tickets view; it is not a nav item —
-// the Tickets nav button stays active while a detail is open.
+// ticket detail opened from a Tickets sub-page; it is not a nav item —
+// the Tickets nav group stays active while a detail is open, and going
+// back returns to the sub-page it came from (ticketsReturnView).
 // 'dashboard' is the default landing page (project overview).
-type MainView = 'dashboard' | 'tickets' | 'new' | 'projects' | 'admin' | 'detail';
+// Tickets has two sub-pages, reached from the sidebar group:
+// 'tickets-list' (All tickets) and 'tickets-gantt' (Gantt).
+type MainView = 'dashboard' | 'tickets-list' | 'tickets-gantt' | 'new' | 'projects' | 'admin' | 'detail';
 
 export default function App() {
   const [authState, setAuthState] = useState<'loading' | 'login' | 'setup' | 'app'>('loading');
@@ -22,8 +26,11 @@ export default function App() {
 
   const [mainView, setMainView] = useState<MainView>('dashboard');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [ticketsGroupOpen, setTicketsGroupOpen] = useState(true);
+  // Which Tickets sub-page a ticket detail was opened from, so going
+  // back returns there instead of always to the list.
+  const [ticketsReturnView, setTicketsReturnView] = useState<'tickets-list' | 'tickets-gantt'>('tickets-list');
   const [tab, setTab] = useState('all');
-  const [display, setDisplay] = useState<'list' | 'gantt'>('list');
   const [ganttTickets, setGanttTickets] = useState<Ticket[]>([]);
   const [journeys, setJourneys] = useState<Record<string, string[]>>({});
   const [ganttLoading, setGanttLoading] = useState(false);
@@ -170,9 +177,19 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (authState !== 'app' || mainView !== 'tickets' || display !== 'gantt') return;
+    if (authState !== 'app' || mainView !== 'tickets-gantt') return;
     loadGantt();
-  }, [display, mainView, authState, loadGantt]);
+  }, [mainView, authState, loadGantt]);
+
+  // Entering a Tickets sub-page (or its detail) opens the sidebar
+  // Tickets group, so the sub-page nav is visible; closing it
+  // afterwards is the user's choice and sticks until the next
+  // navigation into Tickets.
+  useEffect(() => {
+    if (mainView === 'tickets-list' || mainView === 'tickets-gantt' || mainView === 'detail') {
+      setTicketsGroupOpen(true);
+    }
+  }, [mainView]);
 
   useEffect(() => {
     if (authState !== 'app' || mainView !== 'dashboard') return;
@@ -271,6 +288,9 @@ export default function App() {
       setNewProjectId('');
       setNotice(`Ticket created: ${created.title}`);
       setSelectedId(created.id);
+      // The detail was opened from New ticket, so going back returns
+      // to the All tickets list.
+      setTicketsReturnView('tickets-list');
       setMainView('detail');
       await loadTickets(tab);
       await loadProjects();
@@ -354,38 +374,45 @@ export default function App() {
   }
 
   // Top-level view navigation. Opening a ticket switches to its own
-  // detail view; going back returns to the Tickets list.
+  // detail view; going back returns to the Tickets sub-page it came
+  // from (list or Gantt).
   function openTicket(id: string) {
+    setTicketsReturnView(mainView === 'tickets-gantt' ? 'tickets-gantt' : 'tickets-list');
     setSelectedId(id);
     setMainView('detail');
   }
 
   function backToTickets() {
     setSelectedId(null);
-    setMainView('tickets');
+    setMainView(ticketsReturnView);
   }
 
   // Clicking a project in the Projects view filters the ticket list to
-  // it and switches to the Tickets view, so the user sees its tickets.
+  // it and switches to the Tickets list view, so the user sees its tickets.
   function selectProject(id: string) {
     setProjectFilter(id);
-    setMainView('tickets');
+    setMainView('tickets-list');
   }
 
   // Clicking a project on the Dashboard opens that project's view with
-  // its Gantt chart; the Gantt/List toggle in the Tickets view switches
-  // to the ticket table (same project filter).
+  // its Gantt chart (the Tickets > Gantt sub-page).
   function openProjectFromDashboard(id: string) {
     setProjectFilter(id);
-    setDisplay('gantt');
-    setMainView('tickets');
+    setMainView('tickets-gantt');
   }
 
-  // Switching the Tickets view back to List reloads the list, as the
-  // toggle did before; switching to Gantt loads through the effect.
-  function handleDisplayChange(next: 'list' | 'gantt') {
-    setDisplay(next);
-    if (next === 'list') loadTickets(tab);
+  // The sidebar Tickets group header: opening the group goes to All
+  // tickets (unless already on a Tickets page); closing it only hides
+  // the sub-page nav.
+  function handleTicketsGroupClick() {
+    if (!ticketsGroupOpen) {
+      setTicketsGroupOpen(true);
+      if (mainView !== 'tickets-list' && mainView !== 'tickets-gantt' && mainView !== 'detail') {
+        setMainView('tickets-list');
+      }
+    } else {
+      setTicketsGroupOpen(false);
+    }
   }
 
   if (authState === 'loading') {
@@ -481,8 +508,10 @@ export default function App() {
   const selectedTarget = targets.find((t) => t.to === targetStatus);
   const isAdmin = user.roles.includes('admin');
   const isPm = user.roles.includes('pm');
-  // The Tickets nav item stays active while a ticket detail is open.
-  const activeView = mainView === 'detail' ? 'tickets' : mainView;
+  // The Tickets nav group stays active on either Tickets sub-page and
+  // while a ticket detail is open.
+  const ticketsActive =
+    mainView === 'tickets-list' || mainView === 'tickets-gantt' || mainView === 'detail';
   const canManageProjects = isPm || isAdmin;
   // The project currently in view: a specific project (single-project
   // view), 'none' for uncategorized, or undefined for all projects.
@@ -514,21 +543,47 @@ export default function App() {
 
         <nav className="sidebar-nav" aria-label="Modules">
           <button
-            className={activeView === 'dashboard' ? 'active' : ''}
+            className={mainView === 'dashboard' ? 'active' : ''}
             onClick={() => setMainView('dashboard')}
             title="Dashboard"
           >
             <span className="nav-icon" aria-hidden="true">▤</span>
             <span className="nav-label">Dashboard</span>
           </button>
-          <button
-            className={activeView === 'tickets' ? 'active' : ''}
-            onClick={() => setMainView('tickets')}
-            title="Tickets"
-          >
-            <span className="nav-icon" aria-hidden="true">☰</span>
-            <span className="nav-label">Tickets</span>
-          </button>
+          <div className="sidebar-group">
+            <button
+              className={ticketsActive ? 'active' : ''}
+              onClick={handleTicketsGroupClick}
+              title="Tickets"
+              aria-expanded={ticketsGroupOpen}
+            >
+              <span className="nav-icon" aria-hidden="true">☰</span>
+              <span className="nav-label">Tickets</span>
+              <span className="nav-chevron" aria-hidden="true">
+                {ticketsGroupOpen ? '▾' : '▸'}
+              </span>
+            </button>
+            {ticketsGroupOpen && (
+              <div className="sidebar-subnav">
+                <button
+                  className={mainView === 'tickets-list' ? 'active' : ''}
+                  onClick={() => setMainView('tickets-list')}
+                  title="All tickets"
+                >
+                  <span className="nav-icon" aria-hidden="true">☰</span>
+                  <span className="nav-label">All tickets</span>
+                </button>
+                <button
+                  className={mainView === 'tickets-gantt' ? 'active' : ''}
+                  onClick={() => setMainView('tickets-gantt')}
+                  title="Gantt"
+                >
+                  <span className="nav-icon" aria-hidden="true">▬</span>
+                  <span className="nav-label">Gantt</span>
+                </button>
+              </div>
+            )}
+          </div>
           <button
             className={mainView === 'new' ? 'active' : ''}
             onClick={() => setMainView('new')}
@@ -605,7 +660,7 @@ export default function App() {
           className="link"
           onClick={() => {
             if (mainView === 'dashboard') loadDashboard();
-            else if (display === 'gantt') loadGantt();
+            else if (mainView === 'tickets-gantt') loadGantt();
             else loadTickets(tab);
             if (selectedId) loadDetail(selectedId);
           }}
@@ -678,6 +733,18 @@ export default function App() {
           onBack={backToTickets}
           projectName={projectName}
         />
+      ) : mainView === 'tickets-gantt' ? (
+        <TicketGantt
+          projects={projects}
+          projectFilter={projectFilter}
+          onProjectFilterChange={setProjectFilter}
+          selectedProject={selectedProject}
+          ganttTickets={ganttTickets}
+          journeys={journeys}
+          ganttLoading={ganttLoading}
+          selectedId={selectedId}
+          onSelectTicket={openTicket}
+        />
       ) : (
         <TicketList
           projects={projects}
@@ -686,12 +753,7 @@ export default function App() {
           selectedProject={selectedProject}
           tab={tab}
           onTabChange={setTab}
-          display={display}
-          onDisplayChange={handleDisplayChange}
           tickets={tickets}
-          ganttTickets={ganttTickets}
-          journeys={journeys}
-          ganttLoading={ganttLoading}
           selectedId={selectedId}
           onSelectTicket={openTicket}
           projectName={projectName}

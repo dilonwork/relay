@@ -105,7 +105,8 @@ relay/
 │   ├── api.ts            # typed API client (session + API key)
 │   ├── helpers.ts        # labels, queue tabs, status buckets
 │   ├── Dashboard.tsx     # default page: project overview
-│   ├── TicketList.tsx    # ticket table + Gantt toggle + claimable queue
+│   ├── TicketList.tsx    # All tickets list + claimable queue
+│   ├── TicketGantt.tsx   # Gantt timeline, grouped by project
 │   ├── TicketDetail.tsx  # ticket detail view with transition history
 │   ├── NewTicketForm.tsx # create-ticket form
 │   ├── ProjectsPanel.tsx # project list / create project
@@ -181,17 +182,20 @@ account or password anywhere in the code.
 - **Left sidebar:** a dark sidebar holds the module navigation —
   Dashboard, Tickets, New ticket, Projects (PM or Admin only) and Admin
   (admin only) — plus a project filter, the signed-in user's name,
-  username and role badges, and Log out. The active module is
+  username and role badges, and Log out. Tickets is an expandable group
+  with two sub-pages, All tickets and Gantt; the group stays active on
+  either sub-page and while a ticket detail is open. The active module is
   highlighted. A collapse toggle shrinks the sidebar to a 60px icon rail;
   on narrow screens (≤720px) it collapses to the icon rail automatically.
 - **Module views:** one module is shown at a time. The Dashboard is the
-  default view; Tickets holds the ticket list with its List/Gantt toggle,
-  the Claimable queue tab, the project filter and the ticket
-  creation entry; New ticket is the create form; Projects is the project
-  list; Admin is the admin area (see [Admin](#admin)).
+  default view; Tickets holds the ticket list (All tickets sub-page, with
+  the Claimable queue tab and the project filter) and the Gantt timeline
+  (Gantt sub-page), and the ticket creation entry; New ticket is the
+  create form; Projects is the project list; Admin is the admin area (see [Admin](#admin)).
 - **Ticket detail is its own view:** clicking a ticket (from the list, a
   Gantt bar or the claimable queue) opens the detail view with its full
-  transition history and handoff notes; a back link returns to Tickets.
+  transition history and handoff notes; a back link returns to the
+  Tickets sub-page it came from.
 
 ## Tests
 
@@ -338,9 +342,9 @@ handlers.
 - **Default page:** the app lands on the Dashboard, a project overview
   listing every project with its ticket counts (in progress / waiting /
   done, computed from `GET /api/tickets`).
-- **Project view:** clicking a project opens that project's view with
-  its Gantt chart; the Gantt/List toggle switches to the ticket table
-  for the same project. Uncategorized tickets get their own row.
+- **Project view:** clicking a project opens the Tickets > Gantt
+  sub-page for that project; All tickets shows the ticket table for
+  the same project. Uncategorized tickets get their own row.
 - The Dashboard is a sidebar item alongside Tickets, New ticket,
   Projects and Admin.
 

@@ -5,7 +5,7 @@ interface DashboardProps {
   projects: Project[];
   counts: Record<string, ProjectTicketCounts>;
   loading: boolean;
-  // Opens the project view (its Gantt, with a Gantt/List toggle).
+  // Opens the project view (its Gantt sub-page under Tickets).
   onSelectProject: (id: string) => void;
 }
 
