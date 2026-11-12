@@ -87,42 +87,70 @@ export default function TicketList(props: TicketListProps) {
             : 'No tickets in this queue.'}
         </p>
       ) : (
-        <table>
-          <thead>
-            <tr>
-              <th>Title</th>
-              <th>Project</th>
-              <th>Status</th>
-              <th>Assignee</th>
-              {tab === 'claimable' && <th>Next step for you</th>}
-              <th>Updated</th>
-            </tr>
-          </thead>
-          <tbody>
+        <>
+          <div className="ticket-table">
+            <table>
+              <thead>
+                <tr>
+                  <th>Title</th>
+                  <th>Project</th>
+                  <th>Status</th>
+                  <th>Assignee</th>
+                  {tab === 'claimable' && <th>Next step for you</th>}
+                  <th>Updated</th>
+                </tr>
+              </thead>
+              <tbody>
+                {tickets.map((t) => (
+                  <tr
+                    key={t.id}
+                    className={selectedId === t.id ? 'selected' : ''}
+                    onClick={() => onSelectTicket(t.id)}
+                  >
+                    <td>{t.title}</td>
+                    <td>{projectName(t.project_id)}</td>
+                    <td>
+                      <span className={`badge ${t.status}`}>{statusLabel(t.status)}</span>
+                    </td>
+                    <td title={t.assignee_id || ''}>{shortId(t.assignee_id)}</td>
+                    {tab === 'claimable' && (
+                      <td>
+                        {t.next_transition
+                          ? `→ ${statusLabel(t.next_transition.to)} (${ROLE_LABELS[t.next_transition.role] || t.next_transition.role})`
+                          : '—'}
+                      </td>
+                    )}
+                    <td>{formatTime(t.updated_at)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {/* Mobile card view (≤720px): same tickets, same tap-to-open,
+              one card per ticket instead of the 6-column table. */}
+          <div className="ticket-cards">
             {tickets.map((t) => (
-              <tr
+              <article
                 key={t.id}
-                className={selectedId === t.id ? 'selected' : ''}
+                className={`ticket-card${selectedId === t.id ? ' selected' : ''}`}
                 onClick={() => onSelectTicket(t.id)}
               >
-                <td>{t.title}</td>
-                <td>{projectName(t.project_id)}</td>
-                <td>
+                <div className="ticket-card-title">{t.title}</div>
+                <div className="ticket-card-meta">
                   <span className={`badge ${t.status}`}>{statusLabel(t.status)}</span>
-                </td>
-                <td title={t.assignee_id || ''}>{shortId(t.assignee_id)}</td>
-                {tab === 'claimable' && (
-                  <td>
-                    {t.next_transition
-                      ? `→ ${statusLabel(t.next_transition.to)} (${ROLE_LABELS[t.next_transition.role] || t.next_transition.role})`
-                      : '—'}
-                  </td>
+                  <span>{projectName(t.project_id)}</span>
+                  <span className="muted">{formatTime(t.updated_at)}</span>
+                </div>
+                {tab === 'claimable' && t.next_transition && (
+                  <div className="ticket-card-next">
+                    → {statusLabel(t.next_transition.to)} (
+                    {ROLE_LABELS[t.next_transition.role] || t.next_transition.role})
+                  </div>
                 )}
-                <td>{formatTime(t.updated_at)}</td>
-              </tr>
+              </article>
             ))}
-          </tbody>
-        </table>
+          </div>
+        </>
       )}
     </div>
   );

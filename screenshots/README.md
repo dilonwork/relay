@@ -1,32 +1,26 @@
-# Screenshots — pending captures
+# Screenshots
 
-The images referenced from the main README are not in this directory yet.
-They must be **real screenshots of the running app — no mockups, no
-generated images**. Capture them from the deployed app after the current
-`develop` branch is released (the live site still runs an older build, so
-screenshots taken now would not match the README).
+The images referenced from the main README live in this directory.
+They are **real screenshots of the running app — no mockups, no
+generated images**.
 
-## How to capture
-
-1. Deploy the current `develop` branch and open the live app in a browser.
-2. Log in as an account with the roles each shot needs (admin for the
-   Admin shot; an account with tickets in flight for the queue shots).
-3. Take each screenshot at desktop width (around 1280px), PNG format,
-   and save it here with the exact filename below.
-4. Do not edit, crop or annotate the screenshots beyond trimming the
-   browser chrome.
+Captured 2026-11-11 from the live app at http://129.146.97.44/
+(logged in as Dylan, Admin + PM), desktop width 1920×1000, PNG.
+No editing, cropping or annotation beyond trimming the browser chrome.
 
 ## Capture list
 
-| File | What to capture |
+| File | What it shows |
 | --- | --- |
 | `dashboard.png` | Dashboard (default page): project overview with ticket counts per project |
-| `ticket-list.png` | Tickets module, List view: ticket table with the project filter applied |
-| `ticket-gantt.png` | Tickets module, Gantt tab: bars on the shared time axis |
-| `ticket-detail.png` | A ticket's detail view with its transition history and handoff notes |
-| `claimable-queue.png` | Tickets module, Claimable tab with the next-step column |
-| `projects.png` | Projects module: project list / a single project's view |
+| `ticket-list.png` | Tickets module, All tickets: ticket table with the project filter applied |
+| `ticket-gantt.png` | Tickets module, Gantt sub-page: bars on the shared time axis |
+| `ticket-detail.png` | Ticket detail view ("Dashboard with Gantt chart design", Delivered) with transition history and handoff notes |
+| `claimable-queue.png` | Tickets module, Claimable tab — empty at capture time ("Nothing waiting for your roles right now."), so no next-step column is visible |
+| `projects.png` | Projects module: project list (Relay 14 tickets, WebTracker 0) |
 | `admin-overview.png` | Admin module, Overview sub-page: system overview and tickets by status |
 
-Once all seven files exist, the Screenshots section of the main README
-renders with no further changes.
+To retake: log in as an account with the roles each shot needs
+(admin for the Admin shot; an account with tickets in flight for the
+queue shots), capture at desktop width (around 1280px or wider), PNG,
+and save here with the exact filename above.

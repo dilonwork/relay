@@ -186,7 +186,11 @@ account or password anywhere in the code.
   with two sub-pages, All tickets and Gantt; the group stays active on
   either sub-page and while a ticket detail is open. The active module is
   highlighted. A collapse toggle shrinks the sidebar to a 60px icon rail;
-  on narrow screens (≤720px) it collapses to the icon rail automatically.
+  on narrow screens (≤720px) the sidebar is hidden by default and opens
+  as an overlay drawer from a hamburger button (tap the scrim or the
+  close button to dismiss it). On mobile the ticket list becomes cards,
+  the Gantt timeline scrolls horizontally with a sticky label column,
+  and detail pages and forms stack in a single column.
 - **Module views:** one module is shown at a time. The Dashboard is the
   default view; Tickets holds the ticket list (All tickets sub-page, with
   the Claimable queue tab and the project filter) and the Gantt timeline
