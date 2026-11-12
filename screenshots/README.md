@@ -24,7 +24,7 @@ screenshots taken now would not match the README).
 | `ticket-list.png` | Tickets module, List view: ticket table with the project filter applied |
 | `ticket-gantt.png` | Tickets module, Gantt tab: bars on the shared time axis |
 | `ticket-detail.png` | A ticket's detail view with its transition history and handoff notes |
-| `claimable-queue.png` | Tickets module, 待接單 (claimable) tab with the next-step column |
+| `claimable-queue.png` | Tickets module, Claimable tab with the next-step column |
 | `projects.png` | Projects module: project list / a single project's view |
 | `admin-overview.png` | Admin module, Overview sub-page: system overview and tickets by status |
 

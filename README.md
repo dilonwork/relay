@@ -31,7 +31,7 @@ so screenshots taken now would not match the current UI). See
 
 ![Ticket detail — transition history](screenshots/ticket-detail.png)
 
-![Claimable queue — 待接單](screenshots/claimable-queue.png)
+![Claimable queue](screenshots/claimable-queue.png)
 
 ![Projects — project view](screenshots/projects.png)
 
@@ -186,7 +186,7 @@ account or password anywhere in the code.
   on narrow screens (≤720px) it collapses to the icon rail automatically.
 - **Module views:** one module is shown at a time. The Dashboard is the
   default view; Tickets holds the ticket list with its List/Gantt toggle,
-  the 待接單 (claimable) queue tab, the project filter and the ticket
+  the Claimable queue tab, the project filter and the ticket
   creation entry; New ticket is the create form; Projects is the project
   list; Admin is the admin area (see [Admin](#admin)).
 - **Ticket detail is its own view:** clicking a ticket (from the list, a
@@ -253,9 +253,9 @@ ticket service is tested against an in-memory fake implementing the same
   trial covers decomposing and development only: a ticket in
   `requirement` waits for a leader, a ticket in `pending_dev` waits for
   an engineer. Tickets already in progress are not claimable. The
-  frontend has a 待接單 (claimable) tab for this queue. The tab is not
+  frontend has a Claimable tab for this queue. The tab is not
   redundant with the status tabs: a status tab lists every ticket in
-  that state, while 待接單 lists only the tickets the caller can claim
+  that state, while Claimable lists only the tickets the caller can claim
   by role (merged across roles for multi-role accounts), each with its
   next transition.
 - **Agent assignment:** an admin assigns an agent account to one project
@@ -310,7 +310,7 @@ handlers.
 - **Single-project view:** the ticket list has a project filter (all
   projects / uncategorized / one project). Picking a project shows only
   its tickets, with the project name, description and ticket count on
-  top; the same filter applies to the 待接單 (claimable) queue. The
+  top; the same filter applies to the Claimable queue. The
   ticket list also shows a Project column, and the detail view shows
   the ticket's project with a PM-only control to move it.
 - **Endpoints:** see the API table (`/api/projects`,
