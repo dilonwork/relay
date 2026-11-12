@@ -26,7 +26,11 @@ const workflows = require('./workflows');
 // needs_acceptance_clarification — the spec lists only the five
 // working states plus needs_clarification. If the Leader wants the
 // pickup queues watched too, it is a one-line change to this list
-// (design doc ch. 13).
+// (design doc ch. 13). This list is the stalled rule for the built-in
+// flow only; a custom workflow uses the generic rule in
+// isStalledState (design doc ch. 15): a non-terminal state with no
+// outgoing pickup transition — i.e. not a queue state — counts as
+// stalled after 30 minutes without a transition.
 const STALLED_STATES = [
   'decomposing',
   'in_dev',
@@ -53,9 +57,26 @@ function minutesBetween(later, earlier) {
 // reminder goes to. needs_clarification waits for the PM, so the
 // reminder target is the PM themself — the polling PM agent answers
 // the clarification instead of forwarding a message (ch. 13).
-function responsibleRole(status) {
-  const rule = sm.TRANSITIONS.find((r) => r.from === status);
+// `definition` is the ticket's workflow definition; when omitted the
+// built-in transition table is used, exactly as before.
+function responsibleRole(status, definition) {
+  const transitions = definition ? definition.transitions : sm.TRANSITIONS;
+  const rule = (transitions || []).find((r) => r.from === status);
   return rule ? rule.role : null;
+}
+
+// Whether a ticket's current state counts as stalled (ch. 13 for the
+// built-in flow, ch. 15 for custom workflows): the built-in flow keeps
+// its spec'd list; a custom workflow counts every non-terminal state
+// except its queue states (states with an outgoing pickup transition),
+// because a ticket waiting to be claimed is not stuck — it is waiting.
+function isStalledState(definition, isCustom, status) {
+  if (!isCustom) return STALLED_STATES.includes(status);
+  if (sm.isTerminalFor(definition, status)) return false;
+  const hasPickup = (definition.transitions || []).some(
+    (r) => r.from === status && r.kind === 'pickup'
+  );
+  return !hasPickup;
 }
 
 // Stalled state of one ticket at `now`: the latest applied transition
@@ -92,7 +113,39 @@ async function loadReminderRow(db, ticketId) {
 // that are not stalled are not listed.
 async function listStalled(db, { assignedProjectId, now = new Date() } = {}) {
   const current = toDate(now);
-  const candidates = await tickets.listTickets(db, STALLED_STATES, undefined, assignedProjectId);
+  // The stalled states are workflow-dependent, so the candidate set
+  // cannot be pre-filtered in SQL; all in-scope tickets are read and
+  // filtered here (the monitor polls every 15 minutes and the ticket
+  // count is small).
+  const all = await tickets.listTickets(db, null, undefined, assignedProjectId);
+  // One definition lookup per workflow: tickets on the same workflow
+  // share it (ch. 15). One role-map lookup per project: tickets of
+  // the same project share their active workflow (ch. 14).
+  const definitions = new Map();
+  async function definitionFor(ticket) {
+    const key = ticket.workflow_id || '__builtin__';
+    if (!definitions.has(key)) {
+      const resolved = await workflows.definitionForTicket(db, ticket);
+      definitions.set(key, resolved.missing ? null : resolved.definition);
+    }
+    return definitions.get(key);
+  }
+  const roleMaps = new Map();
+  async function roleMapFor(projectId) {
+    const key = projectId || '__default__';
+    if (!roleMaps.has(key)) {
+      roleMaps.set(key, await workflows.getRoleMap(db, projectId || null));
+    }
+    return roleMaps.get(key);
+  }
+  const candidates = [];
+  for (const ticket of all) {
+    const definition = await definitionFor(ticket);
+    if (!definition) continue;
+    if (isStalledState(definition, !!ticket.workflow_id, ticket.status)) {
+      candidates.push(ticket);
+    }
+  }
   const stalled = [];
   for (const ticket of candidates) {
     const info = await stalledInfo(db, ticket, current);
@@ -104,16 +157,6 @@ async function listStalled(db, { assignedProjectId, now = new Date() } = {}) {
     [stalled.map((s) => s.ticket.id)]
   );
   const byTicket = new Map(rows.map((r) => [r.ticket_id, r]));
-  // One role-map lookup per project: tickets of the same project share
-  // their active workflow (design doc ch. 14).
-  const roleMaps = new Map();
-  async function roleMapFor(projectId) {
-    const key = projectId || '__default__';
-    if (!roleMaps.has(key)) {
-      roleMaps.set(key, await workflows.getRoleMap(db, projectId || null));
-    }
-    return roleMaps.get(key);
-  }
   const out = [];
   for (const { ticket, info } of stalled) {
     const row = byTicket.get(ticket.id);
@@ -127,12 +170,21 @@ async function listStalled(db, { assignedProjectId, now = new Date() } = {}) {
     const needsEscalation = sameEpisode
       && reminderCount >= ESCALATE_AFTER_REMINDERS
       && !escalatedAt;
-    // The role that owns the ticket in its current state comes from the
-    // ticket's project workflow; the built-in map is the fallback when
-    // the workflow names no role for the state.
-    const roleMap = await roleMapFor(ticket.project_id);
-    const entry = roleMap ? roleMap[ticket.status] : null;
-    const notifyRole = (entry && entry.role) || responsibleRole(ticket.status);
+    // The role that owns the ticket in its current state: for a custom
+    // workflow it comes from that workflow's own definition; for the
+    // built-in flow it comes from the project's active workflow roles
+    // map, with the built-in transition table as the fallback.
+    const definition = await definitionFor(ticket);
+    let notifyRole;
+    let roleMap = null;
+    if (ticket.workflow_id) {
+      const entry = definition.roles ? definition.roles[ticket.status] : null;
+      notifyRole = (entry && entry.role) || responsibleRole(ticket.status, definition);
+    } else {
+      roleMap = await roleMapFor(ticket.project_id);
+      const entry = roleMap ? roleMap[ticket.status] : null;
+      notifyRole = (entry && entry.role) || responsibleRole(ticket.status);
+    }
     out.push({
       ticket_id: ticket.id,
       title: ticket.title,
@@ -149,7 +201,7 @@ async function listStalled(db, { assignedProjectId, now = new Date() } = {}) {
       notify_role: notifyRole,
       // What would unblock it: the legal moves for the responsible role,
       // under the same workflow override.
-      next_actions: notifyRole ? sm.allowedTransitions(ticket, notifyRole, roleMap) : [],
+      next_actions: notifyRole ? sm.allowedTransitionsFor(definition, ticket, notifyRole, roleMap) : [],
     });
   }
   return out;
@@ -250,6 +302,7 @@ module.exports = {
   REMINDER_INTERVAL_MINUTES,
   ESCALATE_AFTER_REMINDERS,
   responsibleRole,
+  isStalledState,
   listStalled,
   acknowledgeReminder,
   acknowledgeEscalation,

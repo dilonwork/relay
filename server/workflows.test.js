@@ -6,6 +6,7 @@
 const assert = require('node:assert/strict');
 const workflows = require('./workflows.js');
 const sm = require('./stateMachine.js');
+const examples = require('./workflowExamples.js');
 
 let passed = 0;
 function ok(name, fn) {
@@ -20,6 +21,7 @@ function ok(name, fn) {
 class FakeDb {
   constructor() {
     this.workflows = [];
+    this.tickets = [];
     this.projects = [
       { id: 'proj-1', name: 'WebTracker', description: '' },
       { id: 'proj-2', name: 'Drydock', description: '' },
@@ -32,13 +34,16 @@ class FakeDb {
   }
 
   // Seed a workflow row directly (bypassing the service), e.g. the
-  // global default the migration would insert.
-  seedWorkflow({ id, project_id = null, name, roles, is_default = false, is_active = false }) {
+  // global default the migration would insert. States/transitions
+  // default to the built-in 14-state definition (ch. 15).
+  seedWorkflow({ id, project_id = null, name, roles, states, transitions, is_default = false, is_active = false }) {
     const row = {
       id: id || `wf-${++this.seq}`,
       project_id,
       name,
       roles: roles || workflows.DEFAULT_WORKFLOW_ROLES,
+      states: states || sm.BUILTIN_STATES,
+      transitions: transitions || sm.BUILTIN_DEFINITION.transitions,
       is_default,
       is_active,
       created_by: 'pm-1',
@@ -46,6 +51,13 @@ class FakeDb {
       updated_at: new Date().toISOString(),
     };
     this.workflows.push(row);
+    return row;
+  }
+
+  // Seed a ticket row for the state_in_use / workflow_in_use guards.
+  seedTicket({ id, workflow_id = null, status }) {
+    const row = { id: id || `ticket-${++this.seq}`, workflow_id, status };
+    this.tickets.push(row);
     return row;
   }
 
@@ -95,17 +107,19 @@ class FakeDb {
         name: params[0],
         project_id: params[1],
         roles: JSON.parse(params[2]),
+        states: JSON.parse(params[3]),
+        transitions: JSON.parse(params[4]),
         is_default: false,
         is_active: false,
-        created_by: params[3],
+        created_by: params[5],
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       };
       this.workflows.push(row);
       return { rows: [{ ...row }] };
     }
-    if (sql.startsWith('UPDATE workflows SET name = $1, roles = $2')) {
-      const w = this.workflows.find((x) => x.id === params[2]);
+    if (sql.startsWith('UPDATE workflows SET name = $1, roles = $2, states = $3, transitions = $4')) {
+      const w = this.workflows.find((x) => x.id === params[4]);
       if (!w) return { rows: [] };
       if (this.workflows.some((x) => x.id !== w.id && x.project_id === w.project_id && x.name === params[0])) {
         const err = new Error('duplicate key value violates unique constraint "idx_workflows_name"');
@@ -114,8 +128,19 @@ class FakeDb {
       }
       w.name = params[0];
       w.roles = JSON.parse(params[1]);
+      w.states = JSON.parse(params[2]);
+      w.transitions = JSON.parse(params[3]);
       w.updated_at = new Date().toISOString();
       return { rows: [{ ...w }] };
+    }
+    if (sql.startsWith('SELECT DISTINCT status FROM tickets WHERE workflow_id = $1 AND status = ANY($2)')) {
+      const rows = this.tickets.filter((t) => t.workflow_id === params[0] && params[1].includes(t.status));
+      const distinct = [...new Set(rows.map((t) => t.status))];
+      return { rows: distinct.map((status) => ({ status })) };
+    }
+    if (sql.startsWith('SELECT id FROM tickets WHERE workflow_id = $1 LIMIT 1')) {
+      const t = this.tickets.find((x) => x.workflow_id === params[0]);
+      return { rows: t ? [{ id: t.id }] : [] };
     }
     if (sql.startsWith('UPDATE workflows SET is_active = false WHERE project_id')) {
       for (const w of this.workflows) {
@@ -139,12 +164,13 @@ class FakeDb {
   }
 
   async withTransaction(fn) {
-    const snap = JSON.stringify({ workflows: this.workflows });
+    const snap = JSON.stringify({ workflows: this.workflows, tickets: this.tickets });
     try {
       return await fn(this);
     } catch (err) {
       const restored = JSON.parse(snap);
       this.workflows = restored.workflows;
+      this.tickets = restored.tickets;
       throw err;
     }
   }
@@ -475,6 +501,176 @@ async function main() {
     const missing = await workflows.deleteWorkflow(db, 'no-such-id', { ...PM });
     assert.equal(missing.ok, false);
     assert.equal(missing.status, 404);
+  });
+
+  await ok('validateWorkflowDefinition: built-in definition and all three example flows validate', async () => {
+    const builtin = workflows.validateWorkflowDefinition({
+      states: sm.BUILTIN_STATES,
+      transitions: sm.BUILTIN_DEFINITION.transitions,
+      roles: workflows.DEFAULT_WORKFLOW_ROLES,
+    });
+    assert.equal(builtin.ok, true);
+    for (const ex of examples.EXAMPLE_WORKFLOWS) {
+      const check = workflows.validateWorkflowDefinition({
+        states: ex.states, transitions: ex.transitions, roles: ex.roles,
+      });
+      assert.equal(check.ok, true, `${ex.name}: ${check.message || ''}`);
+    }
+  });
+
+  await ok('validateWorkflowDefinition: structural failures are rejected with invalid_workflow', async () => {
+    const base = examples.FLOW_WITH_CONFIRMATION;
+    const bad = (mutate) => {
+      const def = JSON.parse(JSON.stringify({ states: base.states, transitions: base.transitions, roles: base.roles }));
+      mutate(def);
+      return workflows.validateWorkflowDefinition(def);
+    };
+    assert.equal(bad((d) => { d.states[0].is_start = false; }).error, 'invalid_workflow'); // no start
+    assert.equal(bad((d) => { d.states[1].is_start = true; }).error, 'invalid_workflow'); // two starts
+    assert.equal(bad((d) => { d.states[4].is_terminal = false; }).error, 'invalid_workflow'); // no terminal
+    assert.equal(bad((d) => { d.states.push({ code: 'orphan', label: '孤兒', sort_order: 5, is_start: false, is_terminal: false }); }).error, 'invalid_workflow'); // unreachable + no outgoing
+    assert.equal(bad((d) => { d.states[1].code = 'Feature Planning'; }).error, 'invalid_workflow'); // bad code
+    assert.equal(bad((d) => { d.states[1].code = 'user_requirement'; }).error, 'invalid_workflow'); // duplicate code
+    assert.equal(bad((d) => { d.transitions[0].to = 'no_such_state'; }).error, 'invalid_workflow'); // unknown to
+    assert.equal(bad((d) => { d.transitions[0].from = d.transitions[0].to; }).error, 'invalid_workflow'); // self loop
+    assert.equal(bad((d) => { d.transitions.push({ ...d.transitions[1] }); }).error, 'invalid_workflow'); // duplicate (from,to)
+    assert.equal(bad((d) => { d.transitions[3].requiresReason = false; }).error, 'invalid_workflow'); // backward without reason
+    assert.equal(bad((d) => { d.transitions[0].kind = 'teleport'; }).error, 'invalid_workflow'); // bad kind
+    assert.equal(bad((d) => { d.transitions[0].role = 'admin'; }).error, 'invalid_workflow'); // bad role
+    assert.equal(bad((d) => { delete d.roles.spec_generation; }).error, 'invalid_roles'); // roles must cover states
+    assert.equal(bad((d) => { d.roles.delivered.role = 'pm'; }).error, 'invalid_roles'); // terminal needs null role
+  });
+
+  await ok('create with states/transitions: example flow A round-trips, transition roles follow the roles map', async () => {
+    const db = new FakeDb();
+    const ex = examples.FLOW_WITH_CONFIRMATION;
+    // Deliberately send one stale transition role: the server must
+    // re-derive it from the roles map on save (ch. 15).
+    const transitions = JSON.parse(JSON.stringify(ex.transitions));
+    transitions[1].role = 'pm'; // feature_planning's role is leader
+    const created = await workflows.createWorkflow(db, {
+      ...PM, name: ex.name, projectId: 'proj-1',
+      roles: ex.roles, states: ex.states, transitions,
+    });
+    assert.equal(created.ok, true, JSON.stringify(created));
+    assert.equal(created.status, 201);
+    assert.equal(created.workflow.states.length, 5);
+    assert.equal(created.workflow.transitions.length, 5);
+    const fixed = created.workflow.transitions.find((t) => t.from === 'feature_planning');
+    assert.equal(fixed.role, 'leader');
+    // The definition stored can be resolved back.
+    const definition = await workflows.getWorkflowDefinition(db, created.workflow.id);
+    assert.equal(definition.states.length, 5);
+    assert.equal(definition.roles.feature_planning.role, 'leader');
+    // A workflow created without states/transitions defaults to the
+    // built-in definition.
+    const plain = await workflows.createWorkflow(db, {
+      ...PM, name: 'Plain', projectId: 'proj-1', roles: workflows.DEFAULT_WORKFLOW_ROLES,
+    });
+    assert.equal(plain.workflow.states.length, 14);
+    assert.equal(plain.workflow.transitions.length, sm.BUILTIN_DEFINITION.transitions.length);
+  });
+
+  await ok('create with an invalid definition is 400 invalid_workflow', async () => {
+    const db = new FakeDb();
+    const ex = examples.FLOW_WITH_CONFIRMATION;
+    const states = JSON.parse(JSON.stringify(ex.states));
+    states[0].is_start = false;
+    const result = await workflows.createWorkflow(db, {
+      ...PM, name: 'Bad', projectId: 'proj-1',
+      roles: ex.roles, states, transitions: ex.transitions,
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.status, 400);
+    assert.equal(result.error, 'invalid_workflow');
+    assert.equal(db.workflows.length, 0);
+  });
+
+  await ok('update: a roles-only change re-derives the stored transition roles', async () => {
+    const db = new FakeDb();
+    const created = await workflows.createWorkflow(db, { ...PM, name: 'A', projectId: 'proj-1', roles: workflows.DEFAULT_WORKFLOW_ROLES });
+    const id = created.workflow.id;
+    const updated = await workflows.updateWorkflow(db, id, {
+      ...PM, roles: rolesWith({ pending_dev: { role: 'tester' } }),
+    });
+    assert.equal(updated.ok, true);
+    assert.equal(updated.workflow.roles.pending_dev.role, 'tester');
+    const moved = updated.workflow.transitions.find((t) => t.from === 'pending_dev');
+    assert.equal(moved.role, 'tester');
+    assert.equal(updated.workflow.states.length, 14);
+  });
+
+  await ok('update: removing a state that has live tickets is refused; removing an unused state is fine', async () => {
+    const db = new FakeDb();
+    const ex = examples.FLOW_WITH_CONFIRMATION;
+    const created = await workflows.createWorkflow(db, {
+      ...PM, name: ex.name, projectId: 'proj-1',
+      roles: ex.roles, states: ex.states, transitions: ex.transitions,
+    });
+    const id = created.workflow.id;
+    db.seedTicket({ workflow_id: id, status: 'feature_planning' });
+    // Removing feature_planning while a live ticket sits in it: the
+    // definition itself stays valid (a direct pickup from
+    // user_requirement to user_confirmation replaces the chain), so
+    // only the state_in_use guard can refuse.
+    const states = JSON.parse(JSON.stringify(ex.states)).filter((s) => s.code !== 'feature_planning');
+    const transitions = JSON.parse(JSON.stringify(ex.transitions)).filter(
+      (t) => t.from !== 'feature_planning' && t.to !== 'feature_planning'
+    );
+    transitions.push({ from: 'user_requirement', to: 'user_confirmation', role: 'leader', requiresReason: false, requiresHandoff: false, kind: 'pickup', selfCheck: false });
+    const roles = JSON.parse(JSON.stringify(ex.roles));
+    delete roles.feature_planning;
+    const refused = await workflows.updateWorkflow(db, id, { ...PM, states, transitions, roles });
+    assert.equal(refused.ok, false);
+    assert.equal(refused.status, 400);
+    assert.equal(refused.error, 'state_in_use');
+    assert.match(refused.message, /feature_planning/);
+    // An unused state removes cleanly: spec_generation goes, and
+    // user_confirmation hands straight to delivered.
+    const states2 = JSON.parse(JSON.stringify(ex.states)).filter((s) => s.code !== 'spec_generation');
+    const transitions2 = JSON.parse(JSON.stringify(ex.transitions)).filter(
+      (t) => t.from !== 'spec_generation' && t.to !== 'spec_generation'
+    );
+    transitions2.push({ from: 'user_confirmation', to: 'delivered', role: 'pm', requiresReason: false, requiresHandoff: false, kind: 'forward', selfCheck: false });
+    const roles2 = JSON.parse(JSON.stringify(ex.roles));
+    delete roles2.spec_generation;
+    const allowed = await workflows.updateWorkflow(db, id, { ...PM, states: states2, transitions: transitions2, roles: roles2 });
+    assert.equal(allowed.ok, true, JSON.stringify(allowed));
+    assert.equal(allowed.workflow.states.length, 4);
+  });
+
+  await ok('delete: a workflow with live tickets is refused', async () => {
+    const db = new FakeDb();
+    const created = await workflows.createWorkflow(db, { ...PM, name: 'A', projectId: 'proj-1', roles: workflows.DEFAULT_WORKFLOW_ROLES });
+    db.seedTicket({ workflow_id: created.workflow.id, status: 'requirement' });
+    const refused = await workflows.deleteWorkflow(db, created.workflow.id, { ...PM });
+    assert.equal(refused.ok, false);
+    assert.equal(refused.status, 400);
+    assert.equal(refused.error, 'workflow_in_use');
+    assert.equal(db.workflows.length, 1);
+  });
+
+  await ok('definitionForTicket: no workflow means built-in; a workflow means its own definition; a missing row is flagged', async () => {
+    const db = new FakeDb();
+    const plain = await workflows.definitionForTicket(db, { workflow_id: null });
+    assert.equal(plain.missing, false);
+    assert.equal(plain.definition.states.length, 14);
+    const ex = examples.FLOW_INCIDENT;
+    const created = await workflows.createWorkflow(db, {
+      ...PM, name: ex.name, projectId: 'proj-1',
+      roles: ex.roles, states: ex.states, transitions: ex.transitions,
+    });
+    const custom = await workflows.definitionForTicket(db, { workflow_id: created.workflow.id });
+    assert.equal(custom.missing, false);
+    assert.equal(custom.definition.states.length, 3);
+    assert.equal(custom.definition.states[0].code, 'system_event');
+    const missing = await workflows.definitionForTicket(db, { workflow_id: 'no-such-workflow' });
+    assert.equal(missing.missing, true);
+    assert.equal(missing.definition, null);
+    // getWorkflowDefinition: stored row resolves, unknown id is null.
+    const resolved = await workflows.getWorkflowDefinition(db, created.workflow.id);
+    assert.equal(resolved.states.length, 3);
+    assert.equal(await workflows.getWorkflowDefinition(db, 'no-such-id'), null);
   });
 
   console.log(`\n${passed} workflow service tests passed.`);

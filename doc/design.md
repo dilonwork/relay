@@ -3,6 +3,7 @@
 > 文件版本：v1.1（已鎖定四項決定，其餘章節為在此基礎上的設計展開）
 > 日期：2026 年 11 月 11 日
 > v1.1 新增：第 11 章帳號、認證與管理（2026 年 11 月 11 日鎖定並實作）
+> v1.2 新增：第 15 章自訂 Workflow：狀態機編輯器（2026 年 11 月 12 日）
 > 適用範圍：Project 需求開發流程為主線；值班（On-Call）告警為工單來源之一，共用同一條流水線
 
 以工單流水線串起專案開發流程：PM 建立需求，Leader 拆解，工程師開發，依序經過 Review、測試與部署，最後交付。每個 Agent 只接自己職責內的工單，每次狀態轉換都可回溯。
@@ -33,6 +34,7 @@
 12. Agent 接入（第二期）
 13. PM 監控（防卡住）
 14. 自訂 Workflow
+15. 自訂 Workflow：狀態機編輯器
 - 附錄 A 狀態代碼對照
 - 附錄 B 工單生命週期範例
 
@@ -506,6 +508,7 @@ api_keys
 
 - 側邊欄 Workflows 項目（只對 PM／Admin 顯示），點開時載入該專案的 workflows 與 active workflow。
 - Workflow 管理畫面（`src/WorkflowsPanel.tsx`，版式沿用 ProjectsPanel 的 card＋table＋form 風格）：專案篩選、workflow 列表（name、Default／Active 徽章、各狀態角色摘要）、建立表單（name＋14 個狀態各一列：角色下拉＋職責文字欄；新建時預設值從預設 workflow 的 roles 帶入）、編輯表單（同樣結構）、設為 active 按鈕、切回預設按鈕、刪除按鈕；後端錯誤訊息顯示在畫面上。角色下拉選項用 6 個 workflow 角色（不要含 admin），label 沿用 `helpers.ts` 的 `ROLE_LABELS`。
+- 狀態與轉換本身的編輯（狀態機編輯器）見第 15 章：本章的表單結構已擴充為 States／Transitions／Roles 三段。
 
 ### 備註
 
@@ -514,7 +517,115 @@ api_keys
 
 ---
 
+## 15. 自訂 Workflow：狀態機編輯器
+
+> 本章實作於工單 baebf8b7：Workflow 不再只是角色對照表，狀態與轉換本身也可以自訂；開單時選擇套用的 workflow，預設為現有 14 狀態開發流程。
+
+### 動機
+
+第 14 章的 Workflow 只能改「某個狀態由哪個角色負責」：14 個狀態寫死在 `stateMachine.js`，不能加狀態、不能改名、不能改順序，短流程設不出來。Dylan 要的三條流程都不是開發流程：
+
+1. 使用者需求 → 功能規劃 → 使用者確認 → 產生規格書 → 交付
+2. 使用者需求 → 功能規劃 → 產生規格書 → 交付
+3. 系統事件 → 建立報案 → 結束
+
+本章把狀態機變成資料：每個 workflow 自帶 states 與 transitions，編輯器讓 Dylan 以後自己加流程；三條流程是第一批驗收範例，不是寫死的模板（fixture 只存在 `server/workflowExamples.js` 供測試與編輯器參考，不做 migration seed）。
+
+### 核心決定：每張工單跟隨一個 workflow definition
+
+- 一張工單在開立時選定一個 workflow，之後不再變更（`tickets.workflow_id`，`ON DELETE SET NULL`）。
+- 沒有 `workflow_id` 的工單走內建 14 狀態流程（第 5 章）；內建流程只是預設 definition，不是特殊程式路徑——狀態機函式改為 definition-driven（`validateTransitionFor`／`allowedTransitionsFor`／`legalTransitionsFor`／`isTerminalFor`／`startStateFor`），舊函式（`validateTransition` 等）改為對內建 definition 的包裝，行為不變。
+- Definition 解析優先順序（`workflows.definitionForTicket`）：工單的 `workflow_id` → 該 workflow 的 states／transitions／roles；無 workflow → 內建 definition。工單指到不存在的 workflow 列時回 `missing: true`，呼叫方視為內部錯誤（500），**不靜默 fallback 到內建流程**——fallback 會把工單留在未知狀態。刪除守則（有工單的 workflow 不可刪）與外鍵使這種情況實務上到不了。
+- 專案 active workflow 的 role map（第 14 章三層 fallback）**只適用於內建流程的工單**。自訂流程工單的角色一律來自它自己的 workflow 的 roles map。理由：active workflow 是「某專案的開發流程用哪套角色對照」，而自訂流程工單根本不在開發流程裡，用專案的對照去覆蓋它自己的對照是錯的。
+
+### 資料模型
+
+- `workflows` 表新增 `states` JSONB 與 `transitions` JSONB（migration 013）。state：`{code, label, sort_order, is_start, is_terminal}`；transition：`{from, to, role, requiresReason, requiresHandoff, kind, selfCheck}`。欄位格式與既有 `TRANSITIONS` 常數一致：transition 用 camelCase（`requiresReason`／`requiresHandoff`／`selfCheck`），state 用 snake_case（`sort_order`／`is_start`／`is_terminal`）。
+- `tickets` 表新增 `workflow_id UUID REFERENCES workflows(id) ON DELETE SET NULL`＋索引 `idx_tickets_workflow`（migration 013）。預設 workflow 列的 states／transitions 由 node 從 `stateMachine.js` 產生（14 states、18 條非 create 轉換）填入，僅當 states 為空時才填。
+- **DB 狀態 CHECK 移除（migration 012）**：`tickets_status_check`、`ticket_transitions_from_status_check`、`ticket_transitions_to_status_check` 三處 DROP（皆 `IF EXISTS`，不重加）。狀態合法性改由應用層按工單的 workflow 驗證；資料庫層再也寫不出所有 workflow 的狀態清單。migration 001／002 就地更新（移除狀態 CHECK，保留 source／actor_role／result CHECK，並在檔頭註明 012 移除）。migration 011 另加一道 guard（DO block）：只有當全部已存狀態都在 14 個內建狀態內時才重加 CHECK——因為伺服器每次啟動都會重跑全部 migration，012 上線後若已有自訂狀態的工單，無條件重加會在每次啟動都失敗、並卡住 012／013 之後的 migration。011 本身的目的不受影響：它首次套用時所有已存狀態都是內建狀態，guard 一定通過。
+
+### 驗證規則（`workflows.validateWorkflowDefinition`）
+
+states：非空、code 為小寫 snake_case 且唯一、label 非空、恰一個起點、至少一個終態；列出的 `cancelled` 必須是終態。transitions：from／to 須為既有狀態、from ≠ to、kind 為 `forward`／`backward`／`pickup`／`clarify`／`return` 之一、requiresReason／requiresHandoff 為布林、backward／return 必須 requiresReason、role 須為 6 個 workflow 角色之一、無重複 (from, to)。roles：覆蓋恰好該 workflow 的 states（`validateRolesMap` 泛化為接受 states 參數，預設內建 14 狀態；roles 失敗沿用舊錯誤碼 `invalid_roles`，結構失敗為 `invalid_workflow`）。結構：每個非終態至少一條出路；從起點可達所有狀態（列出的 `cancelled` 視為可達）。
+
+### 隱式規則：create 與 cancel 不存入 workflow
+
+- **create**：NULL → 起點，PM 開立。開單 API 的稽核列 `to_status` 為該 workflow 的起點。
+- **cancel**：PM、任一非終態 → `cancelled`、需理由。適用於所有 workflow，永遠不列入 workflow 的 transitions。
+- **`cancelled` 是通用取消目標**：即使未列入該 workflow 的 states 也視為終態；列出的 `cancelled` 必須是終態。狀態機對它永遠回終態；轉換驗證允許 `to_status='cancelled'` 即使不在 states 裡。
+
+### 角色：transition 的 role 與 roles map 的關係
+
+- 一個狀態只有一個負責角色（第 14 章的模型不變）：transition 的 role 是「該流程設計時的角色」，roles map 是「該 workflow 指派的角色」。驗證時 roles map 覆蓋 transition 的 role（第 14 章的 override 機制，現在也套用於自訂流程）。
+- 因此**只改 roles map 不必改 transition 表**：把某狀態的角色換掉是合法的 roles-only 更新，transition 表不用跟著改。存檔時伺服器以 roles map 重推每個 transition 的 role（`normalizeDefinition`），讓儲存的列保持一致；但執行期永遠以 roles map 為準。
+- 角色／職責定義放在 Admin／User 上，並註明針對哪個 workflow（需求 3 的解讀）：用戶角色仍是全域的；per-workflow 的差異由各 workflow 自己的 state→role 對照決定——同一人在 workflow A 當 leader 負責某狀態、在 workflow B 當 engineer 負責另一狀態。實作：(a) workflow 編輯器按 workflow 定義 state→role＋responsibilities（標明所屬 workflow）；(b) Admin Users 頁新增衍生顯示：每位用戶在各 workflow 負責的狀態（以其全域角色對照各 workflow 的 role map），標明 workflow 名稱。備選方案（另建 `workflow_user_roles` 表、按 workflow 授權角色）已考慮未採用：它與現有「帳號持有全域多角色」模型衝突，且需求的核心是「同一人在不同 workflow 負責不同狀態」，roles map 已能表達。
+
+### 轉換驗證、佇列、監控、擁有權
+
+- **轉換（`transitionTicket`）**：以工單的 definition 驗證；自訂流程工單的 roleOverrides 是該 workflow 自己的 roles map，內建流程工單維持專案 active workflow 的 role map。退回（`kind=backward`／`return`）需理由，由狀態機的 requiresReason 強制。
+- **佇列（`listClaimable`）**：內建流程維持試行範圍（僅 requirement／pending_dev，角色走專案 role map）；自訂流程改為「目前狀態有 kind=`pickup` 的轉換，且呼叫者持有該狀態的有效角色（roles map 優先）」才可認領。等待接取的狀態就是有 pickup 出路的狀態——定義本身說明了哪裡是佇列。
+- **監控 stalled（`listStalled`／`isStalledState`）**：內建流程維持第 13 章的 `STALLED_STATES` 清單（`pending_deploy` 列入是既定例外：部署是最後一步，不試圖用 transition kind 推導）；自訂流程用通用規則：**非終態、且不是等接取佇列狀態（無出路 pickup 轉換），超過 30 分鐘無轉換**。理由：等接取的票不是卡住，是在等有人領；其餘進行中的狀態超過 30 分鐘沒動靜就是卡住，與第 13 章的 30 分鐘門檻一致。`notify_role` 與 `next_actions` 按工單自己的 workflow 解析（自訂：roles map 或第一條出路轉換的角色；內建：專案 role map＋`responsibleRole` fallback）。實作上候選集不能再用狀態預篩，改為讀取範圍內全部工單再以 JS 依 definition 篩選（每 workflow／專案的 definition 與 role map 各快取一次）。
+- **擁有權（自訂流程，`nextOwnershipForCustom`）**：pickup／cancel 由執行者認領，其餘移交清空 assignee、等下一角色接取；`developer_id` 不動，自訂流程無 self-check（self-check 是開發流程的 Review／測試／部署規則）。
+
+### 開單選 Workflow
+
+- `POST /api/tickets` 接受 `workflow_id`（省略＝內建流程）。workflow 不存在回 404；專案 workflow 只能用於自己專案的工單，否則 400 `workflow_project_mismatch`；全域 workflow（`project_id` NULL）可用於任何專案。新工單狀態為該 workflow 的起點。
+- `GET /api/meta/transitions?workflow_id=` 回傳該 workflow 的 legal transitions（無參數＝內建表，不變）。
+- 前端 New ticket 表單加 workflow 下拉：預設「Default development flow（14 states）」→ `workflow_id` null，其餘為可用 workflows（該專案的或全域的，不含 Default 列本身——null 選項已代表它；他專案的 workflow 不出現）。
+
+### Workflow 編輯器（Admin／PM）
+
+- `src/WorkflowsPanel.tsx` 大改：States 編輯器（label、code、順序上下移、起點 radio、終態 checkbox、新增／刪除；code 改名時自動重指所有引用它的 transition；刪除狀態時一併刪掉相關 transition 與 roles 條目）、Transitions 編輯器（from／to 下拉、kind 下拉 forward／backward／pickup／clarify／return、requiresReason／requiresHandoff checkbox、role 為 from-state 衍生顯示唯讀）、Roles 表改由該 workflow 自己的 states 驅動（不再是寫死的 14 狀態）。
+- 新建預設從 Default workflow 完整複製（states＋transitions＋roles），再編輯。Default workflow 唯讀檢視（View 開啟同一表單、全部 disabled、不送出）。
+- 前端先做與伺服器相同的輕量驗證（恰一個起點、至少一終態、code 格式與唯一、backward／return 需理由、每非終態有出路等），伺服器再驗一次，後端訊息為準。Cancel 不列在編輯器裡（隱式規則，見上）。
+- 守則：仍有工單處於某狀態時，該狀態不可刪除（400 `state_in_use`）；有工單的 workflow 不可刪除（400 `workflow_in_use`）。第 14 章的刪除守則（預設唯讀、active 需替代）維持不變。
+
+### 三條範例流程
+
+`server/workflowExamples.js`（fixture，僅供測試與編輯器參考）：
+
+| 流程 | 狀態 | 轉換 | 角色 |
+| --- | --- | --- | --- |
+| A：含使用者確認 | 使用者需求 → 功能規劃 → 使用者確認 → 產生規格書 → 交付 | 需求→規劃 pickup（leader）；規劃→確認 forward（leader）；確認→規格 forward（pm）；確認→規劃 **backward**（pm，需理由）；規格→交付 forward（engineer） | 需求 leader、規劃 leader、確認 pm、規格 engineer |
+| B：不含確認 | 使用者需求 → 功能規劃 → 產生規格書 → 交付 | 需求→規劃 pickup（leader）；規劃→規格 forward（leader）；規格→交付 forward（engineer） | 同 A 去掉確認 |
+| C：報案 | 系統事件 → 建立報案 → 結束 | 事件→報案 pickup（pm）；報案→結束 forward（engineer） | 事件 pm、報案 engineer（報案由 PM 接取建立、由 engineer 處理結案） |
+
+驗收：三條流程都能在編輯器裡建出來、開單時選得到、按順序走完、使用者確認可退回功能規劃；預設開發流程行為不變（既有測試全過）。
+
+### 端點（新增／變更）
+
+| 方法 | 端點 | 說明 |
+| --- | --- | --- |
+| `POST` | `/api/tickets` | 加 `workflow_id`（見上） |
+| `GET` | `/api/meta/transitions?workflow_id=` | 該 workflow 的 legal transitions；無參數＝內建表 |
+| `POST` | `/api/workflows` | 加 `states`／`transitions`（省略時預設內建 definition；驗證失敗 400 `invalid_workflow`／`invalid_roles`） |
+| `PATCH` | `/api/workflows/:id` | 加 `states`／`transitions`（同上；另有 `state_in_use` 守則） |
+| `DELETE` | `/api/workflows/:id` | 加 `workflow_in_use` 守則（有工單時拒絕） |
+
+### 前端（workflow-aware 顯示）
+
+- `src/api.ts`：Ticket 加 `workflow_id`；Workflow 加 `states`／`transitions`；新 type `WorkflowState`／`WorkflowTransition`；`metaTransitions(workflowId?)`。
+- `src/helpers.ts`：`stateLabelFor`／`isTerminalFor`／`statusBucketFor`（自訂狀態：終態→done、`in_*`／decomposing／deploying→active、其餘 pending）；`statusColor` 對未知狀態碼以 hash 取色；`transitionTargets`／`targetsForUser` 接受 terminal 判斷函式（Cancel 只在非終態出現）；`countTicketsByProject`／`ganttRange` 接受 workflow 對照。
+- 狀態標籤、Dashboard bucket、Gantt 終態判斷、工單詳情、佇列 next-step 皆改走 workflow-aware helper；自訂狀態只出現在 All／Claimable 頁籤，不新增動態頁籤。Admin Users 頁新增「Workflow responsibilities」衍生顯示。
+
+### 測試
+
+- `stateMachine.test.js`：`validateTransitionFor`／`allowedTransitionsFor`／`legalTransitionsFor` 對自訂 definition（建得出、走得完、退得回、cancel、起點、未知狀態、終態、錯角色、backward 需理由）；`legalTransitionsFor(BUILTIN_DEFINITION)` 等於 `legalTransitions()`。
+- `workflows.test.js`：`validateWorkflowDefinition` 各規則、三條範例流程 fixture、create／update 含 states／transitions、roles-only 更新重推 transition roles、`state_in_use`／`workflow_in_use` 守則、`definitionForTicket`。
+- `tickets.test.js`：開單帶 workflow（起點、稽核列、404／400）、三條流程走完＋退回＋cancel、佇列自訂 pickup 規則；預設流程既有測試全過。
+- `monitor.test.js`：自訂流程通用 stalled 規則（工作狀態卡住、佇列／終態不卡住、30 分鐘門檻）、內建清單不變。
+- `migrations.test.js`：001／002 無狀態 CHECK、011 仍重加 14 狀態 CHECK、012 移除三約束且不重加、013 欄位與 seed 內容等於內建 definition。
+
+### 備註
+
+- 未驗證：前端編輯器未做瀏覽器實點驗證（無瀏覽器）；migration 012／013 未在 live PostgreSQL 上實際執行（本機無資料庫），合併部署前應在 VM 臨時 scratch 資料庫驗證 001→013 依序套用與全新建表，絕對不要碰 live 資料庫。
+- 第 14 章的「自訂 Workflow」現指「專案的角色對照」；本章的「狀態機編輯器」指「workflow 自身的 states／transitions」。兩者共用 `workflows` 表：roles map 是第 14 章的層，states／transitions 是本章加的層。
+
+---
+
 ## 附錄 A. 狀態代碼對照
+
+> 本表是內建 14 狀態開發流程的狀態。自訂 workflow 有自己的狀態（見第 15 章），不列在此表。
 
 | 中文狀態 | 代碼 | 類型 | 負責角色 |
 | --- | --- | --- | --- |

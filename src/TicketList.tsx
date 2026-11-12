@@ -1,5 +1,5 @@
-import type { Project, QueueEntry } from './api';
-import { QUEUE_TABS, ROLE_LABELS, formatTime, shortId, statusLabel } from './helpers';
+import type { Project, QueueEntry, Workflow } from './api';
+import { QUEUE_TABS, ROLE_LABELS, formatTime, shortId, stateLabelFor } from './helpers';
 
 interface TicketListProps {
   projects: Project[];
@@ -9,6 +9,9 @@ interface TicketListProps {
   tab: string;
   onTabChange: (key: string) => void;
   tickets: QueueEntry[];
+  // Resolves each ticket's own workflow for its status labels; a
+  // ticket with no workflow uses the built-in labels.
+  workflowById: Map<string, Workflow>;
   selectedId: string | null;
   // Opens the ticket detail in its own view.
   onSelectTicket: (id: string) => void;
@@ -56,10 +59,15 @@ export default function TicketList(props: TicketListProps) {
     tab,
     onTabChange,
     tickets,
+    workflowById,
     selectedId,
     onSelectTicket,
     projectName,
   } = props;
+
+  function labelFor(t: QueueEntry, code: string): string {
+    return stateLabelFor(t.workflow_id ? workflowById.get(t.workflow_id) : undefined, code);
+  }
 
   return (
     <div className="card">
@@ -110,13 +118,13 @@ export default function TicketList(props: TicketListProps) {
                     <td>{t.title}</td>
                     <td>{projectName(t.project_id)}</td>
                     <td>
-                      <span className={`badge ${t.status}`}>{statusLabel(t.status)}</span>
+                      <span className={`badge ${t.status}`}>{labelFor(t, t.status)}</span>
                     </td>
                     <td title={t.assignee_id || ''}>{shortId(t.assignee_id)}</td>
                     {tab === 'claimable' && (
                       <td>
                         {t.next_transition
-                          ? `→ ${statusLabel(t.next_transition.to)} (${ROLE_LABELS[t.next_transition.role] || t.next_transition.role})`
+                          ? `→ ${labelFor(t, t.next_transition.to)} (${ROLE_LABELS[t.next_transition.role] || t.next_transition.role})`
                           : '—'}
                       </td>
                     )}
@@ -137,13 +145,13 @@ export default function TicketList(props: TicketListProps) {
               >
                 <div className="ticket-card-title">{t.title}</div>
                 <div className="ticket-card-meta">
-                  <span className={`badge ${t.status}`}>{statusLabel(t.status)}</span>
+                  <span className={`badge ${t.status}`}>{labelFor(t, t.status)}</span>
                   <span>{projectName(t.project_id)}</span>
                   <span className="muted">{formatTime(t.updated_at)}</span>
                 </div>
                 {tab === 'claimable' && t.next_transition && (
                   <div className="ticket-card-next">
-                    → {statusLabel(t.next_transition.to)} (
+                    → {labelFor(t, t.next_transition.to)} (
                     {ROLE_LABELS[t.next_transition.role] || t.next_transition.role})
                   </div>
                 )}

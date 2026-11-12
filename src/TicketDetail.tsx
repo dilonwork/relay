@@ -1,10 +1,16 @@
-import type { LegalTransition, Project, TicketWithHistory, Transition, User } from './api';
-import { ROLE_LABELS, formatTime, shortId, statusLabel } from './helpers';
+import type { LegalTransition, Project, TicketWithHistory, Transition, User, Workflow } from './api';
+import { ROLE_LABELS, formatTime, shortId, stateLabelFor } from './helpers';
 
 interface TicketDetailProps {
   detail: TicketWithHistory | null;
+  // The ticket's own workflow (null = built-in 14-state flow), for its
+  // status labels.
+  workflow: Workflow | null;
   user: User;
   targets: LegalTransition[];
+  // True while the ticket's workflow transition table is loading; the
+  // transition form waits instead of briefly claiming no move exists.
+  targetsLoading: boolean;
   latestHandoff: Transition | undefined;
   selectedTarget: LegalTransition | undefined;
   isPm: boolean;
@@ -30,8 +36,10 @@ interface TicketDetailProps {
 export default function TicketDetail(props: TicketDetailProps) {
   const {
     detail,
+    workflow,
     user,
     targets,
+    targetsLoading,
     latestHandoff,
     selectedTarget,
     isPm,
@@ -64,6 +72,10 @@ export default function TicketDetail(props: TicketDetailProps) {
     );
   }
 
+  function label(code: string | null): string {
+    return stateLabelFor(workflow, code || '');
+  }
+
   return (
     <div className="card">
       <button className="link" onClick={onBack}>
@@ -73,8 +85,10 @@ export default function TicketDetail(props: TicketDetailProps) {
       <dl className="detail-grid">
         <dt>Status</dt>
         <dd>
-          <span className={`badge ${detail.status}`}>{statusLabel(detail.status)}</span>
+          <span className={`badge ${detail.status}`}>{label(detail.status)}</span>
         </dd>
+        <dt>Workflow</dt>
+        <dd>{workflow ? workflow.name : 'Default development flow'}</dd>
         <dt>Source</dt>
         <dd>{detail.source}</dd>
         <dt>Project</dt>
@@ -98,9 +112,14 @@ export default function TicketDetail(props: TicketDetailProps) {
           <p className="muted">
             Handed off {formatTime(latestHandoff.created_at)} by{' '}
             <span title={latestHandoff.actor_id}>{shortId(latestHandoff.actor_id)}</span> (
-            {ROLE_LABELS[latestHandoff.actor_role] || latestHandoff.actor_role}). If this is not
-            enough to proceed, send the ticket back to Needs clarification with a specific
-            question — the handoff can be judged from the history below.
+            {ROLE_LABELS[latestHandoff.actor_role] || latestHandoff.actor_role}).
+            {!workflow && (
+              <>
+                {' '}
+                If this is not enough to proceed, send the ticket back to Needs clarification with a specific
+                question — the handoff can be judged from the history below.
+              </>
+            )}
           </p>
         </>
       )}
@@ -134,10 +153,12 @@ export default function TicketDetail(props: TicketDetailProps) {
       )}
 
       <h2>Transition</h2>
-      {targets.length === 0 ? (
+      {targetsLoading ? (
+        <p className="muted">Loading transitions…</p>
+      ) : targets.length === 0 ? (
         <p className="muted">
           Your roles ({user.roles.map((r) => ROLE_LABELS[r] || r).join(', ')}) have no legal
-          transition from {statusLabel(detail.status)}.
+          transition from {label(detail.status)}.
         </p>
       ) : (
         <form onSubmit={onTransition}>
@@ -152,7 +173,7 @@ export default function TicketDetail(props: TicketDetailProps) {
                 <option value="">— select —</option>
                 {targets.map((t) => (
                   <option key={t.to} value={t.to}>
-                    {statusLabel(t.to)}
+                    {label(t.to)}
                     {t.requiresReason ? ' (reason required)' : ''}
                     {t.requiresHandoff ? ' (handoff required)' : ''}
                   </option>
@@ -214,8 +235,8 @@ export default function TicketDetail(props: TicketDetailProps) {
                 <td title={tr.actor_id}>{shortId(tr.actor_id)}</td>
                 <td>{ROLE_LABELS[tr.actor_role] || tr.actor_role}</td>
                 <td>
-                  {tr.from_status ? statusLabel(tr.from_status) : '(created)'} →{' '}
-                  {statusLabel(tr.to_status)}
+                  {tr.from_status ? label(tr.from_status) : '(created)'} →{' '}
+                  {label(tr.to_status)}
                 </td>
                 <td>{tr.reason || '—'}</td>
                 <td>{tr.handoff || '—'}</td>

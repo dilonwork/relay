@@ -2,6 +2,10 @@
 -- Design doc ch. 7 (audit): append-only history of every state transition,
 -- including rejected attempts. The trigger enforces append-only at the
 -- database level, so no code path can rewrite history.
+-- The from_status/to_status CHECKs were removed by migration 012
+-- (ticket baebf8b7, design doc ch. 15): states are custom per workflow,
+-- so the application validates statuses against the ticket's workflow
+-- definition instead of the database enforcing a fixed list.
 -- Idempotent: safe to run on every server startup.
 
 CREATE TABLE IF NOT EXISTS ticket_transitions (
@@ -10,24 +14,8 @@ CREATE TABLE IF NOT EXISTS ticket_transitions (
   actor_id TEXT NOT NULL,
   actor_role TEXT NOT NULL
     CHECK (actor_role IN ('pm', 'leader', 'engineer', 'reviewer', 'tester', 'deployer')),
-  from_status TEXT
-    CHECK (from_status IS NULL OR from_status IN (
-      'requirement', 'decomposing', 'needs_clarification',
-      'pending_dev', 'in_dev',
-      'pending_review', 'in_review',
-      'pending_test', 'in_test', 'needs_acceptance_clarification',
-      'pending_deploy', 'deploying',
-      'delivered', 'cancelled'
-    )),
-  to_status TEXT NOT NULL
-    CHECK (to_status IN (
-      'requirement', 'decomposing', 'needs_clarification',
-      'pending_dev', 'in_dev',
-      'pending_review', 'in_review',
-      'pending_test', 'in_test', 'needs_acceptance_clarification',
-      'pending_deploy', 'deploying',
-      'delivered', 'cancelled'
-    )),
+  from_status TEXT,
+  to_status TEXT NOT NULL,
   reason TEXT NOT NULL DEFAULT '',
   artifacts JSONB NOT NULL DEFAULT '[]'::jsonb,
   result TEXT NOT NULL DEFAULT 'applied'

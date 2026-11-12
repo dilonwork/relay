@@ -8,6 +8,9 @@ export interface Ticket {
   developer_id: string | null;
   description: string;
   project_id: string | null;
+  // The workflow the ticket follows (design doc ch. 15); null means
+  // the built-in 14-state development flow.
+  workflow_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -25,15 +28,37 @@ export interface Project {
   ticket_count?: number;
 }
 
-// A workflow (design doc ch. 14): a named mapping of every ticket
+// A workflow (design doc ch. 14/15): a named mapping of every ticket
 // state to the role responsible for it, plus a responsibilities
-// sentence per state. project_id null means the global default
-// workflow, which is read-only and the fallback for every project.
+// sentence per state — and, since the state machine editor (ch. 15),
+// the states and transitions themselves. project_id null means the
+// global default workflow, which is read-only and the fallback for
+// every project.
+export interface WorkflowState {
+  code: string;
+  label: string;
+  sort_order: number;
+  is_start: boolean;
+  is_terminal: boolean;
+}
+
+export interface WorkflowTransition {
+  from: string;
+  to: string;
+  role: string;
+  requiresReason: boolean;
+  requiresHandoff: boolean;
+  kind: string;
+  selfCheck: boolean;
+}
+
 export interface Workflow {
   id: string | null;
   project_id: string | null;
   name: string;
   roles: Record<string, { role: string | null; responsibilities: string }>;
+  states: WorkflowState[];
+  transitions: WorkflowTransition[];
   is_default: boolean;
   is_active: boolean;
   created_by: string | null;
@@ -181,7 +206,10 @@ export const api = {
     request<LoginResponse>('/api/auth/login', { method: 'POST', body: JSON.stringify(payload) }),
   logout: () => request<{ ok: boolean }>('/api/auth/logout', { method: 'POST' }),
   me: () => request<User>('/api/auth/me'),
-  metaTransitions: () => request<LegalTransition[]>('/api/meta/transitions'),
+  metaTransitions: (workflowId?: string | null) => {
+    const qs = workflowId ? `?workflow_id=${encodeURIComponent(workflowId)}` : '';
+    return request<LegalTransition[]>(`/api/meta/transitions${qs}`);
+  },
   listTickets: (status?: string, projectId?: string) => {
     const params = new URLSearchParams();
     if (status) params.set('status', status);
@@ -190,7 +218,7 @@ export const api = {
     return request<Ticket[]>(qs ? `/api/tickets?${qs}` : '/api/tickets');
   },
   getTicket: (id: string) => request<TicketWithHistory>(`/api/tickets/${encodeURIComponent(id)}`),
-  createTicket: (payload: { title: string; description: string; source: string; project_id?: string | null }) =>
+  createTicket: (payload: { title: string; description: string; source: string; project_id?: string | null; workflow_id?: string | null }) =>
     request<Ticket>('/api/tickets', { method: 'POST', body: JSON.stringify(payload) }),
   transitionTicket: (
     id: string,
@@ -216,9 +244,9 @@ export const api = {
     return request<Workflow[]>(`/api/workflows${qs}`);
   },
   getWorkflow: (id: string) => request<Workflow>(`/api/workflows/${encodeURIComponent(id)}`),
-  createWorkflow: (payload: { name: string; project_id?: string | null; roles: Workflow['roles'] }) =>
+  createWorkflow: (payload: { name: string; project_id?: string | null; roles: Workflow['roles']; states?: WorkflowState[]; transitions?: WorkflowTransition[] }) =>
     request<Workflow>('/api/workflows', { method: 'POST', body: JSON.stringify(payload) }),
-  updateWorkflow: (id: string, payload: { name?: string; roles?: Workflow['roles'] }) =>
+  updateWorkflow: (id: string, payload: { name?: string; roles?: Workflow['roles']; states?: WorkflowState[]; transitions?: WorkflowTransition[] }) =>
     request<Workflow>(`/api/workflows/${encodeURIComponent(id)}`, {
       method: 'PATCH',
       body: JSON.stringify(payload),

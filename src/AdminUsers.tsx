@@ -1,11 +1,14 @@
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import { api } from './api';
-import type { Project, User } from './api';
-import { ALL_ROLES, ROLE_LABELS } from './helpers';
+import type { Project, User, Workflow } from './api';
+import { ALL_ROLES, ROLE_LABELS, stateLabelFor } from './helpers';
 
 interface AdminUsersProps {
   users: User[];
   projects: Project[];
+  // All workflows, for the derived "Workflow responsibilities" display:
+  // which states each user owns in each workflow, by their roles.
+  workflows: Workflow[];
   adminError: string;
   adminNotice: string;
   busy: boolean;
@@ -23,6 +26,7 @@ interface AdminUsersProps {
 export default function AdminUsers({
   users,
   projects,
+  workflows,
   adminError,
   adminNotice,
   busy,
@@ -48,9 +52,30 @@ export default function AdminUsers({
   const [assignId, setAssignId] = useState<string | null>(null);
   const [assignProjectValue, setAssignProjectValue] = useState('');
 
+  // Which user's workflow responsibilities are shown below the table.
+  const [responsibilitiesUserId, setResponsibilitiesUserId] = useState<string | null>(null);
+
   function projectName(id: string | null): string {
     if (!id) return 'Unassigned';
     return projects.find((p) => p.id === id)?.name || 'Unknown project';
+  }
+
+  // The states this user owns in each workflow: a state is theirs when
+  // the workflow assigns it a role the user holds. User roles are
+  // global; per-workflow differences come from each workflow's own
+  // role map (design doc ch. 15).
+  function responsibilitiesFor(u: User): { workflow: Workflow; states: string[] }[] {
+    const out: { workflow: Workflow; states: string[] }[] = [];
+    for (const w of workflows) {
+      const states = (w.states || [])
+        .filter((s) => {
+          const role = w.roles[s.code]?.role;
+          return role !== null && role !== undefined && u.roles.includes(role);
+        })
+        .map((s) => `${stateLabelFor(w, s.code)} (${ROLE_LABELS[w.roles[s.code].role as string] || w.roles[s.code].role})`);
+      if (states.length > 0) out.push({ workflow: w, states });
+    }
+    return out;
   }
 
   function toggleRole(list: string[], role: string, checked: boolean): string[] {
@@ -199,6 +224,12 @@ export default function AdminUsers({
                     >
                       Reset password
                     </button>{' '}
+                    <button
+                      className="link"
+                      onClick={() => setResponsibilitiesUserId(responsibilitiesUserId === u.id ? null : u.id)}
+                    >
+                      Responsibilities
+                    </button>{' '}
                     <button className="link" onClick={() => onOpenKeys(u)}>
                       Keys
                     </button>
@@ -208,6 +239,37 @@ export default function AdminUsers({
             </tbody>
           </table>
         )}
+
+        {responsibilitiesUserId && (() => {
+          const u = users.find((x) => x.id === responsibilitiesUserId);
+          if (!u) return null;
+          const rows = responsibilitiesFor(u);
+          return (
+            <div style={{ marginTop: 12, borderTop: '1px solid #e2e8ee', paddingTop: 12 }}>
+              <h2>Workflow responsibilities — {u.display_name || u.username}</h2>
+              <p className="muted">
+                Derived from the user&apos;s roles against each workflow&apos;s own
+                role map. The same person may own different states in
+                different workflows.
+              </p>
+              {rows.length === 0 ? (
+                <p className="muted">No workflow responsibilities — this account holds no role assigned to any state in any workflow.</p>
+              ) : (
+                <dl className="detail-grid">
+                  {rows.map(({ workflow, states }) => (
+                    <Fragment key={workflow.id || workflow.name}>
+                      <dt>{workflow.name}</dt>
+                      <dd>{states.join(' · ')}</dd>
+                    </Fragment>
+                  ))}
+                </dl>
+              )}
+              <button type="button" className="link" onClick={() => setResponsibilitiesUserId(null)}>
+                Close
+              </button>
+            </div>
+          );
+        })()}
 
         {editingId && (
           <form

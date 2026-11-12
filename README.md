@@ -110,16 +110,17 @@ relay/
 │   ├── TicketDetail.tsx  # ticket detail view with transition history
 │   ├── NewTicketForm.tsx # create-ticket form
 │   ├── ProjectsPanel.tsx # project list / create project
-│   ├── WorkflowsPanel.tsx # workflow list / create / edit / set active
+│   ├── WorkflowsPanel.tsx # workflow list / state machine editor / set active
 │   ├── AdminPanel.tsx    # Admin shell: Overview / Users / API keys tabs
 │   ├── AdminOverview.tsx # system overview, tickets by status, audit
-│   ├── AdminUsers.tsx    # user list, create/edit, assign project, reset password
+│   ├── AdminUsers.tsx    # user list, create/edit, assign project, reset password, workflow responsibilities
 │   ├── AdminApiKeys.tsx  # per-user API key management
 │   └── index.css
 ├── server/               # Express backend (Node.js)
 │   ├── index.js          # entry point, API routes
 │   ├── database.js       # pg Pool, auto-creates tables on startup
-│   ├── stateMachine.js   # 14 states, 20 legal transitions, role checks
+│   ├── stateMachine.js   # definition-driven state machine; built-in 14 states, 20 legal transitions, role checks
+│   ├── workflowExamples.js # the three example flows (spec with/without confirmation, incident), test fixtures
 │   ├── tickets.js        # ticket service: create / transition / history / claim queue
 │   ├── projects.js       # project service
 │   ├── workflows.js      # workflow service: CRUD, active workflow, role maps
@@ -136,7 +137,7 @@ relay/
 │   ├── workflows.test.js
 │   └── migrations.test.js
 ├── db/
-│   └── migrations/       # schema as SQL migrations (001-011)
+│   └── migrations/       # schema as SQL migrations (001-013)
 ├── doc/
 │   └── design.md         # design document (Traditional Chinese)
 ├── screenshots/          # README screenshots (see screenshots/README.md)
@@ -164,7 +165,7 @@ The backend needs a PostgreSQL database (default name `relay`, see
 not done by the code in this repo; the server creates the `tickets`,
 `ticket_transitions`, `users`, `sessions`, `api_keys`, `projects`,
 `monitor_reminders` and `workflows` tables itself on startup (migrations
-`db/migrations/001-011`).
+`db/migrations/001-013`).
 
 On first run the users table is empty, so the app shows a setup screen:
 create the first admin account there (username, display name, password).
@@ -222,9 +223,13 @@ ticket service is tested against an in-memory fake implementing the same
 the same way, with controlled clocks for the 30-minute stall rule and
 the 15-minute reminder cycle. The workflow service is tested the same
 way, including the three-layer role-map fallback and the delete rules.
+Custom workflow definitions are covered too: the three example flows
+are walked end to end (including the backward move), the definition
+validator's rules are tested case by case, and the migration files are
+tested for the 001→013 sequence.
 
-101 tests in total: state machine 18, tickets 24, projects 7, auth 13,
-admin 7, API keys 6, monitor 13, workflows 13.
+131 tests in total: state machine 21, tickets 30, projects 7, auth 13,
+admin 7, API keys 6, monitor 17, workflows 21, migrations 9.
 
 ## Accounts & authentication
 
@@ -358,16 +363,41 @@ handlers.
   PM or an Admin creates a named workflow for a project (name + one
   role/responsibilities row per state, pre-filled from the default
   workflow), edits it, sets it active for its project, or deletes it.
+- **State machine editor:** a workflow is not just a role map — it
+  carries its own states and transitions. The editor (States /
+  Transitions / Roles) defines state names, order, start and terminal
+  states, and transitions (from → to, kind forward / backward / pickup /
+  clarify / return, whether a reason or handoff is required). The role
+  for a transition is derived from its from-state's role, so the two
+  never drift apart. Backward and Return transitions must require a
+  reason. Cancel is built in for every workflow (PM, any non-terminal
+  state, reason required) and is not listed in the editor. A new
+  workflow starts as a full copy of the default workflow; the default
+  workflow itself is read-only (view only).
+- **Tickets choose a workflow when created:** the New ticket form offers
+  the default 14-state development flow plus the project's (and global)
+  workflows. A ticket follows its workflow for its whole life; the
+  transition table, claimable queue, stall monitor and status labels all
+  follow the ticket's own workflow. A workflow with live tickets cannot
+  be deleted, and a state with live tickets cannot be removed.
 - **Default workflow:** one global default workflow (`Default`,
   read-only) ships with the system and behaves exactly like the
   built-in flow. A project without an active workflow follows it;
   switching a project's active workflow back to `null` returns it to
   the default. Deleting the active workflow is refused while the
   project has no other workflow to fall back on.
-- **Routing follows the active workflow:** ticket transitions, the
-  claimable queue and the stall monitor's notify role all resolve
-  through the ticket's project workflow (active → default → built-in).
-  Cancel stays PM-only and is never overridden.
+- **Routing follows the active workflow:** for tickets on the built-in
+  flow, ticket transitions, the claimable queue and the stall monitor's
+  notify role all resolve through the ticket's project workflow
+  (active → default → built-in). Cancel stays PM-only and is never
+  overridden. For tickets on a custom workflow, the workflow's own
+  definition and roles map decide instead; the queue only offers states
+  with a pickup transition, and the stall monitor flags non-terminal,
+  non-queue states with no transition for over 30 minutes.
+- **Per-workflow responsibilities:** user roles are global, but each
+  workflow assigns roles per state, so the same person may own
+  different states in different workflows. The Admin Users page shows,
+  per user, which states they own in each workflow.
 - **Endpoints:** see the API table (`/api/workflows`,
   `/api/projects/:id/active-workflow`). Creating, updating, deleting
   and setting the active workflow are PM or Admin; a duplicate name
@@ -418,8 +448,8 @@ log records the role actually exercised.
 | `POST` | `/api/auth/login` | Log in, returns a bearer token |
 | `POST` | `/api/auth/logout` | Log out (revokes the session) |
 | `GET` | `/api/auth/me` | Current account and roles |
-| `GET` | `/api/meta/transitions` | Legal transition table (source of truth for the UI) |
-| `POST` | `/api/tickets` | Create a ticket (PM role required; optional `project_id`) |
+| `GET` | `/api/meta/transitions` | Legal transition table (source of truth for the UI); `?workflow_id=` returns that workflow's table instead of the built-in one |
+| `POST` | `/api/tickets` | Create a ticket (PM role required; optional `project_id` and `workflow_id`, defaulting to the built-in flow) |
 | `GET` | `/api/tickets?status=<state>&project_id=<id\|none>` | List tickets, optionally filtered by state and project; an assigned caller only sees their project's tickets |
 | `GET` | `/api/tickets/:id` | One ticket with its full transition history; reading another project's ticket is rejected 403 `out_of_scope` for an assigned caller |
 | `GET` | `/api/tickets/:id/transitions` | Transition history of one ticket; same scope check as the detail |

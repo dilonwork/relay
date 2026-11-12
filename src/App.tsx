@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, getToken, onUnauthorized, setToken } from './api';
-import type { LegalTransition, Project, QueueEntry, Ticket, TicketWithHistory, User } from './api';
-import { QUEUE_TABS, ROLE_LABELS, countTicketsByProject, journeyFromTransitions, statusLabel, targetsForUser } from './helpers';
+import type { LegalTransition, Project, QueueEntry, Ticket, TicketWithHistory, User, Workflow } from './api';
+import { QUEUE_TABS, ROLE_LABELS, countTicketsByProject, isTerminalFor, journeyFromTransitions, stateLabelFor, statusLabel, targetsForUser } from './helpers';
 import AdminPanel from './AdminPanel';
 import Dashboard from './Dashboard';
 import NewTicketForm from './NewTicketForm';
@@ -44,7 +44,15 @@ export default function App() {
   const [dashboardLoading, setDashboardLoading] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<TicketWithHistory | null>(null);
-  const [meta, setMeta] = useState<LegalTransition[]>([]);
+  // The transition table of the open ticket's own workflow (ch. 15).
+  // Cached per workflow id ('__builtin__' for the default flow) so
+  // opening another ticket on the same workflow needs no request.
+  const [detailMeta, setDetailMeta] = useState<LegalTransition[]>([]);
+  const [detailMetaLoading, setDetailMetaLoading] = useState(false);
+  const metaCacheRef = useRef<Record<string, LegalTransition[]>>({});
+  // All workflows, for the New ticket picker and for workflow-aware
+  // labels (status names, terminal checks) across the ticket views.
+  const [workflows, setWorkflows] = useState<Workflow[]>([]);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
@@ -68,10 +76,19 @@ export default function App() {
   const [newDescription, setNewDescription] = useState('');
   const [newSource, setNewSource] = useState('project');
   const [newProjectId, setNewProjectId] = useState('');
+  const [newWorkflowId, setNewWorkflowId] = useState('');
   const [targetStatus, setTargetStatus] = useState('');
   const [reason, setReason] = useState('');
   const [handoff, setHandoff] = useState('');
   const [artifactsText, setArtifactsText] = useState('');
+
+  // The open ticket's workflow (null = built-in flow), and a lookup of
+  // every workflow by id for the ticket views.
+  const workflowById = new Map<string, Workflow>(
+    workflows.filter((w) => w.id).map((w) => [w.id as string, w])
+  );
+  const detailWorkflow =
+    detail && detail.workflow_id ? workflowById.get(detail.workflow_id) || null : null;
 
   // First-run bootstrap: setup screen if no users exist yet, else restore
   // the session from the stored token, else the login screen.
@@ -110,6 +127,15 @@ export default function App() {
     }
   }, []);
 
+  const loadWorkflows = useCallback(async () => {
+    try {
+      setWorkflows(await api.listWorkflows());
+    } catch (err) {
+      if ((err as { status?: number }).status === 401) return; // handled by onUnauthorized
+      setError(err instanceof Error ? err.message : 'Failed to load workflows.');
+    }
+  }, []);
+
   const loadTickets = useCallback(async (tabKey: string) => {
     const found = QUEUE_TABS.find((t) => t.key === tabKey);
     // The project filter applies to every tab, including the claimable
@@ -137,6 +163,25 @@ export default function App() {
       setHandoff('');
       setArtifactsText('');
       setAssignProjectId(data.project_id || '');
+      // The transition table follows the ticket's own workflow (ch. 15):
+      // the built-in table for a ticket with no workflow, that
+      // workflow's table otherwise.
+      const key = data.workflow_id || '__builtin__';
+      const cached = metaCacheRef.current[key];
+      if (cached) {
+        setDetailMeta(cached);
+      } else {
+        setDetailMetaLoading(true);
+        try {
+          const m = await api.metaTransitions(data.workflow_id);
+          metaCacheRef.current[key] = m;
+          setDetailMeta(m);
+        } catch {
+          setDetailMeta([]);
+        } finally {
+          setDetailMetaLoading(false);
+        }
+      }
     } catch (err) {
       if ((err as { status?: number }).status === 401) return;
       setError(err instanceof Error ? err.message : 'Failed to load ticket.');
@@ -210,13 +255,25 @@ export default function App() {
 
   useEffect(() => {
     if (authState !== 'app') return;
-    api.metaTransitions().then(setMeta).catch(() => setMeta([]));
+    // Pre-fill the built-in table in the meta cache, so the first
+    // built-in ticket detail opens without an extra request.
+    api.metaTransitions().then((m) => {
+      metaCacheRef.current['__builtin__'] = m;
+    }).catch(() => undefined);
   }, [authState]);
 
   useEffect(() => {
     if (authState !== 'app') return;
     loadProjects();
   }, [authState, loadProjects]);
+
+  // Workflows reload on login and on every view change, so the New
+  // ticket picker always offers workflows created in the Workflows
+  // panel just before, and labels stay current.
+  useEffect(() => {
+    if (authState !== 'app') return;
+    loadWorkflows();
+  }, [authState, mainView, loadWorkflows]);
 
   useEffect(() => {
     if (authState !== 'app') return;
@@ -294,10 +351,12 @@ export default function App() {
         description: newDescription,
         source: newSource,
         project_id: newProjectId || null,
+        workflow_id: newWorkflowId || null,
       });
       setNewTitle('');
       setNewDescription('');
       setNewProjectId('');
+      setNewWorkflowId('');
       setNotice(`Ticket created: ${created.title}`);
       setSelectedId(created.id);
       // The detail was opened from New ticket, so going back returns
@@ -373,7 +432,7 @@ export default function App() {
         handoff,
         artifacts,
       });
-      setNotice(`Transition applied: ${statusLabel(res.transition.from_status || '')} → ${statusLabel(res.transition.to_status)}`);
+      setNotice(`Transition applied: ${stateLabelFor(detailWorkflow, res.transition.from_status || '')} → ${stateLabelFor(detailWorkflow, res.transition.to_status)}`);
       await loadDetail(detail.id);
       await loadTickets(tab);
     } catch (err) {
@@ -513,7 +572,9 @@ export default function App() {
     );
   }
 
-  const targets = detail ? targetsForUser(meta, detail.status, user) : [];
+  const targets = detail && detailMeta.length
+    ? targetsForUser(detailMeta, detail.status, user, (s) => isTerminalFor(detailWorkflow, s))
+    : [];
   const latestHandoff = detail
     ? [...detail.transitions].reverse().find((tr) => tr.handoff && tr.handoff.trim())
     : undefined;
@@ -531,7 +592,7 @@ export default function App() {
     projectFilter !== 'all' && projectFilter !== 'none'
       ? projects.find((p) => p.id === projectFilter)
       : undefined;
-  const dashboardCounts = countTicketsByProject(dashboardTickets);
+  const dashboardCounts = countTicketsByProject(dashboardTickets, workflowById);
 
   function projectName(id: string | null): string {
     if (!id) return '—';
@@ -756,6 +817,8 @@ export default function App() {
           description={newDescription}
           source={newSource}
           projectId={newProjectId}
+          workflowId={newWorkflowId}
+          workflows={workflows}
           projects={projects}
           isPm={isPm}
           busy={busy}
@@ -763,13 +826,16 @@ export default function App() {
           onDescriptionChange={setNewDescription}
           onSourceChange={setNewSource}
           onProjectIdChange={setNewProjectId}
+          onWorkflowIdChange={setNewWorkflowId}
           onSubmit={handleCreate}
         />
       ) : mainView === 'detail' ? (
         <TicketDetail
           detail={detail}
+          workflow={detailWorkflow}
           user={user}
           targets={targets}
+          targetsLoading={detailMetaLoading}
           latestHandoff={latestHandoff}
           selectedTarget={selectedTarget}
           isPm={isPm}
@@ -799,6 +865,7 @@ export default function App() {
           ganttTickets={ganttTickets}
           journeys={journeys}
           ganttLoading={ganttLoading}
+          workflowById={workflowById}
           selectedId={selectedId}
           onSelectTicket={openTicket}
         />
@@ -811,6 +878,7 @@ export default function App() {
           tab={tab}
           onTabChange={setTab}
           tickets={tickets}
+          workflowById={workflowById}
           selectedId={selectedId}
           onSelectTicket={openTicket}
           projectName={projectName}
