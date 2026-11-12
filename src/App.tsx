@@ -19,6 +19,7 @@ export default function App() {
   const [authError, setAuthError] = useState('');
 
   const [mainView, setMainView] = useState<MainView>('tickets');
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [tab, setTab] = useState('all');
   const [display, setDisplay] = useState<'list' | 'gantt'>('list');
   const [ganttTickets, setGanttTickets] = useState<Ticket[]>([]);
@@ -447,6 +448,8 @@ export default function App() {
   const selectedTarget = targets.find((t) => t.to === targetStatus);
   const isAdmin = user.roles.includes('admin');
   const isPm = user.roles.includes('pm');
+  // The Tickets nav item stays active while a ticket detail is open.
+  const activeView = mainView === 'detail' ? 'tickets' : mainView;
   const canManageProjects = isPm || isAdmin;
   // The project currently in view: a specific project (single-project
   // view), 'none' for uncategorized, or undefined for all projects.
@@ -461,7 +464,96 @@ export default function App() {
   }
 
   return (
-    <div className="container">
+    <div className={sidebarCollapsed ? 'layout collapsed' : 'layout'}>
+      <aside className="sidebar">
+        <div className="sidebar-brand">
+          <span className="brand-text">Relay</span>
+          <button
+            className="collapse-toggle"
+            onClick={() => setSidebarCollapsed((v) => !v)}
+            aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          >
+            {sidebarCollapsed ? '»' : '«'}
+          </button>
+        </div>
+
+        <nav className="sidebar-nav" aria-label="Modules">
+          <button
+            className={activeView === 'tickets' ? 'active' : ''}
+            onClick={() => setMainView('tickets')}
+            title="Tickets"
+          >
+            <span className="nav-icon" aria-hidden="true">☰</span>
+            <span className="nav-label">Tickets</span>
+          </button>
+          <button
+            className={mainView === 'new' ? 'active' : ''}
+            onClick={() => setMainView('new')}
+            title="New ticket"
+          >
+            <span className="nav-icon" aria-hidden="true">+</span>
+            <span className="nav-label">New ticket</span>
+          </button>
+          {canManageProjects && (
+            <button
+              className={mainView === 'projects' ? 'active' : ''}
+              onClick={() => setMainView('projects')}
+              title="Projects"
+            >
+              <span className="nav-icon" aria-hidden="true">▦</span>
+              <span className="nav-label">Projects</span>
+            </button>
+          )}
+          {isAdmin && (
+            <button
+              className={mainView === 'admin' ? 'active' : ''}
+              onClick={() => setMainView('admin')}
+              title="Admin"
+            >
+              <span className="nav-icon" aria-hidden="true">⚙</span>
+              <span className="nav-label">Admin</span>
+            </button>
+          )}
+        </nav>
+
+        <div className="sidebar-filter">
+          <label className="field" htmlFor="project-filter">Project</label>
+          <select
+            id="project-filter"
+            value={projectFilter}
+            onChange={(e) => setProjectFilter(e.target.value)}
+          >
+            <option value="all">All projects</option>
+            <option value="none">Uncategorized</option>
+            {projects.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="sidebar-user">
+          <span className="who">
+            {user.display_name || user.username}{' '}
+            <span className="sidebar-username">({user.username})</span>
+          </span>
+          <span className="roles">
+            {user.roles.map((r) => (
+              <span key={r} className="badge">
+                {ROLE_LABELS[r] || r}
+              </span>
+            ))}
+          </span>
+          <button className="link logout" onClick={handleLogout} title="Log out">
+            <span className="nav-icon" aria-hidden="true">⎋</span>
+            <span className="nav-label">Log out</span>
+          </button>
+        </div>
+      </aside>
+
+      <div className="container content">
       <header>
         <div>
           <h1>Relay</h1>
@@ -479,54 +571,8 @@ export default function App() {
         </button>
       </header>
 
-      <div className="user-bar">
-        <span className="who">
-          {user.display_name || user.username} <span className="muted">({user.username})</span>
-        </span>
-        {user.roles.map((r) => (
-          <span key={r} className="badge">
-            {ROLE_LABELS[r] || r}
-          </span>
-        ))}
-        <span className="spacer" />
-        <button className="link" onClick={handleLogout}>
-          Log out
-        </button>
-      </div>
-
       {error && <div className="banner error">{error}</div>}
       {notice && <div className="banner notice">{notice}</div>}
-
-      <nav className="tabs" aria-label="Views">
-        <button
-          className={mainView === 'tickets' || mainView === 'detail' ? 'active' : ''}
-          onClick={() => setMainView('tickets')}
-        >
-          Tickets
-        </button>
-        <button
-          className={mainView === 'new' ? 'active' : ''}
-          onClick={() => setMainView('new')}
-        >
-          New ticket
-        </button>
-        {canManageProjects && (
-          <button
-            className={mainView === 'projects' ? 'active' : ''}
-            onClick={() => setMainView('projects')}
-          >
-            Projects
-          </button>
-        )}
-        {isAdmin && (
-          <button
-            className={mainView === 'admin' ? 'active' : ''}
-            onClick={() => setMainView('admin')}
-          >
-            Admin
-          </button>
-        )}
-      </nav>
 
       {mainView === 'admin' && isAdmin ? (
         <AdminPanel />
@@ -601,6 +647,7 @@ export default function App() {
           projectName={projectName}
         />
       )}
+      </div>
     </div>
   );
 }

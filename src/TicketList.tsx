@@ -54,24 +54,6 @@ export default function TicketList(props: TicketListProps) {
   return (
     <div className="card">
       <h2>Tickets</h2>
-      <div className="form-row">
-        <div>
-          <label className="field" htmlFor="project-filter">Project</label>
-          <select
-            id="project-filter"
-            value={projectFilter}
-            onChange={(e) => onProjectFilterChange(e.target.value)}
-          >
-            <option value="all">All projects</option>
-            <option value="none">Uncategorized</option>
-            {projects.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
-        </div>
-      </div>
       {selectedProject && (
         <div>
           <h3>{selectedProject.name}</h3>
