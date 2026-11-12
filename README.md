@@ -31,7 +31,7 @@ so screenshots taken now would not match the current UI). See
 
 ![Ticket detail — transition history](screenshots/ticket-detail.png)
 
-![Claimable queue — 待接單](screenshots/claimable-queue.png)
+![Claimable queue](screenshots/claimable-queue.png)
 
 ![Projects — project view](screenshots/projects.png)
 
@@ -105,7 +105,8 @@ relay/
 │   ├── api.ts            # typed API client (session + API key)
 │   ├── helpers.ts        # labels, queue tabs, status buckets
 │   ├── Dashboard.tsx     # default page: project overview
-│   ├── TicketList.tsx    # ticket table + Gantt toggle + claimable queue
+│   ├── TicketList.tsx    # All tickets list + claimable queue
+│   ├── TicketGantt.tsx   # Gantt timeline, grouped by project
 │   ├── TicketDetail.tsx  # ticket detail view with transition history
 │   ├── NewTicketForm.tsx # create-ticket form
 │   ├── ProjectsPanel.tsx # project list / create project
@@ -181,17 +182,20 @@ account or password anywhere in the code.
 - **Left sidebar:** a dark sidebar holds the module navigation —
   Dashboard, Tickets, New ticket, Projects (PM or Admin only) and Admin
   (admin only) — plus a project filter, the signed-in user's name,
-  username and role badges, and Log out. The active module is
+  username and role badges, and Log out. Tickets is an expandable group
+  with two sub-pages, All tickets and Gantt; the group stays active on
+  either sub-page and while a ticket detail is open. The active module is
   highlighted. A collapse toggle shrinks the sidebar to a 60px icon rail;
   on narrow screens (≤720px) it collapses to the icon rail automatically.
 - **Module views:** one module is shown at a time. The Dashboard is the
-  default view; Tickets holds the ticket list with its List/Gantt toggle,
-  the 待接單 (claimable) queue tab, the project filter and the ticket
-  creation entry; New ticket is the create form; Projects is the project
-  list; Admin is the admin area (see [Admin](#admin)).
+  default view; Tickets holds the ticket list (All tickets sub-page, with
+  the Claimable queue tab and the project filter) and the Gantt timeline
+  (Gantt sub-page), and the ticket creation entry; New ticket is the
+  create form; Projects is the project list; Admin is the admin area (see [Admin](#admin)).
 - **Ticket detail is its own view:** clicking a ticket (from the list, a
   Gantt bar or the claimable queue) opens the detail view with its full
-  transition history and handoff notes; a back link returns to Tickets.
+  transition history and handoff notes; a back link returns to the
+  Tickets sub-page it came from.
 
 ## Tests
 
@@ -253,9 +257,9 @@ ticket service is tested against an in-memory fake implementing the same
   trial covers decomposing and development only: a ticket in
   `requirement` waits for a leader, a ticket in `pending_dev` waits for
   an engineer. Tickets already in progress are not claimable. The
-  frontend has a 待接單 (claimable) tab for this queue. The tab is not
+  frontend has a Claimable tab for this queue. The tab is not
   redundant with the status tabs: a status tab lists every ticket in
-  that state, while 待接單 lists only the tickets the caller can claim
+  that state, while Claimable lists only the tickets the caller can claim
   by role (merged across roles for multi-role accounts), each with its
   next transition.
 - **Agent assignment:** an admin assigns an agent account to one project
@@ -310,7 +314,7 @@ handlers.
 - **Single-project view:** the ticket list has a project filter (all
   projects / uncategorized / one project). Picking a project shows only
   its tickets, with the project name, description and ticket count on
-  top; the same filter applies to the 待接單 (claimable) queue. The
+  top; the same filter applies to the Claimable queue. The
   ticket list also shows a Project column, and the detail view shows
   the ticket's project with a PM-only control to move it.
 - **Endpoints:** see the API table (`/api/projects`,
@@ -338,9 +342,9 @@ handlers.
 - **Default page:** the app lands on the Dashboard, a project overview
   listing every project with its ticket counts (in progress / waiting /
   done, computed from `GET /api/tickets`).
-- **Project view:** clicking a project opens that project's view with
-  its Gantt chart; the Gantt/List toggle switches to the ticket table
-  for the same project. Uncategorized tickets get their own row.
+- **Project view:** clicking a project opens the Tickets > Gantt
+  sub-page for that project; All tickets shows the ticket table for
+  the same project. Uncategorized tickets get their own row.
 - The Dashboard is a sidebar item alongside Tickets, New ticket,
   Projects and Admin.
 

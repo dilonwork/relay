@@ -48,7 +48,7 @@ export const ALL_ROLES = ['pm', 'leader', 'engineer', 'reviewer', 'tester', 'dep
 // engineer on-call checks poll it every 5 minutes.
 export const QUEUE_TABS: { key: string; label: string; status: string | null }[] = [
   { key: 'all', label: 'All', status: null },
-  { key: 'claimable', label: '待接單', status: '__claimable__' },
+  { key: 'claimable', label: 'Claimable', status: '__claimable__' },
   { key: 'requirement', label: 'Requirement', status: 'requirement' },
   { key: 'needs_clarification', label: 'Needs clarification', status: 'needs_clarification' },
   { key: 'pending_dev', label: 'Pending dev', status: 'pending_dev' },
