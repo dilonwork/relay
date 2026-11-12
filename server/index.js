@@ -298,7 +298,7 @@ app.patch('/api/tickets/:id/project', async (req, res) => {
 // Reads are project-scoped like the ticket reads: an account assigned
 // to one project only sees that project's workflows plus the global
 // default; asking for another project's list is 403 out_of_scope.
-// Mutations are PM or Admin; the service enforces it.
+// Mutations are Admin only; the service enforces it.
 app.get('/api/workflows', async (req, res) => {
   try {
     const projectId = req.query.project_id ? String(req.query.project_id).trim() : undefined;

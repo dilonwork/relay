@@ -230,22 +230,24 @@ async function main() {
     assert.equal(workflows.validateRolesMap({}).ok, false);
   });
 
-  await ok('PM and Admin may create a workflow; other roles may not', async () => {
+  await ok('Only Admin may create a workflow; PM and other roles may not', async () => {
     const db = new FakeDb();
-    const byPm = await workflows.createWorkflow(db, {
-      ...PM, name: 'Strict', projectId: 'proj-1', roles: workflows.DEFAULT_WORKFLOW_ROLES,
-    });
-    assert.equal(byPm.ok, true);
-    assert.equal(byPm.status, 201);
-    assert.equal(byPm.workflow.name, 'Strict');
-    assert.equal(byPm.workflow.project_id, 'proj-1');
-    assert.equal(byPm.workflow.is_default, false);
-    assert.equal(byPm.workflow.is_active, false);
-    assert.deepEqual(byPm.workflow.roles, workflows.DEFAULT_WORKFLOW_ROLES);
     const byAdmin = await workflows.createWorkflow(db, {
-      ...ADMIN, name: 'Loose', projectId: 'proj-2', roles: workflows.DEFAULT_WORKFLOW_ROLES,
+      ...ADMIN, name: 'Strict', projectId: 'proj-1', roles: workflows.DEFAULT_WORKFLOW_ROLES,
     });
     assert.equal(byAdmin.ok, true);
+    assert.equal(byAdmin.status, 201);
+    assert.equal(byAdmin.workflow.name, 'Strict');
+    assert.equal(byAdmin.workflow.project_id, 'proj-1');
+    assert.equal(byAdmin.workflow.is_default, false);
+    assert.equal(byAdmin.workflow.is_active, false);
+    assert.deepEqual(byAdmin.workflow.roles, workflows.DEFAULT_WORKFLOW_ROLES);
+    const byPm = await workflows.createWorkflow(db, {
+      ...PM, name: 'Loose', projectId: 'proj-2', roles: workflows.DEFAULT_WORKFLOW_ROLES,
+    });
+    assert.equal(byPm.ok, false);
+    assert.equal(byPm.status, 403);
+    assert.equal(byPm.error, 'wrong_role');
     const byEngineer = await workflows.createWorkflow(db, {
       actorId: 'dev-1', actorRoles: ['engineer'],
       name: 'Nope', projectId: 'proj-1', roles: workflows.DEFAULT_WORKFLOW_ROLES,
@@ -255,37 +257,68 @@ async function main() {
     assert.equal(byEngineer.error, 'wrong_role');
   });
 
+  await ok('PM is refused all four workflow mutations', async () => {
+    const db = new FakeDb();
+    const created = await workflows.createWorkflow(db, {
+      ...ADMIN, name: 'A', projectId: 'proj-1', roles: workflows.DEFAULT_WORKFLOW_ROLES,
+    });
+    assert.equal(created.ok, true);
+    const id = created.workflow.id;
+    const create = await workflows.createWorkflow(db, {
+      ...PM, name: 'B', projectId: 'proj-1', roles: workflows.DEFAULT_WORKFLOW_ROLES,
+    });
+    assert.equal(create.ok, false);
+    assert.equal(create.status, 403);
+    assert.equal(create.error, 'wrong_role');
+    const update = await workflows.updateWorkflow(db, id, { ...PM, name: 'Renamed' });
+    assert.equal(update.ok, false);
+    assert.equal(update.status, 403);
+    assert.equal(update.error, 'wrong_role');
+    const del = await workflows.deleteWorkflow(db, id, { ...PM });
+    assert.equal(del.ok, false);
+    assert.equal(del.status, 403);
+    assert.equal(del.error, 'wrong_role');
+    const setActive = await workflows.setActiveWorkflow(db, { ...PM, projectId: 'proj-1', workflowId: id });
+    assert.equal(setActive.ok, false);
+    assert.equal(setActive.status, 403);
+    assert.equal(setActive.error, 'wrong_role');
+    // Nothing was mutated: the workflow is still there, unchanged.
+    assert.equal(db.workflows.length, 1);
+    assert.equal(db.workflows[0].name, 'A');
+    assert.equal(db.workflows[0].is_active, false);
+  });
+
   await ok('create: name required, unknown project is 400, duplicate name is 409', async () => {
     const db = new FakeDb();
     const noName = await workflows.createWorkflow(db, {
-      ...PM, name: '   ', projectId: 'proj-1', roles: workflows.DEFAULT_WORKFLOW_ROLES,
+      ...ADMIN, name: '   ', projectId: 'proj-1', roles: workflows.DEFAULT_WORKFLOW_ROLES,
     });
     assert.equal(noName.ok, false);
     assert.equal(noName.status, 400);
     const unknown = await workflows.createWorkflow(db, {
-      ...PM, name: 'X', projectId: 'no-such-project', roles: workflows.DEFAULT_WORKFLOW_ROLES,
+      ...ADMIN, name: 'X', projectId: 'no-such-project', roles: workflows.DEFAULT_WORKFLOW_ROLES,
     });
     assert.equal(unknown.ok, false);
     assert.equal(unknown.status, 400);
     assert.equal(unknown.error, 'unknown_project');
     const badRoles = await workflows.createWorkflow(db, {
-      ...PM, name: 'X', projectId: 'proj-1', roles: { requirement: { role: 'leader', responsibilities: 'x' } },
+      ...ADMIN, name: 'X', projectId: 'proj-1', roles: { requirement: { role: 'leader', responsibilities: 'x' } },
     });
     assert.equal(badRoles.ok, false);
     assert.equal(badRoles.status, 400);
     assert.equal(badRoles.error, 'invalid_roles');
     await workflows.createWorkflow(db, {
-      ...PM, name: 'Strict', projectId: 'proj-1', roles: workflows.DEFAULT_WORKFLOW_ROLES,
+      ...ADMIN, name: 'Strict', projectId: 'proj-1', roles: workflows.DEFAULT_WORKFLOW_ROLES,
     });
     const dup = await workflows.createWorkflow(db, {
-      ...PM, name: 'Strict', projectId: 'proj-1', roles: workflows.DEFAULT_WORKFLOW_ROLES,
+      ...ADMIN, name: 'Strict', projectId: 'proj-1', roles: workflows.DEFAULT_WORKFLOW_ROLES,
     });
     assert.equal(dup.ok, false);
     assert.equal(dup.status, 409);
     assert.equal(dup.error, 'workflow_name_taken');
     // The same name in another project is fine.
     const otherProject = await workflows.createWorkflow(db, {
-      ...PM, name: 'Strict', projectId: 'proj-2', roles: workflows.DEFAULT_WORKFLOW_ROLES,
+      ...ADMIN, name: 'Strict', projectId: 'proj-2', roles: workflows.DEFAULT_WORKFLOW_ROLES,
     });
     assert.equal(otherProject.ok, true);
     assert.equal(db.workflows.length, 2);
@@ -294,8 +327,8 @@ async function main() {
   await ok('list: unassigned callers see all, assigned callers see only their project plus the global default', async () => {
     const db = new FakeDb();
     db.seedDefault();
-    const a = await workflows.createWorkflow(db, { ...PM, name: 'A', projectId: 'proj-1', roles: workflows.DEFAULT_WORKFLOW_ROLES });
-    await workflows.createWorkflow(db, { ...PM, name: 'B', projectId: 'proj-2', roles: workflows.DEFAULT_WORKFLOW_ROLES });
+    const a = await workflows.createWorkflow(db, { ...ADMIN, name: 'A', projectId: 'proj-1', roles: workflows.DEFAULT_WORKFLOW_ROLES });
+    await workflows.createWorkflow(db, { ...ADMIN, name: 'B', projectId: 'proj-2', roles: workflows.DEFAULT_WORKFLOW_ROLES });
     const all = await workflows.listWorkflows(db, {});
     assert.equal(all.length, 3);
     const proj1 = await workflows.listWorkflows(db, { projectId: 'proj-1' });
@@ -310,7 +343,7 @@ async function main() {
   await ok('get: missing is 404, cross-project is 403 out_of_scope, global is visible to all', async () => {
     const db = new FakeDb();
     const def = db.seedDefault();
-    const created = await workflows.createWorkflow(db, { ...PM, name: 'A', projectId: 'proj-1', roles: workflows.DEFAULT_WORKFLOW_ROLES });
+    const created = await workflows.createWorkflow(db, { ...ADMIN, name: 'A', projectId: 'proj-1', roles: workflows.DEFAULT_WORKFLOW_ROLES });
     const own = await workflows.getWorkflow(db, created.workflow.id, { assignedProjectId: 'proj-1' });
     assert.equal(own.ok, true);
     assert.equal(own.workflow.name, 'A');
@@ -327,26 +360,26 @@ async function main() {
 
   await ok('update: name and roles change; invalid roles and duplicate names are rejected', async () => {
     const db = new FakeDb();
-    const created = await workflows.createWorkflow(db, { ...PM, name: 'A', projectId: 'proj-1', roles: workflows.DEFAULT_WORKFLOW_ROLES });
+    const created = await workflows.createWorkflow(db, { ...ADMIN, name: 'A', projectId: 'proj-1', roles: workflows.DEFAULT_WORKFLOW_ROLES });
     const id = created.workflow.id;
     const updated = await workflows.updateWorkflow(db, id, {
-      ...PM, name: 'A2', roles: rolesWith({ pending_dev: { role: 'tester' } }),
+      ...ADMIN, name: 'A2', roles: rolesWith({ pending_dev: { role: 'tester' } }),
     });
     assert.equal(updated.ok, true);
     assert.equal(updated.workflow.name, 'A2');
     assert.equal(updated.workflow.roles.pending_dev.role, 'tester');
-    const badRoles = await workflows.updateWorkflow(db, id, { ...PM, roles: { requirement: { role: 'leader', responsibilities: 'x' } } });
+    const badRoles = await workflows.updateWorkflow(db, id, { ...ADMIN, roles: { requirement: { role: 'leader', responsibilities: 'x' } } });
     assert.equal(badRoles.ok, false);
     assert.equal(badRoles.status, 400);
     assert.equal(badRoles.error, 'invalid_roles');
-    await workflows.createWorkflow(db, { ...PM, name: 'B', projectId: 'proj-1', roles: workflows.DEFAULT_WORKFLOW_ROLES });
-    const dup = await workflows.updateWorkflow(db, id, { ...PM, name: 'B' });
+    await workflows.createWorkflow(db, { ...ADMIN, name: 'B', projectId: 'proj-1', roles: workflows.DEFAULT_WORKFLOW_ROLES });
+    const dup = await workflows.updateWorkflow(db, id, { ...ADMIN, name: 'B' });
     assert.equal(dup.ok, false);
     assert.equal(dup.status, 409);
-    const notPm = await workflows.updateWorkflow(db, id, { actorId: 'dev-1', actorRoles: ['engineer'], name: 'C' });
-    assert.equal(notPm.ok, false);
-    assert.equal(notPm.status, 403);
-    const missing = await workflows.updateWorkflow(db, 'no-such-id', { ...PM, name: 'C' });
+    const notAdmin = await workflows.updateWorkflow(db, id, { actorId: 'dev-1', actorRoles: ['engineer'], name: 'C' });
+    assert.equal(notAdmin.ok, false);
+    assert.equal(notAdmin.status, 403);
+    const missing = await workflows.updateWorkflow(db, 'no-such-id', { ...ADMIN, name: 'C' });
     assert.equal(missing.ok, false);
     assert.equal(missing.status, 404);
   });
@@ -354,15 +387,15 @@ async function main() {
   await ok('default workflow is read-only: update, delete and set-active all refuse it', async () => {
     const db = new FakeDb();
     const def = db.seedDefault();
-    const upd = await workflows.updateWorkflow(db, def.id, { ...PM, name: 'Renamed' });
+    const upd = await workflows.updateWorkflow(db, def.id, { ...ADMIN, name: 'Renamed' });
     assert.equal(upd.ok, false);
     assert.equal(upd.status, 400);
     assert.equal(upd.error, 'default_workflow_readonly');
-    const del = await workflows.deleteWorkflow(db, def.id, { ...PM });
+    const del = await workflows.deleteWorkflow(db, def.id, { ...ADMIN });
     assert.equal(del.ok, false);
     assert.equal(del.status, 400);
     assert.equal(del.error, 'default_workflow_readonly');
-    const act = await workflows.setActiveWorkflow(db, { ...PM, projectId: 'proj-1', workflowId: def.id });
+    const act = await workflows.setActiveWorkflow(db, { ...ADMIN, projectId: 'proj-1', workflowId: def.id });
     assert.equal(act.ok, false);
     assert.equal(act.status, 400);
     assert.equal(act.error, 'default_workflow_readonly');
@@ -374,10 +407,10 @@ async function main() {
   await ok('set active: one active per project, other projects unaffected, null clears back to default', async () => {
     const db = new FakeDb();
     db.seedDefault();
-    const a = await workflows.createWorkflow(db, { ...PM, name: 'A', projectId: 'proj-1', roles: workflows.DEFAULT_WORKFLOW_ROLES });
-    const b = await workflows.createWorkflow(db, { ...PM, name: 'B', projectId: 'proj-1', roles: workflows.DEFAULT_WORKFLOW_ROLES });
-    const c = await workflows.createWorkflow(db, { ...PM, name: 'C', projectId: 'proj-2', roles: workflows.DEFAULT_WORKFLOW_ROLES });
-    const setA = await workflows.setActiveWorkflow(db, { ...PM, projectId: 'proj-1', workflowId: a.workflow.id });
+    const a = await workflows.createWorkflow(db, { ...ADMIN, name: 'A', projectId: 'proj-1', roles: workflows.DEFAULT_WORKFLOW_ROLES });
+    const b = await workflows.createWorkflow(db, { ...ADMIN, name: 'B', projectId: 'proj-1', roles: workflows.DEFAULT_WORKFLOW_ROLES });
+    const c = await workflows.createWorkflow(db, { ...ADMIN, name: 'C', projectId: 'proj-2', roles: workflows.DEFAULT_WORKFLOW_ROLES });
+    const setA = await workflows.setActiveWorkflow(db, { ...ADMIN, projectId: 'proj-1', workflowId: a.workflow.id });
     assert.equal(setA.ok, true);
     assert.equal(setA.workflow.is_active, true);
     assert.equal(setA.is_default, false);
@@ -385,7 +418,7 @@ async function main() {
     assert.equal(active.workflow.name, 'A');
     assert.equal(active.is_default, false);
     // Setting B active clears A, in the same project only.
-    await workflows.setActiveWorkflow(db, { ...PM, projectId: 'proj-1', workflowId: b.workflow.id });
+    await workflows.setActiveWorkflow(db, { ...ADMIN, projectId: 'proj-1', workflowId: b.workflow.id });
     active = await workflows.getActiveWorkflow(db, 'proj-1', {});
     assert.equal(active.workflow.name, 'B');
     assert.equal(db.workflows.find((w) => w.id === a.workflow.id).is_active, false);
@@ -394,19 +427,19 @@ async function main() {
     assert.equal(active2.is_default, true);
     assert.equal(active2.workflow.name, 'Default');
     // A workflow from another project cannot be set active here.
-    const mismatch = await workflows.setActiveWorkflow(db, { ...PM, projectId: 'proj-1', workflowId: c.workflow.id });
+    const mismatch = await workflows.setActiveWorkflow(db, { ...ADMIN, projectId: 'proj-1', workflowId: c.workflow.id });
     assert.equal(mismatch.ok, false);
     assert.equal(mismatch.status, 400);
     assert.equal(mismatch.error, 'workflow_project_mismatch');
     // Unknown project and unknown workflow.
-    const unknownProject = await workflows.setActiveWorkflow(db, { ...PM, projectId: 'no-such-project', workflowId: b.workflow.id });
+    const unknownProject = await workflows.setActiveWorkflow(db, { ...ADMIN, projectId: 'no-such-project', workflowId: b.workflow.id });
     assert.equal(unknownProject.ok, false);
     assert.equal(unknownProject.error, 'unknown_project');
-    const unknownWorkflow = await workflows.setActiveWorkflow(db, { ...PM, projectId: 'proj-1', workflowId: 'no-such-id' });
+    const unknownWorkflow = await workflows.setActiveWorkflow(db, { ...ADMIN, projectId: 'proj-1', workflowId: 'no-such-id' });
     assert.equal(unknownWorkflow.ok, false);
     assert.equal(unknownWorkflow.status, 404);
     // Passing null clears the active workflow: back to the default.
-    const cleared = await workflows.setActiveWorkflow(db, { ...PM, projectId: 'proj-1', workflowId: null });
+    const cleared = await workflows.setActiveWorkflow(db, { ...ADMIN, projectId: 'proj-1', workflowId: null });
     assert.equal(cleared.ok, true);
     assert.equal(cleared.is_default, true);
     assert.equal(cleared.workflow.name, 'Default');
@@ -465,40 +498,40 @@ async function main() {
   await ok('delete: non-active deletes freely; active without an alternative is refused', async () => {
     const db = new FakeDb();
     db.seedDefault();
-    const a = await workflows.createWorkflow(db, { ...PM, name: 'A', projectId: 'proj-1', roles: workflows.DEFAULT_WORKFLOW_ROLES });
+    const a = await workflows.createWorkflow(db, { ...ADMIN, name: 'A', projectId: 'proj-1', roles: workflows.DEFAULT_WORKFLOW_ROLES });
     // Non-active: direct delete.
-    const direct = await workflows.deleteWorkflow(db, a.workflow.id, { ...PM });
+    const direct = await workflows.deleteWorkflow(db, a.workflow.id, { ...ADMIN });
     assert.equal(direct.ok, true);
     assert.equal(db.workflows.filter((w) => !w.is_default).length, 0);
     // Active with no alternative: refused, still there.
-    const b = await workflows.createWorkflow(db, { ...PM, name: 'B', projectId: 'proj-1', roles: workflows.DEFAULT_WORKFLOW_ROLES });
-    await workflows.setActiveWorkflow(db, { ...PM, projectId: 'proj-1', workflowId: b.workflow.id });
-    const refused = await workflows.deleteWorkflow(db, b.workflow.id, { ...PM });
+    const b = await workflows.createWorkflow(db, { ...ADMIN, name: 'B', projectId: 'proj-1', roles: workflows.DEFAULT_WORKFLOW_ROLES });
+    await workflows.setActiveWorkflow(db, { ...ADMIN, projectId: 'proj-1', workflowId: b.workflow.id });
+    const refused = await workflows.deleteWorkflow(db, b.workflow.id, { ...ADMIN });
     assert.equal(refused.ok, false);
     assert.equal(refused.status, 400);
     assert.equal(refused.error, 'active_workflow_no_alternative');
     assert.equal(db.workflows.some((w) => w.id === b.workflow.id), true);
     // With an alternative in the same project it deletes, and the
     // project falls back to the default workflow.
-    await workflows.createWorkflow(db, { ...PM, name: 'C', projectId: 'proj-1', roles: workflows.DEFAULT_WORKFLOW_ROLES });
-    const allowed = await workflows.deleteWorkflow(db, b.workflow.id, { ...PM });
+    await workflows.createWorkflow(db, { ...ADMIN, name: 'C', projectId: 'proj-1', roles: workflows.DEFAULT_WORKFLOW_ROLES });
+    const allowed = await workflows.deleteWorkflow(db, b.workflow.id, { ...ADMIN });
     assert.equal(allowed.ok, true);
     const active = await workflows.getActiveWorkflow(db, 'proj-1', {});
     assert.equal(active.is_default, true);
     assert.equal(active.workflow.name, 'Default');
   });
 
-  await ok('delete: non-PM is refused, missing is 404, cross-project is 403', async () => {
+  await ok('delete: non-admin is refused, missing is 404, cross-project is 403', async () => {
     const db = new FakeDb();
-    const created = await workflows.createWorkflow(db, { ...PM, name: 'A', projectId: 'proj-1', roles: workflows.DEFAULT_WORKFLOW_ROLES });
-    const notPm = await workflows.deleteWorkflow(db, created.workflow.id, { actorId: 'dev-1', actorRoles: ['engineer'] });
-    assert.equal(notPm.ok, false);
-    assert.equal(notPm.status, 403);
-    const cross = await workflows.deleteWorkflow(db, created.workflow.id, { ...PM, assignedProjectId: 'proj-2' });
+    const created = await workflows.createWorkflow(db, { ...ADMIN, name: 'A', projectId: 'proj-1', roles: workflows.DEFAULT_WORKFLOW_ROLES });
+    const notAdmin = await workflows.deleteWorkflow(db, created.workflow.id, { actorId: 'dev-1', actorRoles: ['engineer'] });
+    assert.equal(notAdmin.ok, false);
+    assert.equal(notAdmin.status, 403);
+    const cross = await workflows.deleteWorkflow(db, created.workflow.id, { ...ADMIN, assignedProjectId: 'proj-2' });
     assert.equal(cross.ok, false);
     assert.equal(cross.status, 403);
     assert.equal(cross.error, 'out_of_scope');
-    const missing = await workflows.deleteWorkflow(db, 'no-such-id', { ...PM });
+    const missing = await workflows.deleteWorkflow(db, 'no-such-id', { ...ADMIN });
     assert.equal(missing.ok, false);
     assert.equal(missing.status, 404);
   });
@@ -549,7 +582,7 @@ async function main() {
     const transitions = JSON.parse(JSON.stringify(ex.transitions));
     transitions[1].role = 'pm'; // feature_planning's role is leader
     const created = await workflows.createWorkflow(db, {
-      ...PM, name: ex.name, projectId: 'proj-1',
+      ...ADMIN, name: ex.name, projectId: 'proj-1',
       roles: ex.roles, states: ex.states, transitions,
     });
     assert.equal(created.ok, true, JSON.stringify(created));
@@ -565,7 +598,7 @@ async function main() {
     // A workflow created without states/transitions defaults to the
     // built-in definition.
     const plain = await workflows.createWorkflow(db, {
-      ...PM, name: 'Plain', projectId: 'proj-1', roles: workflows.DEFAULT_WORKFLOW_ROLES,
+      ...ADMIN, name: 'Plain', projectId: 'proj-1', roles: workflows.DEFAULT_WORKFLOW_ROLES,
     });
     assert.equal(plain.workflow.states.length, 14);
     assert.equal(plain.workflow.transitions.length, sm.BUILTIN_DEFINITION.transitions.length);
@@ -577,7 +610,7 @@ async function main() {
     const states = JSON.parse(JSON.stringify(ex.states));
     states[0].is_start = false;
     const result = await workflows.createWorkflow(db, {
-      ...PM, name: 'Bad', projectId: 'proj-1',
+      ...ADMIN, name: 'Bad', projectId: 'proj-1',
       roles: ex.roles, states, transitions: ex.transitions,
     });
     assert.equal(result.ok, false);
@@ -609,7 +642,7 @@ async function main() {
     // The editor starts new workflows blank, but the draft lives only
     // in the browser: saving an empty definition is still refused.
     const empty = await workflows.createWorkflow(db, {
-      ...PM, name: 'Empty', projectId: 'proj-1', roles: {}, states: [], transitions: [],
+      ...ADMIN, name: 'Empty', projectId: 'proj-1', roles: {}, states: [], transitions: [],
     });
     assert.equal(empty.ok, false);
     assert.equal(empty.status, 400);
@@ -618,7 +651,7 @@ async function main() {
     // Empty transitions are refused too, even with valid states.
     const ex = examples.FLOW_INCIDENT;
     const noTransitions = await workflows.createWorkflow(db, {
-      ...PM, name: 'No transitions', projectId: 'proj-1',
+      ...ADMIN, name: 'No transitions', projectId: 'proj-1',
       roles: ex.roles, states: ex.states, transitions: [],
     });
     assert.equal(noTransitions.ok, false);
@@ -629,10 +662,10 @@ async function main() {
 
   await ok('update: a roles-only change re-derives the stored transition roles', async () => {
     const db = new FakeDb();
-    const created = await workflows.createWorkflow(db, { ...PM, name: 'A', projectId: 'proj-1', roles: workflows.DEFAULT_WORKFLOW_ROLES });
+    const created = await workflows.createWorkflow(db, { ...ADMIN, name: 'A', projectId: 'proj-1', roles: workflows.DEFAULT_WORKFLOW_ROLES });
     const id = created.workflow.id;
     const updated = await workflows.updateWorkflow(db, id, {
-      ...PM, roles: rolesWith({ pending_dev: { role: 'tester' } }),
+      ...ADMIN, roles: rolesWith({ pending_dev: { role: 'tester' } }),
     });
     assert.equal(updated.ok, true);
     assert.equal(updated.workflow.roles.pending_dev.role, 'tester');
@@ -645,7 +678,7 @@ async function main() {
     const db = new FakeDb();
     const ex = examples.FLOW_WITH_CONFIRMATION;
     const created = await workflows.createWorkflow(db, {
-      ...PM, name: ex.name, projectId: 'proj-1',
+      ...ADMIN, name: ex.name, projectId: 'proj-1',
       roles: ex.roles, states: ex.states, transitions: ex.transitions,
     });
     const id = created.workflow.id;
@@ -661,7 +694,7 @@ async function main() {
     transitions.push({ from: 'user_requirement', to: 'user_confirmation', role: 'leader', requiresReason: false, requiresHandoff: false, kind: 'pickup', selfCheck: false });
     const roles = JSON.parse(JSON.stringify(ex.roles));
     delete roles.feature_planning;
-    const refused = await workflows.updateWorkflow(db, id, { ...PM, states, transitions, roles });
+    const refused = await workflows.updateWorkflow(db, id, { ...ADMIN, states, transitions, roles });
     assert.equal(refused.ok, false);
     assert.equal(refused.status, 400);
     assert.equal(refused.error, 'state_in_use');
@@ -675,16 +708,16 @@ async function main() {
     transitions2.push({ from: 'user_confirmation', to: 'delivered', role: 'pm', requiresReason: false, requiresHandoff: false, kind: 'forward', selfCheck: false });
     const roles2 = JSON.parse(JSON.stringify(ex.roles));
     delete roles2.spec_generation;
-    const allowed = await workflows.updateWorkflow(db, id, { ...PM, states: states2, transitions: transitions2, roles: roles2 });
+    const allowed = await workflows.updateWorkflow(db, id, { ...ADMIN, states: states2, transitions: transitions2, roles: roles2 });
     assert.equal(allowed.ok, true, JSON.stringify(allowed));
     assert.equal(allowed.workflow.states.length, 4);
   });
 
   await ok('delete: a workflow with live tickets is refused', async () => {
     const db = new FakeDb();
-    const created = await workflows.createWorkflow(db, { ...PM, name: 'A', projectId: 'proj-1', roles: workflows.DEFAULT_WORKFLOW_ROLES });
+    const created = await workflows.createWorkflow(db, { ...ADMIN, name: 'A', projectId: 'proj-1', roles: workflows.DEFAULT_WORKFLOW_ROLES });
     db.seedTicket({ workflow_id: created.workflow.id, status: 'requirement' });
-    const refused = await workflows.deleteWorkflow(db, created.workflow.id, { ...PM });
+    const refused = await workflows.deleteWorkflow(db, created.workflow.id, { ...ADMIN });
     assert.equal(refused.ok, false);
     assert.equal(refused.status, 400);
     assert.equal(refused.error, 'workflow_in_use');
@@ -698,7 +731,7 @@ async function main() {
     assert.equal(plain.definition.states.length, 14);
     const ex = examples.FLOW_INCIDENT;
     const created = await workflows.createWorkflow(db, {
-      ...PM, name: ex.name, projectId: 'proj-1',
+      ...ADMIN, name: ex.name, projectId: 'proj-1',
       roles: ex.roles, states: ex.states, transitions: ex.transitions,
     });
     const custom = await workflows.definitionForTicket(db, { workflow_id: created.workflow.id });

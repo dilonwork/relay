@@ -498,15 +498,15 @@ api_keys
 | --- | --- | --- |
 | `GET` | `/api/workflows?project_id=` | 列表；已指派帳號只能看到自己專案的 workflow＋全域預設，跨專案回 403 `out_of_scope` |
 | `GET` | `/api/workflows/:id` | 單筆；同上範圍檢查（`project_id` 為 null 的 workflow 視為全域、所有人可見） |
-| `POST` | `/api/workflows` | 建立（PM 或 Admin；name 必填、未知專案 400、重名 409、roles 驗證 400） |
-| `PATCH` | `/api/workflows/:id` | 更新 name／roles（PM 或 Admin；預設唯讀） |
-| `DELETE` | `/api/workflows/:id` | 刪除（PM 或 Admin；見刪除守則） |
+| `POST` | `/api/workflows` | 建立（僅 Admin；name 必填、未知專案 400、重名 409、roles 驗證 400） |
+| `PATCH` | `/api/workflows/:id` | 更新 name／roles（僅 Admin；預設唯讀） |
+| `DELETE` | `/api/workflows/:id` | 刪除（僅 Admin；見刪除守則） |
 | `GET` | `/api/projects/:id/active-workflow` | 回傳 `{workflow, is_default}`：有 active 就回 active，否則回預設 workflow 並標 `is_default: true` |
-| `POST` | `/api/projects/:id/active-workflow` | body `{workflow_id: string \| null}`，null＝切回預設（PM 或 Admin） |
+| `POST` | `/api/projects/:id/active-workflow` | body `{workflow_id: string \| null}`，null＝切回預設（僅 Admin） |
 
 ### 前端
 
-- 側邊欄 Workflows 項目（只對 PM／Admin 顯示），點開時載入該專案的 workflows 與 active workflow。
+- Admin → Workflows 分頁（只對 Admin 顯示），點開時載入該專案的 workflows 與 active workflow。異動（建立／更新／刪除／設為啟用）僅 Admin 可做；PM 可讀 workflow（開單選 workflow 仍需讀），不可寫。
 - Workflow 管理畫面（`src/WorkflowsPanel.tsx`，版式沿用 ProjectsPanel 的 card＋table＋form 風格）：專案篩選、workflow 列表（name、Default／Active 徽章、各狀態角色摘要）、建立表單（name＋14 個狀態各一列：角色下拉＋職責文字欄；新建時預設值從預設 workflow 的 roles 帶入）、編輯表單（同樣結構）、設為 active 按鈕、切回預設按鈕、刪除按鈕；後端錯誤訊息顯示在畫面上。角色下拉選項用 6 個 workflow 角色（不要含 admin），label 沿用 `helpers.ts` 的 `ROLE_LABELS`。
 - 狀態與轉換本身的編輯（狀態機編輯器）見第 15 章：本章的表單結構已擴充為 States／Transitions／Roles 三段。
 

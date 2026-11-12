@@ -25,7 +25,8 @@
 // or set active. is_active is at most one workflow per project; setting
 // a workflow active clears the flag on the project's other workflows,
 // and passing null clears the project's active workflow (back to the
-// default). Mutation is PM or Admin only, following projects.js.
+// default). Mutation is Admin only (ticket 9637f2e9): workflows live
+// under Admin, and PM may read but not mutate.
 //
 // A transition's role is derived from its from-state's role in the
 // roles map (ch. 15): the editor edits roles per state, and the server
@@ -329,9 +330,8 @@ function normalizeDefinition({ states, transitions, roles }) {
   return { states: cleanStates, transitions: cleanTransitions };
 }
 
-function requirePmOrAdmin(actorRoles) {
-  return Array.isArray(actorRoles)
-    && (actorRoles.includes('pm') || actorRoles.includes('admin'));
+function requireAdmin(actorRoles) {
+  return Array.isArray(actorRoles) && actorRoles.includes('admin');
 }
 
 function cleanProjectId(projectId) {
@@ -378,8 +378,8 @@ async function definitionForTicket(db, ticket) {
 }
 
 async function createWorkflow(db, { actorId, actorRoles, name, projectId, roles, states, transitions }) {
-  if (!requirePmOrAdmin(actorRoles)) {
-    return { ok: false, status: 403, error: 'wrong_role', message: 'Only the PM or an Admin may create a workflow.' };
+  if (!requireAdmin(actorRoles)) {
+    return { ok: false, status: 403, error: 'wrong_role', message: 'Only an Admin may create a workflow.' };
   }
   if (!actorId || !String(actorId).trim()) {
     return { ok: false, status: 400, error: 'bad_request', message: 'actor_id is required.' };
@@ -462,8 +462,8 @@ async function getWorkflow(db, id, { assignedProjectId } = {}) {
 }
 
 async function updateWorkflow(db, id, { actorId, actorRoles, name, roles, states, transitions, assignedProjectId } = {}) {
-  if (!requirePmOrAdmin(actorRoles)) {
-    return { ok: false, status: 403, error: 'wrong_role', message: 'Only the PM or an Admin may update a workflow.' };
+  if (!requireAdmin(actorRoles)) {
+    return { ok: false, status: 403, error: 'wrong_role', message: 'Only an Admin may update a workflow.' };
   }
   if (!actorId || !String(actorId).trim()) {
     return { ok: false, status: 400, error: 'bad_request', message: 'actor_id is required.' };
@@ -526,8 +526,8 @@ async function updateWorkflow(db, id, { actorId, actorRoles, name, roles, states
 // A workflow with tickets on it cannot be deleted at all: its tickets
 // would fall back to the built-in flow and strand in unknown states.
 async function deleteWorkflow(db, id, { actorId, actorRoles, assignedProjectId } = {}) {
-  if (!requirePmOrAdmin(actorRoles)) {
-    return { ok: false, status: 403, error: 'wrong_role', message: 'Only the PM or an Admin may delete a workflow.' };
+  if (!requireAdmin(actorRoles)) {
+    return { ok: false, status: 403, error: 'wrong_role', message: 'Only an Admin may delete a workflow.' };
   }
   if (!actorId || !String(actorId).trim()) {
     return { ok: false, status: 400, error: 'bad_request', message: 'actor_id is required.' };
@@ -615,8 +615,8 @@ async function getActiveWorkflow(db, projectId, { assignedProjectId } = {}) {
 // (back to the default). Setting one active clears the flag on the
 // project's other workflows, inside one transaction.
 async function setActiveWorkflow(db, { actorId, actorRoles, projectId, workflowId, assignedProjectId } = {}) {
-  if (!requirePmOrAdmin(actorRoles)) {
-    return { ok: false, status: 403, error: 'wrong_role', message: 'Only the PM or an Admin may change the active workflow.' };
+  if (!requireAdmin(actorRoles)) {
+    return { ok: false, status: 403, error: 'wrong_role', message: 'Only an Admin may change the active workflow.' };
   }
   if (!actorId || !String(actorId).trim()) {
     return { ok: false, status: 400, error: 'bad_request', message: 'actor_id is required.' };
