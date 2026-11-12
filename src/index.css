@@ -207,6 +207,10 @@ header p { margin: 0; color: #5a6b7c; }
     cursor: pointer;
   }
 
+  /* The desktop collapse toggle has no job in the drawer (the drawer
+     has its own close button) and crowds the brand row at 360px. */
+  .collapse-toggle { display: none; }
+
   /* 44px touch targets for nav and buttons. */
   .sidebar-nav button { min-height: 44px; padding: 9px 10px; }
   .collapse-toggle { min-height: 44px; min-width: 44px; padding: 8px 10px; }
@@ -252,6 +256,10 @@ header p { margin: 0; color: #5a6b7c; }
      column sticks to the left so rows stay identifiable. */
   .gantt-scroll { overflow-x: auto; }
   .gantt-scroll .gantt-grid { min-width: 600px; }
+  /* Axis labels are ~110px wide but ticks sit 150px apart on the
+     600px grid, so neighbours overlap; show every other tick. */
+  .gantt-axis span:nth-child(2),
+  .gantt-axis span:nth-child(4) { display: none; }
   .gantt-label { position: sticky; left: 0; background: #fff; z-index: 1; }
 
   /* Login / setup: less top margin on small screens. */
