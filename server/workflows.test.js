@@ -586,6 +586,47 @@ async function main() {
     assert.equal(db.workflows.length, 0);
   });
 
+  await ok('listWorkflowExamples returns the three example flows, each a valid definition', () => {
+    const listed = workflows.listWorkflowExamples();
+    assert.equal(listed.length, 3);
+    assert.deepEqual(listed.map((w) => w.name), examples.EXAMPLE_WORKFLOWS.map((w) => w.name));
+    // Single source of truth: the endpoint serves the fixtures
+    // themselves, so the editor's templates can never drift from the
+    // tested definitions.
+    assert.deepEqual(listed, examples.EXAMPLE_WORKFLOWS);
+    for (const ex of listed) {
+      const check = workflows.validateWorkflowDefinition(ex);
+      assert.equal(check.ok, true, `${ex.name}: ${check.message || ''}`);
+    }
+    // Returned copies are detached: mutating one must not corrupt
+    // the module's fixtures for the next caller.
+    listed[0].states[0].label = 'MUTATED';
+    assert.notEqual(examples.EXAMPLE_WORKFLOWS[0].states[0].label, 'MUTATED');
+  });
+
+  await ok('create with empty states is rejected: a blank draft cannot be saved', async () => {
+    const db = new FakeDb();
+    // The editor starts new workflows blank, but the draft lives only
+    // in the browser: saving an empty definition is still refused.
+    const empty = await workflows.createWorkflow(db, {
+      ...PM, name: 'Empty', projectId: 'proj-1', roles: {}, states: [], transitions: [],
+    });
+    assert.equal(empty.ok, false);
+    assert.equal(empty.status, 400);
+    assert.equal(empty.error, 'invalid_workflow');
+    assert.equal(db.workflows.length, 0);
+    // Empty transitions are refused too, even with valid states.
+    const ex = examples.FLOW_INCIDENT;
+    const noTransitions = await workflows.createWorkflow(db, {
+      ...PM, name: 'No transitions', projectId: 'proj-1',
+      roles: ex.roles, states: ex.states, transitions: [],
+    });
+    assert.equal(noTransitions.ok, false);
+    assert.equal(noTransitions.status, 400);
+    assert.equal(noTransitions.error, 'invalid_workflow');
+    assert.equal(db.workflows.length, 0);
+  });
+
   await ok('update: a roles-only change re-derives the stored transition roles', async () => {
     const db = new FakeDb();
     const created = await workflows.createWorkflow(db, { ...PM, name: 'A', projectId: 'proj-1', roles: workflows.DEFAULT_WORKFLOW_ROLES });

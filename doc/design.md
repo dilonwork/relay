@@ -576,9 +576,18 @@ states：非空、code 為小寫 snake_case 且唯一、label 非空、恰一個
 ### Workflow 編輯器（Admin／PM）
 
 - `src/WorkflowsPanel.tsx` 大改：States 編輯器（label、code、順序上下移、起點 radio、終態 checkbox、新增／刪除；code 改名時自動重指所有引用它的 transition；刪除狀態時一併刪掉相關 transition 與 roles 條目）、Transitions 編輯器（from／to 下拉、kind 下拉 forward／backward／pickup／clarify／return、requiresReason／requiresHandoff checkbox、role 為 from-state 衍生顯示唯讀）、Roles 表改由該 workflow 自己的 states 驅動（不再是寫死的 14 狀態）。
-- 新建預設從 Default workflow 完整複製（states＋transitions＋roles），再編輯。Default workflow 唯讀檢視（View 開啟同一表單、全部 disabled、不送出）。
+- 新建預設從空白開始（0 個狀態），不再複製 Default workflow 的完整定義；範本一鍵套用與快速建立見下節。Default workflow 唯讀檢視（View 開啟同一表單、全部 disabled、不送出）。
 - 前端先做與伺服器相同的輕量驗證（恰一個起點、至少一終態、code 格式與唯一、backward／return 需理由、每非終態有出路等），伺服器再驗一次，後端訊息為準。Cancel 不列在編輯器裡（隱式規則，見上）。
 - 守則：仍有工單處於某狀態時，該狀態不可刪除（400 `state_in_use`）；有工單的 workflow 不可刪除（400 `workflow_in_use`）。第 14 章的刪除守則（預設唯讀、active 需替代）維持不變。
+
+### 簡化建立流程：空白開始、範本、快速建立
+
+> 工單 ecf671fb：新建時編輯器直接複製預設的完整定義（14 個狀態＋全部轉換＋角色），做短流程得先刪一堆不要的東西，Dylan 回報建立流程太複雜。
+
+- **空白開始**：新建 workflow 的表單初始為 0 個狀態、0 條轉換、空 roles map（`WorkflowsPanel.openCreate` 不再複製 Default workflow）。Default workflow 本身不動，既有 workflow 不受影響。
+- **範本一鍵套用**：新建表單的「Start from」區列出三條內建範本，點一下把該範本的 states／transitions／roles 填入表單，微調後存檔。範本的單一來源仍是 `server/workflowExamples.js`，前端經 `GET /api/workflow-examples` 讀取（唯讀參考資料，不分專案，任何登入用戶可讀），不另寫一份；表單已有內容時套用前先確認覆蓋。
+- **快速建立**：同一區的 Quick create：輸入狀態名清單、每狀態選負責人，Generate 自動串成線性流程（第一個狀態為起點、最後一個為終態；第一條轉換 kind `pickup`、其餘 `forward`；每狀態負責人寫進 roles map；responsibilities 自動填預設句，可在 Roles 表修改）。退回、理由等進階設定收進「Advanced」區（加一條 backward 轉換，from／to 自選，理由自動必填），預設不用填。產生邏輯是共用純函式 `src/workflowQuickCreate.ts` 的 `buildLinearFlow`（無 React、無 DOM），編輯器與 server 測試共用同一份；中文等無法 slug 的 label 以 `state_N` 為 code、碰撞加數字後綴。
+- **驗證規則沒有改**：0 狀態的草稿只存在瀏覽器表單裡，存檔時仍須符合既有規則（恰一個起點、至少一個終態、每非終態至少一條出路等）；前端 `validateForm` 在 0 狀態時擋下送出（`Add at least one state.`），後端 `createWorkflow` 對明確傳入的空 states／transitions 亦回 400 `invalid_workflow`（有測試鎖住）。`createWorkflow` 省略 states／transitions 時預設內建 definition 的舊行為不變（roles-only 建立仍走該路徑）。
 
 ### 三條範例流程
 
@@ -598,6 +607,7 @@ states：非空、code 為小寫 snake_case 且唯一、label 非空、恰一個
 | --- | --- | --- |
 | `POST` | `/api/tickets` | 加 `workflow_id`（見上） |
 | `GET` | `/api/meta/transitions?workflow_id=` | 該 workflow 的 legal transitions；無參數＝內建表 |
+| `GET` | `/api/workflow-examples` | 三條內建範本（編輯器一鍵套用）；唯讀，不分專案 |
 | `POST` | `/api/workflows` | 加 `states`／`transitions`（省略時預設內建 definition；驗證失敗 400 `invalid_workflow`／`invalid_roles`） |
 | `PATCH` | `/api/workflows/:id` | 加 `states`／`transitions`（同上；另有 `state_in_use` 守則） |
 | `DELETE` | `/api/workflows/:id` | 加 `workflow_in_use` 守則（有工單時拒絕） |
@@ -611,7 +621,8 @@ states：非空、code 為小寫 snake_case 且唯一、label 非空、恰一個
 ### 測試
 
 - `stateMachine.test.js`：`validateTransitionFor`／`allowedTransitionsFor`／`legalTransitionsFor` 對自訂 definition（建得出、走得完、退得回、cancel、起點、未知狀態、終態、錯角色、backward 需理由）；`legalTransitionsFor(BUILTIN_DEFINITION)` 等於 `legalTransitions()`。
-- `workflows.test.js`：`validateWorkflowDefinition` 各規則、三條範例流程 fixture、create／update 含 states／transitions、roles-only 更新重推 transition roles、`state_in_use`／`workflow_in_use` 守則、`definitionForTicket`。
+- `workflows.test.js`：`validateWorkflowDefinition` 各規則、三條範例流程 fixture、create／update 含 states／transitions、roles-only 更新重推 transition roles、`state_in_use`／`workflow_in_use` 守則、`definitionForTicket`；`listWorkflowExamples` 回傳三條範本且與 fixture 一致、每條皆通過驗證；明確傳入空 states／transitions 建立時回 400（空白草稿不可存檔）。
+- `workflowQuickCreate.test.js`：`buildLinearFlow`——三狀態線性串接（起點／終態、第一條 pickup）、兩狀態、少於兩個拒絕、空白 label 略過、中文 label 以 `state_N` 為 code、code 碰撞加後綴、非終態缺角色拒絕、終態角色忽略、transition 角色與 from-state 一致、輸入不被改動；產生的定義皆通過伺服器驗證。
 - `tickets.test.js`：開單帶 workflow（起點、稽核列、404／400）、三條流程走完＋退回＋cancel、佇列自訂 pickup 規則；預設流程既有測試全過。
 - `monitor.test.js`：自訂流程通用 stalled 規則（工作狀態卡住、佇列／終態不卡住、30 分鐘門檻）、內建清單不變。
 - `migrations.test.js`：001／002 無狀態 CHECK、011 仍重加 14 狀態 CHECK、012 移除三約束且不重加、013 欄位與 seed 內容等於內建 definition。

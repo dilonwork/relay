@@ -36,6 +36,16 @@
 // listed among the workflow's states, and a listed 'cancelled' state
 // must be terminal.
 const sm = require('./stateMachine');
+const examples = require('./workflowExamples');
+
+// Built-in example workflows for the editor's one-click templates
+// (design doc ch. 15): the single source of truth for the three
+// example flows. Returned as a deep clone so callers cannot mutate
+// the module's fixtures. The editor fetches them through
+// GET /api/workflow-examples; the service tests use the same module.
+function listWorkflowExamples() {
+  return JSON.parse(JSON.stringify(examples.EXAMPLE_WORKFLOWS));
+}
 
 const WORKFLOW_ROLES = [...sm.ROLES];
 const TERMINAL_STATUSES = [...sm.TERMINAL_STATUSES];
@@ -693,6 +703,7 @@ module.exports = {
   DEFAULT_RESPONSIBILITIES,
   DEFAULT_WORKFLOW_ROLES,
   DEFAULT_WORKFLOW_NAME,
+  listWorkflowExamples,
   validateRolesMap,
   validateWorkflowDefinition,
   normalizeDefinition,
