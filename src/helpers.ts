@@ -1,4 +1,4 @@
-import type { LegalTransition, Project, Ticket, Transition, User } from './api';
+import type { LegalTransition, Project, Ticket, Transition, User, Workflow } from './api';
 
 export const STATUS_LABELS: Record<string, string> = {
   requirement: 'Requirement',
@@ -68,6 +68,23 @@ export function statusLabel(code: string): string {
   return STATUS_LABELS[code] || code;
 }
 
+// Workflow-aware label: the workflow's own label for the state wins
+// (a custom state has no built-in label); otherwise the built-in
+// label, otherwise the raw code.
+export function stateLabelFor(workflow: Workflow | null | undefined, code: string): string {
+  const state = workflow?.states?.find((s) => s.code === code);
+  if (state && state.label) return state.label;
+  return statusLabel(code);
+}
+
+// Workflow-aware terminal check: the workflow's own is_terminal flag
+// wins; otherwise the built-in terminal set.
+export function isTerminalFor(workflow: Workflow | null | undefined, code: string): boolean {
+  const state = workflow?.states?.find((s) => s.code === code);
+  if (state) return !!state.is_terminal;
+  return TERMINAL_STATUSES.has(code);
+}
+
 export function formatTime(iso: string): string {
   return new Date(iso).toLocaleString();
 }
@@ -106,7 +123,13 @@ export const STATUS_COLORS: Record<string, string> = {
 };
 
 export function statusColor(code: string): string {
-  return STATUS_COLORS[code] || '#5a6b7c';
+  if (STATUS_COLORS[code]) return STATUS_COLORS[code];
+  // Custom states get a deterministic colour from the same palette, so
+  // two custom states do not all collapse to one grey.
+  const palette = Object.values(STATUS_COLORS);
+  let hash = 0;
+  for (let i = 0; i < code.length; i++) hash = (hash * 31 + code.charCodeAt(i)) >>> 0;
+  return palette[hash % palette.length];
 }
 
 // The statuses a ticket has passed through, in order, without
@@ -125,14 +148,16 @@ export function journeyFromTransitions(transitions: Transition[]): string[] {
 
 // Time window covering every bar. A zero-length window (all tickets at
 // one instant, or no tickets) is widened to one hour either side so
-// bars stay visible.
-export function ganttRange(tickets: Ticket[]): { min: number; max: number } {
+// bars stay visible. workflowById resolves each ticket's own workflow
+// for the terminal check; without it the built-in set is used.
+export function ganttRange(tickets: Ticket[], workflowById?: Map<string, Workflow>): { min: number; max: number } {
   let min = Infinity;
   let max = -Infinity;
   const now = Date.now();
   for (const t of tickets) {
     const start = new Date(t.created_at).getTime();
-    const end = TERMINAL_STATUSES.has(t.status) ? new Date(t.updated_at).getTime() : now;
+    const workflow = workflowById && t.workflow_id ? workflowById.get(t.workflow_id) : undefined;
+    const end = isTerminalFor(workflow, t.status) ? new Date(t.updated_at).getTime() : now;
     if (start < min) min = start;
     if (end > max) max = end;
   }
@@ -164,21 +189,21 @@ export function groupGanttTickets(
 // three buckets — in progress, waiting, done — computed from
 // GET /api/tickets. Terminal states are done; the active (in-*) states
 // are in progress; everything else (requirement, pending_*, needs_*) is
-// waiting on someone.
+// waiting on someone. For a custom workflow the same rule applies to
+// its own states: terminal by its is_terminal flag, in progress for
+// states named in_* (the working convention), the rest waiting.
 export type TicketBucket = 'active' | 'pending' | 'done';
 
-export function statusBucket(status: string): TicketBucket {
-  if (TERMINAL_STATUSES.has(status)) return 'done';
-  if (
-    status === 'decomposing' ||
-    status === 'in_dev' ||
-    status === 'in_review' ||
-    status === 'in_test' ||
-    status === 'deploying'
-  ) {
+export function statusBucketFor(workflow: Workflow | null | undefined, status: string): TicketBucket {
+  if (isTerminalFor(workflow, status)) return 'done';
+  if (status.startsWith('in_') || status === 'decomposing' || status === 'deploying') {
     return 'active';
   }
   return 'pending';
+}
+
+export function statusBucket(status: string): TicketBucket {
+  return statusBucketFor(undefined, status);
 }
 
 export interface ProjectTicketCounts {
@@ -191,13 +216,18 @@ export interface ProjectTicketCounts {
 const EMPTY_COUNTS: ProjectTicketCounts = { active: 0, pending: 0, done: 0, total: 0 };
 
 // Counts per project, keyed by project id; tickets with no project land
-// under 'none'.
-export function countTicketsByProject(tickets: Ticket[]): Record<string, ProjectTicketCounts> {
+// under 'none'. workflowById resolves each ticket's own workflow for
+// the bucket; without it the built-in rule is used.
+export function countTicketsByProject(
+  tickets: Ticket[],
+  workflowById?: Map<string, Workflow>
+): Record<string, ProjectTicketCounts> {
   const out: Record<string, ProjectTicketCounts> = {};
   for (const t of tickets) {
     const key = t.project_id || 'none';
     const counts = out[key] || (out[key] = { ...EMPTY_COUNTS });
-    counts[statusBucket(t.status)] += 1;
+    const workflow = workflowById && t.workflow_id ? workflowById.get(t.workflow_id) : undefined;
+    counts[statusBucketFor(workflow, t.status)] += 1;
     counts.total += 1;
   }
   return out;
@@ -211,9 +241,17 @@ export function shortId(id: string | null): string {
 
 // Legal targets for one role, from the server's transition table.
 // The server re-validates every attempt; this only shapes the dropdown.
-export function transitionTargets(meta: LegalTransition[], status: string, role: string): LegalTransition[] {
+// isTerminal decides whether Cancel is offered: the PM may cancel from
+// any non-terminal state, under the ticket's own workflow.
+export function transitionTargets(
+  meta: LegalTransition[],
+  status: string,
+  role: string,
+  isTerminal?: (status: string) => boolean
+): LegalTransition[] {
+  const terminal = isTerminal ? isTerminal(status) : TERMINAL_STATUSES.has(status);
   const out = meta.filter((t) => t.from === status && t.role === role);
-  if (role === 'pm' && status !== 'delivered' && status !== 'cancelled') {
+  if (role === 'pm' && !terminal) {
     const cancel = meta.find((t) => t.kind === 'cancel' && t.role === 'pm');
     if (cancel) out.push(cancel);
   }
@@ -221,12 +259,41 @@ export function transitionTargets(meta: LegalTransition[], status: string, role:
 }
 
 // Union of legal targets across all roles the user holds.
-export function targetsForUser(meta: LegalTransition[], status: string, user: User): LegalTransition[] {
+export function targetsForUser(
+  meta: LegalTransition[],
+  status: string,
+  user: User,
+  isTerminal?: (status: string) => boolean
+): LegalTransition[] {
   const byTo = new Map<string, LegalTransition>();
   for (const role of user.roles) {
-    for (const t of transitionTargets(meta, status, role)) {
+    for (const t of transitionTargets(meta, status, role, isTerminal)) {
       if (!byTo.has(t.to)) byTo.set(t.to, t);
     }
   }
   return [...byTo.values()];
+}
+
+// Transition kinds the state machine editor offers (server
+// EDITABLE_KINDS, design doc ch. 15). 'return' sends a ticket back
+// for rework with a reason; 'clarify' asks a question with a reason.
+export const WORKFLOW_KINDS = ['forward', 'backward', 'pickup', 'clarify', 'return'];
+
+export const KIND_LABELS: Record<string, string> = {
+  forward: 'Forward',
+  backward: 'Backward',
+  pickup: 'Pickup',
+  clarify: 'Clarify',
+  return: 'Return',
+};
+
+// Derive a state code from a label: lowercase snake_case, the
+// convention the server enforces. The editor offers it as a one-click
+// fill; the code field stays editable.
+export function slugStateCode(label: string): string {
+  return label
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
 }

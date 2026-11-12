@@ -1,7 +1,14 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from './api';
-import type { Project, Workflow } from './api';
-import { ALL_STATUSES, ROLE_LABELS, TERMINAL_STATUSES, WORKFLOW_ROLES, statusLabel } from './helpers';
+import type { Project, Workflow, WorkflowState, WorkflowTransition } from './api';
+import {
+  KIND_LABELS,
+  ROLE_LABELS,
+  WORKFLOW_KINDS,
+  WORKFLOW_ROLES,
+  slugStateCode,
+  stateLabelFor,
+} from './helpers';
 
 type RolesMap = Workflow['roles'];
 
@@ -9,20 +16,22 @@ interface WorkflowsPanelProps {
   projects: Project[];
 }
 
+const STATE_CODE_RE = /^[a-z][a-z0-9_]*$/;
+
 function emptyRoles(): RolesMap {
-  const out: RolesMap = {};
-  for (const status of ALL_STATUSES) {
-    out[status] = { role: null, responsibilities: '' };
-  }
-  return out;
+  return {};
+}
+
+function clone<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value));
 }
 
 // Compact summary of a workflow's role map: how many states each role
-// owns (terminal states have no role).
-function roleSummary(roles: RolesMap): string {
+// owns (terminal states have no role), over the workflow's own states.
+function roleSummary(w: Workflow): string {
   const counts: Record<string, number> = {};
-  for (const status of ALL_STATUSES) {
-    const role = roles[status] ? roles[status].role : null;
+  for (const s of w.states || []) {
+    const role = w.roles[s.code] ? w.roles[s.code].role : null;
     const key = role || '—';
     counts[key] = (counts[key] || 0) + 1;
   }
@@ -40,11 +49,15 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
   const [busy, setBusy] = useState(false);
 
   // Create / edit form state. editingId null means creating a new
-  // workflow; formOpen false hides the form.
+  // workflow; formOpen false hides the form. readOnly opens the
+  // default workflow for viewing: every input disabled, no submit.
   const [formOpen, setFormOpen] = useState(false);
+  const [readOnly, setReadOnly] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [formName, setFormName] = useState('');
   const [formProjectId, setFormProjectId] = useState('');
+  const [formStates, setFormStates] = useState<WorkflowState[]>([]);
+  const [formTransitions, setFormTransitions] = useState<WorkflowTransition[]>([]);
   const [formRoles, setFormRoles] = useState<RolesMap>(emptyRoles());
 
   const load = useCallback(async () => {
@@ -82,11 +95,21 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
   function openCreate() {
     const fallback = workflows.find((w) => w.is_default);
     setEditingId(null);
+    setReadOnly(false);
     setFormName('');
     setFormProjectId(selectedProject !== 'all' ? selectedProject : projects[0]?.id || '');
-    // New workflows start from the default workflow's roles, so the
-    // form is pre-filled with today's behaviour.
-    setFormRoles(fallback ? JSON.parse(JSON.stringify(fallback.roles)) : emptyRoles());
+    // New workflows start from the default workflow's full definition
+    // (its 14 states, transitions and roles), so the form is pre-filled
+    // with today's behaviour and the user edits from there.
+    if (fallback) {
+      setFormStates(clone(fallback.states || []).sort((a, b) => a.sort_order - b.sort_order));
+      setFormTransitions(clone(fallback.transitions || []));
+      setFormRoles(clone(fallback.roles || {}));
+    } else {
+      setFormStates([]);
+      setFormTransitions([]);
+      setFormRoles(emptyRoles());
+    }
     setFormOpen(true);
     setError('');
     setNotice('');
@@ -94,36 +117,211 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
 
   function openEdit(w: Workflow) {
     setEditingId(w.id);
+    setReadOnly(false);
     setFormName(w.name);
     setFormProjectId(w.project_id || '');
-    setFormRoles(JSON.parse(JSON.stringify(w.roles)));
+    setFormStates(clone(w.states || []).sort((a, b) => a.sort_order - b.sort_order));
+    setFormTransitions(clone(w.transitions || []));
+    setFormRoles(clone(w.roles || {}));
     setFormOpen(true);
     setError('');
     setNotice('');
   }
 
-  function setFormRole(status: string, role: string | null) {
-    setFormRoles((prev) => ({ ...prev, [status]: { ...prev[status], role } }));
+  function openView(w: Workflow) {
+    openEdit(w);
+    setReadOnly(true);
   }
 
-  function setFormResponsibilities(status: string, responsibilities: string) {
-    setFormRoles((prev) => ({ ...prev, [status]: { ...prev[status], responsibilities } }));
+  // --- States editing ---
+
+  function setStateField(index: number, patch: Partial<WorkflowState>) {
+    const old = formStates[index];
+    if (!old) return;
+    const updated = { ...old, ...patch };
+    const nextStates = [...formStates];
+    nextStates[index] = updated;
+    setFormStates(nextStates);
+    // Renaming a code re-points every transition that used it, so the
+    // table never dangles. (Plain values from this render, not nested
+    // setState updaters: updaters must stay pure.)
+    if (patch.code !== undefined && patch.code !== old.code) {
+      setFormTransitions(
+        formTransitions.map((t) => ({
+          ...t,
+          from: t.from === old.code ? (patch.code as string) : t.from,
+          to: t.to === old.code ? (patch.code as string) : t.to,
+        }))
+      );
+      const { [old.code]: entry, ...rest } = formRoles;
+      setFormRoles({
+        ...rest,
+        [patch.code as string]: entry || { role: 'leader', responsibilities: '' },
+      });
+    }
+    // A state turned terminal loses its role; a state turned
+    // non-terminal gets a role to pick (leader by default).
+    if (patch.is_terminal !== undefined && patch.is_terminal !== old.is_terminal) {
+      setFormRoles({
+        ...formRoles,
+        [updated.code]: {
+          ...(formRoles[updated.code] || { role: null, responsibilities: '' }),
+          role: patch.is_terminal ? null : formRoles[updated.code]?.role || 'leader',
+        },
+      });
+    }
+  }
+
+  function moveState(index: number, delta: number) {
+    setFormStates((prev) => {
+      const next = [...prev];
+      const target = index + delta;
+      if (target < 0 || target >= next.length) return prev;
+      [next[index], next[target]] = [next[target], next[index]];
+      return next;
+    });
+  }
+
+  function addState() {
+    const state: WorkflowState = {
+      code: '',
+      label: '',
+      sort_order: formStates.length,
+      is_start: formStates.length === 0,
+      is_terminal: false,
+    };
+    setFormStates((prev) => [...prev, state]);
+    // No roles entry yet: one appears (defaulting to leader) when the
+    // state's code is set, and validation requires a role anyway.
+  }
+
+  function removeState(index: number) {
+    const code = formStates[index]?.code;
+    setFormStates((prev) => prev.filter((_, i) => i !== index));
+    if (code) {
+      setFormTransitions((prev) => prev.filter((t) => t.from !== code && t.to !== code));
+      setFormRoles((prev) => {
+        const next = { ...prev };
+        delete next[code];
+        return next;
+      });
+    }
+  }
+
+  // --- Transitions editing ---
+
+  function setTransitionField(index: number, patch: Partial<WorkflowTransition>) {
+    setFormTransitions((prev) => {
+      const next = [...prev];
+      next[index] = { ...next[index], ...patch };
+      return next;
+    });
+  }
+
+  function addTransition() {
+    const from = formStates[0]?.code || '';
+    const to = formStates[1]?.code || formStates[0]?.code || '';
+    setFormTransitions((prev) => [
+      ...prev,
+      { from, to, role: formRoles[from]?.role || 'leader', requiresReason: false, requiresHandoff: false, kind: 'forward', selfCheck: false },
+    ]);
+  }
+
+  function removeTransition(index: number) {
+    setFormTransitions((prev) => prev.filter((_, i) => i !== index));
+  }
+
+  // --- Roles editing (driven by the form's own states) ---
+
+  function setFormRole(code: string, role: string | null) {
+    setFormRoles((prev) => ({ ...prev, [code]: { ...(prev[code] || { role: null, responsibilities: '' }), role } }));
+  }
+
+  function setFormResponsibilities(code: string, responsibilities: string) {
+    setFormRoles((prev) => ({ ...prev, [code]: { ...(prev[code] || { role: null, responsibilities: '' }), responsibilities } }));
+  }
+
+  // Client-side validation mirroring the server rules (design doc
+  // ch. 15); the server re-validates and its message wins on save.
+  function validateForm(): string | null {
+    if (!formName.trim()) return 'Name is required.';
+    if (formStates.length === 0) return 'Add at least one state.';
+    const codes = new Set<string>();
+    for (const s of formStates) {
+      if (!s.label.trim()) return 'Every state needs a label.';
+      if (!s.code || !STATE_CODE_RE.test(s.code)) {
+        return `State "${s.label || '(unnamed)'}" needs a code: lowercase snake_case, e.g. user_requirement.`;
+      }
+      if (codes.has(s.code)) return `Duplicate state code: ${s.code}.`;
+      codes.add(s.code);
+    }
+    if (formStates.filter((s) => s.is_start).length !== 1) {
+      return 'Exactly one state must be the start state.';
+    }
+    if (!formStates.some((s) => s.is_terminal)) {
+      return 'At least one state must be terminal.';
+    }
+    for (const s of formStates) {
+      const entry = formRoles[s.code];
+      if (!entry) return `State ${s.code} has no role entry.`;
+      if (s.is_terminal) {
+        if (entry.role !== null) return `Terminal state ${s.code} must have no role.`;
+      } else if (!WORKFLOW_ROLES.includes(entry.role || '')) {
+        return `State ${s.code} needs a role.`;
+      }
+      if (!entry.responsibilities || !entry.responsibilities.trim()) {
+        return `State ${s.code} needs a responsibilities note.`;
+      }
+    }
+    const seen = new Set<string>();
+    for (const t of formTransitions) {
+      if (!codes.has(t.from) || !codes.has(t.to)) return 'Every transition must use states from the list above.';
+      if (t.from === t.to) return 'A transition must not loop back to the same state.';
+      if (!WORKFLOW_KINDS.includes(t.kind)) return `Unknown transition kind: ${t.kind}.`;
+      if ((t.kind === 'backward' || t.kind === 'return') && !t.requiresReason) {
+        return `A ${t.kind} transition (${t.from} → ${t.to}) must require a reason.`;
+      }
+      const key = `${t.from}->${t.to}`;
+      if (seen.has(key)) return `Duplicate transition: ${t.from} → ${t.to}.`;
+      seen.add(key);
+    }
+    for (const s of formStates) {
+      if (s.is_terminal) continue;
+      if (!formTransitions.some((t) => t.from === s.code)) {
+        return `State ${s.code} is not terminal but has no outgoing transition.`;
+      }
+    }
+    return null;
   }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError('');
     setNotice('');
+    const problem = validateForm();
+    if (problem) {
+      setError(problem);
+      return;
+    }
+    const states = formStates.map((s, i) => ({ ...s, sort_order: i }));
+    // The stored transition role is derived from the from-state's role
+    // in the roles map (ch. 15); the server re-derives it on save.
+    const transitions = formTransitions.map((t) => ({
+      ...t,
+      role: formRoles[t.from]?.role || 'leader',
+    }));
     setBusy(true);
     try {
       if (editingId) {
-        const updated = await api.updateWorkflow(editingId, { name: formName, roles: formRoles });
+        const updated = await api.updateWorkflow(editingId, { name: formName, roles: formRoles, states, transitions });
         setNotice(`Workflow updated: ${updated.name}`);
       } else {
         const created = await api.createWorkflow({
           name: formName,
           project_id: formProjectId || null,
           roles: formRoles,
+          states,
+          transitions,
         });
         setNotice(`Workflow created: ${created.name}`);
       }
@@ -170,7 +368,7 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
 
   async function handleDelete(w: Workflow) {
     if (!w.id) return;
-    if (!window.confirm(`Delete workflow "${w.name}"? Tickets fall back to the default workflow.`)) return;
+    if (!window.confirm(`Delete workflow "${w.name}"? It is refused while any ticket still uses it.`)) return;
     setError('');
     setNotice('');
     setBusy(true);
@@ -191,9 +389,12 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
     <div className="card">
       <h2>Workflows</h2>
       <p className="muted">
-        A workflow maps every ticket state to the role responsible for it.
-        Each project follows its active workflow; without one it follows
-        the default workflow. The default workflow is read-only.
+        A workflow is a state machine: its states, the transitions between
+        them, and the role responsible for each state. Each project
+        follows its active workflow; without one it follows the default
+        workflow. The default workflow is read-only. Tickets choose a
+        workflow when created; the default 14-state development flow is
+        used when none is chosen.
       </p>
       {error && <div className="banner error">{error}</div>}
       {notice && <div className="banner notice">{notice}</div>}
@@ -246,6 +447,7 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
             <tr>
               <th>Name</th>
               <th>Project</th>
+              <th>States</th>
               <th>Roles per state</th>
               <th>Actions</th>
             </tr>
@@ -259,9 +461,14 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
                   {w.is_active && <span className="badge">Active</span>}
                 </td>
                 <td>{projectName(w.project_id)}</td>
-                <td>{roleSummary(w.roles)}</td>
+                <td>{(w.states || []).length}</td>
+                <td>{roleSummary(w)}</td>
                 <td>
-                  {!w.is_default && (
+                  {w.is_default ? (
+                    <button className="link" type="button" onClick={() => openView(w)} disabled={busy}>
+                      View
+                    </button>
+                  ) : (
                     <>
                       <button className="link" type="button" onClick={() => openEdit(w)} disabled={busy}>
                         Edit
@@ -276,7 +483,6 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
                       </button>
                     </>
                   )}
-                  {w.is_default && <span className="muted">Read-only</span>}
                 </td>
               </tr>
             ))}
@@ -290,7 +496,12 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
         </button>
       ) : (
         <form onSubmit={handleSubmit}>
-          <h3>{editingId ? 'Edit workflow' : 'New workflow'}</h3>
+          <h3>
+            {readOnly ? `View workflow: ${formName}` : editingId ? 'Edit workflow' : 'New workflow'}
+          </h3>
+          {readOnly && (
+            <p className="muted">The default workflow is read-only. Create a new workflow to build your own flow.</p>
+          )}
           <div className="form-row">
             <div>
               <label className="field" htmlFor="workflow-name">Name</label>
@@ -299,7 +510,8 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
                 type="text"
                 value={formName}
                 onChange={(e) => setFormName(e.target.value)}
-                placeholder="e.g. Strict review"
+                placeholder="e.g. Spec flow"
+                disabled={readOnly}
               />
             </div>
             {!editingId && (
@@ -309,6 +521,7 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
                   id="workflow-project"
                   value={formProjectId}
                   onChange={(e) => setFormProjectId(e.target.value)}
+                  disabled={readOnly}
                 >
                   {projects.map((p) => (
                     <option key={p.id} value={p.id}>
@@ -319,6 +532,212 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
               </div>
             )}
           </div>
+
+          <h3>States</h3>
+          <p className="muted">
+            Order is the flow order (top to bottom). Exactly one state is
+            the start; at least one is terminal. Codes are lowercase
+            snake_case identifiers — they are what the API and history use.
+          </p>
+          <table>
+            <thead>
+              <tr>
+                <th>Label</th>
+                <th>Code</th>
+                <th>Start</th>
+                <th>Terminal</th>
+                <th>Order</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {formStates.map((s, i) => (
+                <tr key={`${s.code || 'new'}-${i}`}>
+                  <td>
+                    <input
+                      type="text"
+                      value={s.label}
+                      onChange={(e) => setStateField(i, { label: e.target.value })}
+                      placeholder="e.g. 使用者需求"
+                      disabled={readOnly}
+                      aria-label={`Label for state ${i + 1}`}
+                    />
+                  </td>
+                  <td>
+                    <input
+                      type="text"
+                      value={s.code}
+                      onChange={(e) => setStateField(i, { code: e.target.value })}
+                      placeholder="e.g. user_requirement"
+                      disabled={readOnly}
+                      aria-label={`Code for state ${i + 1}`}
+                    />
+                    {!readOnly && s.label && (
+                      <button
+                        className="link"
+                        type="button"
+                        title="Fill the code from the label"
+                        onClick={() => setStateField(i, { code: slugStateCode(s.label) })}
+                      >
+                        ↻ from label
+                      </button>
+                    )}
+                  </td>
+                  <td>
+                    <input
+                      type="radio"
+                      name="workflow-start-state"
+                      checked={s.is_start}
+                      onChange={() =>
+                        setFormStates((prev) => prev.map((x, j) => ({ ...x, is_start: j === i })))
+                      }
+                      disabled={readOnly}
+                      aria-label={`Start state: ${s.label || s.code || i + 1}`}
+                    />
+                  </td>
+                  <td>
+                    <input
+                      type="checkbox"
+                      checked={s.is_terminal}
+                      onChange={(e) => setStateField(i, { is_terminal: e.target.checked })}
+                      disabled={readOnly}
+                      aria-label={`Terminal: ${s.label || s.code || i + 1}`}
+                    />
+                  </td>
+                  <td>
+                    <button className="link" type="button" onClick={() => moveState(i, -1)} disabled={readOnly || i === 0}>
+                      ↑
+                    </button>{' '}
+                    <button
+                      className="link"
+                      type="button"
+                      onClick={() => moveState(i, 1)}
+                      disabled={readOnly || i === formStates.length - 1}
+                    >
+                      ↓
+                    </button>
+                  </td>
+                  <td>
+                    <button className="link" type="button" onClick={() => removeState(i)} disabled={readOnly}>
+                      Delete
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {!readOnly && (
+            <button className="link" type="button" onClick={addState}>
+              + Add state
+            </button>
+          )}
+
+          <h3>Transitions</h3>
+          <p className="muted">
+            A transition moves a ticket from one state to another. The role
+            shown is the from-state&apos;s role (from the Roles table below)
+            — the server derives it on save, so the two never drift apart.
+            Backward and Return transitions must require a reason; Cancel
+            is built in for every workflow (PM, any non-terminal state,
+            reason required) and is not listed here.
+          </p>
+          <table>
+            <thead>
+              <tr>
+                <th>From</th>
+                <th>To</th>
+                <th>Kind</th>
+                <th>Role</th>
+                <th>Reason required</th>
+                <th>Handoff required</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {formTransitions.map((t, i) => (
+                <tr key={`${t.from}->${t.to}-${i}`}>
+                  <td>
+                    <select
+                      value={t.from}
+                      onChange={(e) => setTransitionField(i, { from: e.target.value })}
+                      disabled={readOnly}
+                      aria-label={`Transition ${i + 1} from`}
+                    >
+                      {formStates.map((s) => (
+                        <option key={s.code} value={s.code}>
+                          {stateLabelFor({ states: formStates } as Workflow, s.code)}
+                        </option>
+                      ))}
+                    </select>
+                  </td>
+                  <td>
+                    <select
+                      value={t.to}
+                      onChange={(e) => setTransitionField(i, { to: e.target.value })}
+                      disabled={readOnly}
+                      aria-label={`Transition ${i + 1} to`}
+                    >
+                      {formStates.map((s) => (
+                        <option key={s.code} value={s.code}>
+                          {stateLabelFor({ states: formStates } as Workflow, s.code)}
+                        </option>
+                      ))}
+                    </select>
+                  </td>
+                  <td>
+                    <select
+                      value={t.kind}
+                      onChange={(e) => setTransitionField(i, { kind: e.target.value })}
+                      disabled={readOnly}
+                      aria-label={`Transition ${i + 1} kind`}
+                    >
+                      {WORKFLOW_KINDS.map((k) => (
+                        <option key={k} value={k}>
+                          {KIND_LABELS[k] || k}
+                        </option>
+                      ))}
+                    </select>
+                  </td>
+                  <td>{ROLE_LABELS[formRoles[t.from]?.role || ''] || '—'}</td>
+                  <td>
+                    <input
+                      type="checkbox"
+                      checked={t.requiresReason}
+                      onChange={(e) => setTransitionField(i, { requiresReason: e.target.checked })}
+                      disabled={readOnly}
+                      aria-label={`Transition ${i + 1} requires reason`}
+                    />
+                  </td>
+                  <td>
+                    <input
+                      type="checkbox"
+                      checked={t.requiresHandoff}
+                      onChange={(e) => setTransitionField(i, { requiresHandoff: e.target.checked })}
+                      disabled={readOnly}
+                      aria-label={`Transition ${i + 1} requires handoff`}
+                    />
+                  </td>
+                  <td>
+                    <button className="link" type="button" onClick={() => removeTransition(i)} disabled={readOnly}>
+                      Delete
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {!readOnly && (
+            <button className="link" type="button" onClick={addTransition} disabled={formStates.length < 2}>
+              + Add transition
+            </button>
+          )}
+
+          <h3>Roles &amp; responsibilities</h3>
+          <p className="muted">
+            One role owns each state in this workflow. The same person may
+            hold different roles in different workflows — what matters here
+            is which role is responsible for each state of this workflow.
+          </p>
           <table>
             <thead>
               <tr>
@@ -328,20 +747,19 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
               </tr>
             </thead>
             <tbody>
-              {ALL_STATUSES.map((status) => {
-                const entry = formRoles[status] || { role: null, responsibilities: '' };
-                const terminal = TERMINAL_STATUSES.has(status);
+              {formStates.map((s, si) => {
+                const entry = formRoles[s.code] || { role: null, responsibilities: '' };
                 return (
-                  <tr key={status}>
-                    <td>{statusLabel(status)}</td>
+                  <tr key={`${s.code || 'new'}-${si}`}>
+                    <td>{s.label || s.code || '(unnamed)'}</td>
                     <td>
                       <select
                         value={entry.role || ''}
-                        onChange={(e) => setFormRole(status, e.target.value || null)}
-                        disabled={terminal}
-                        aria-label={`Role for ${status}`}
+                        onChange={(e) => setFormRole(s.code, e.target.value || null)}
+                        disabled={readOnly || s.is_terminal}
+                        aria-label={`Role for ${s.label || s.code}`}
                       >
-                        {terminal ? (
+                        {s.is_terminal ? (
                           <option value="">— terminal —</option>
                         ) : (
                           WORKFLOW_ROLES.map((r) => (
@@ -356,9 +774,10 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
                       <input
                         type="text"
                         value={entry.responsibilities}
-                        onChange={(e) => setFormResponsibilities(status, e.target.value)}
-                        placeholder={terminal ? 'Terminal state — no further action.' : 'What this role does in this state'}
-                        aria-label={`Responsibilities for ${status}`}
+                        onChange={(e) => setFormResponsibilities(s.code, e.target.value)}
+                        placeholder={s.is_terminal ? 'Terminal state — no further action.' : 'What this role does in this state'}
+                        disabled={readOnly}
+                        aria-label={`Responsibilities for ${s.label || s.code}`}
                       />
                     </td>
                   </tr>
@@ -366,11 +785,15 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
               })}
             </tbody>
           </table>
-          <button className="primary" type="submit" disabled={busy || !formName.trim()}>
-            {editingId ? 'Save changes' : 'Create workflow'}
-          </button>{' '}
+          {!readOnly && (
+            <>
+              <button className="primary" type="submit" disabled={busy || !formName.trim()}>
+                {editingId ? 'Save changes' : 'Create workflow'}
+              </button>{' '}
+            </>
+          )}
           <button className="link" type="button" onClick={() => setFormOpen(false)} disabled={busy}>
-            Cancel
+            {readOnly ? 'Close' : 'Cancel'}
           </button>
         </form>
       )}

@@ -1,5 +1,14 @@
 // Relay workflow service: named workflows that map each ticket state to
-// the agent role responsible for it (design doc ch. 14, ticket 3269ec1c).
+// the agent role responsible for it (design doc ch. 14, ticket 3269ec1c),
+// and — since ticket baebf8b7 (design doc ch. 15) — the full state
+// machine of a workflow: its states and its transitions. A workflow
+// row stores three JSONB columns: roles (state -> {role,
+// responsibilities}), states (the state list) and transitions (the
+// from -> to table). The built-in 14-state development flow is the
+// default definition (server/stateMachine.js BUILTIN_DEFINITION); a
+// ticket with no workflow follows it, so existing behaviour is
+// unchanged.
+//
 // Takes a `db` object with the same interface as server/database.js:
 //   db.query(text, params) and db.withTransaction(fn).
 // Tests inject an in-memory fake with that interface, so no live database
@@ -17,10 +26,30 @@
 // a workflow active clears the flag on the project's other workflows,
 // and passing null clears the project's active workflow (back to the
 // default). Mutation is PM or Admin only, following projects.js.
+//
+// A transition's role is derived from its from-state's role in the
+// roles map (ch. 15): the editor edits roles per state, and the server
+// re-derives each transition's role from the roles map on save, so the
+// two can never drift apart. A backward transition (kind 'backward'
+// or 'return') must require a reason. 'cancelled' is the universal
+// cancel target: it is terminal in every workflow even when it is not
+// listed among the workflow's states, and a listed 'cancelled' state
+// must be terminal.
 const sm = require('./stateMachine');
 
 const WORKFLOW_ROLES = [...sm.ROLES];
 const TERMINAL_STATUSES = [...sm.TERMINAL_STATUSES];
+
+// State codes are lowercase snake_case identifiers, used as ticket
+// statuses in the database (migration 012 removed the status CHECK, so
+// the application is the only validator — keep the format strict).
+const STATE_CODE_RE = /^[a-z][a-z0-9_]{0,63}$/;
+
+// Transition kinds a workflow row may list. 'create' and 'cancel' are
+// implicit rules (ch. 15) and are never stored in a workflow's
+// transitions. 'return' is the built-in flow's backward kind; the
+// editor offers forward / backward / pickup / clarify.
+const EDITABLE_KINDS = ['forward', 'backward', 'pickup', 'clarify', 'return'];
 
 // Responsibilities text for the default workflow. These sentences were
 // written for this ticket (2026-11-12): no existing document or program
@@ -56,7 +85,7 @@ for (const status of sm.STATUSES) {
 
 const DEFAULT_WORKFLOW_NAME = 'Default';
 
-function asRolesMap(value) {
+function asJson(value) {
   if (value === null || value === undefined) return null;
   if (typeof value === 'string') {
     try {
@@ -68,50 +97,226 @@ function asRolesMap(value) {
   return value;
 }
 
-function normalizeWorkflow(row) {
-  if (!row) return null;
-  return { ...row, roles: asRolesMap(row.roles) };
+function asRolesMap(value) {
+  return asJson(value);
 }
 
-// A roles map must cover exactly the 14 states, no more and no less.
-// A non-terminal state needs one of the six workflow roles and a
-// non-empty responsibilities string; a terminal state needs role null
-// and a responsibilities string.
-function validateRolesMap(roles) {
+function asStates(value) {
+  const parsed = asJson(value);
+  return Array.isArray(parsed) ? parsed : null;
+}
+
+function asTransitions(value) {
+  const parsed = asJson(value);
+  return Array.isArray(parsed) ? parsed : null;
+}
+
+function normalizeWorkflow(row) {
+  if (!row) return null;
+  return {
+    ...row,
+    roles: asRolesMap(row.roles),
+    states: asStates(row.states),
+    transitions: asTransitions(row.transitions),
+  };
+}
+
+// A workflow definition as the state machine consumes it: the states,
+// the transitions and the roles map, all parsed. The roles in the
+// returned definition are the roles map's roles (state -> role).
+function definitionFromRow(row) {
+  const w = normalizeWorkflow(row);
+  if (!w) return null;
+  return {
+    states: w.states || [],
+    transitions: w.transitions || [],
+    roles: w.roles || {},
+  };
+}
+
+// A roles map must cover exactly the given states, no more and no
+// less. A non-terminal state needs one of the six workflow roles and
+// a non-empty responsibilities string; a terminal state needs role
+// null and a responsibilities string. `states` defaults to the
+// built-in 14 states, which is the shape the pre-editor callers (and
+// the old tests) validate against.
+function validateRolesMap(roles, states) {
+  const stateList = states || sm.BUILTIN_STATES;
+  const codes = stateList.map((s) => s.code);
+  const terminals = new Set(stateList.filter((s) => s.is_terminal).map((s) => s.code));
   if (!roles || typeof roles !== 'object' || Array.isArray(roles)) {
     return { ok: false, error: 'invalid_roles', message: 'roles must map every ticket state to a role and responsibilities.' };
   }
   const keys = Object.keys(roles);
-  const missing = sm.STATUSES.filter((s) => !keys.includes(s));
+  const missing = codes.filter((s) => !keys.includes(s));
   if (missing.length > 0) {
     return { ok: false, error: 'invalid_roles', message: `roles is missing states: ${missing.join(', ')}.` };
   }
-  const extra = keys.filter((k) => !sm.STATUSES.includes(k));
+  const extra = keys.filter((k) => !codes.includes(k));
   if (extra.length > 0) {
     return { ok: false, error: 'invalid_roles', message: `roles has unknown states: ${extra.join(', ')}.` };
   }
-  for (const status of sm.STATUSES) {
-    const entry = roles[status];
+  for (const code of codes) {
+    const entry = roles[code];
     if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
-      return { ok: false, error: 'invalid_roles', message: `roles.${status} must have a role and responsibilities.` };
+      return { ok: false, error: 'invalid_roles', message: `roles.${code} must have a role and responsibilities.` };
     }
-    if (sm.TERMINAL_STATUSES.includes(status)) {
+    if (terminals.has(code)) {
       if (entry.role !== null) {
-        return { ok: false, error: 'invalid_roles', message: `roles.${status} is terminal, so its role must be null.` };
+        return { ok: false, error: 'invalid_roles', message: `roles.${code} is terminal, so its role must be null.` };
       }
       if (typeof entry.responsibilities !== 'string') {
-        return { ok: false, error: 'invalid_roles', message: `roles.${status}.responsibilities must be a string.` };
+        return { ok: false, error: 'invalid_roles', message: `roles.${code}.responsibilities must be a string.` };
       }
     } else {
       if (!WORKFLOW_ROLES.includes(entry.role)) {
-        return { ok: false, error: 'invalid_roles', message: `roles.${status}.role must be one of ${WORKFLOW_ROLES.join(', ')}.` };
+        return { ok: false, error: 'invalid_roles', message: `roles.${code}.role must be one of ${WORKFLOW_ROLES.join(', ')}.` };
       }
       if (typeof entry.responsibilities !== 'string' || !entry.responsibilities.trim()) {
-        return { ok: false, error: 'invalid_roles', message: `roles.${status}.responsibilities must be a non-empty string.` };
+        return { ok: false, error: 'invalid_roles', message: `roles.${code}.responsibilities must be a non-empty string.` };
       }
     }
   }
   return { ok: true };
+}
+
+// Validate a full workflow definition: states, transitions and the
+// roles map together (design doc ch. 15). Returns { ok: true } or
+// { ok: false, error, message } with error 'invalid_workflow'.
+// Rules:
+//   - states is a non-empty array; codes are unique snake_case
+//     identifiers; labels are non-empty; exactly one start state;
+//     at least one terminal state; 'cancelled', when listed, must be
+//     terminal (it is the universal cancel target).
+//   - roles covers exactly the states (see validateRolesMap).
+//   - transitions is a non-empty array; from/to are existing states;
+//     from != to; kind is one of the editable kinds; requiresReason
+//     and requiresHandoff are booleans; a backward/return transition
+//     must require a reason; the role is a valid workflow role and
+//     equals the from-state's role in the roles map; no duplicate
+//     (from, to) pair.
+//   - every non-terminal state has at least one outgoing transition.
+//   - every state is reachable from the start state (the implicit
+//     cancel rule makes 'cancelled' reachable from any non-terminal
+//     state, so a listed 'cancelled' state is always reachable).
+function validateWorkflowDefinition({ states, transitions, roles }) {
+  const fail = (message) => ({ ok: false, error: 'invalid_workflow', message });
+  if (!Array.isArray(states) || states.length === 0) {
+    return fail('states must be a non-empty array.');
+  }
+  const codes = [];
+  for (const [i, s] of states.entries()) {
+    if (!s || typeof s !== 'object' || Array.isArray(s)) return fail(`states[${i}] must be an object.`);
+    if (typeof s.code !== 'string' || !STATE_CODE_RE.test(s.code)) {
+      return fail(`states[${i}].code must be a lowercase snake_case identifier.`);
+    }
+    if (codes.includes(s.code)) return fail(`Duplicate state code: ${s.code}.`);
+    codes.push(s.code);
+    if (typeof s.label !== 'string' || !s.label.trim()) {
+      return fail(`states[${i}].label must be a non-empty string.`);
+    }
+    if (typeof s.is_start !== 'boolean' || typeof s.is_terminal !== 'boolean') {
+      return fail(`states[${i}].is_start and is_terminal must be booleans.`);
+    }
+    if (s.code === 'cancelled' && !s.is_terminal) {
+      return fail('State cancelled must be terminal.');
+    }
+  }
+  const starts = states.filter((s) => s.is_start);
+  if (starts.length !== 1) return fail('Exactly one state must be the start state.');
+  if (!states.some((s) => s.is_terminal)) return fail('At least one state must be terminal.');
+  if (!Array.isArray(transitions) || transitions.length === 0) {
+    return fail('transitions must be a non-empty array.');
+  }
+  const seen = new Set();
+  const outgoing = new Map(codes.map((c) => [c, 0]));
+  for (const [i, t] of transitions.entries()) {
+    if (!t || typeof t !== 'object' || Array.isArray(t)) return fail(`transitions[${i}] must be an object.`);
+    if (!codes.includes(t.from)) return fail(`transitions[${i}].from is not a state: ${t.from}.`);
+    if (!codes.includes(t.to)) return fail(`transitions[${i}].to is not a state: ${t.to}.`);
+    if (t.from === t.to) return fail(`transitions[${i}] must not loop back to the same state.`);
+    if (!EDITABLE_KINDS.includes(t.kind)) {
+      return fail(`transitions[${i}].kind must be one of ${EDITABLE_KINDS.join(', ')}.`);
+    }
+    if (typeof t.requiresReason !== 'boolean' || typeof t.requiresHandoff !== 'boolean') {
+      return fail(`transitions[${i}].requiresReason and requiresHandoff must be booleans.`);
+    }
+    if ((t.kind === 'backward' || t.kind === 'return') && !t.requiresReason) {
+      return fail(`transitions[${i}] is a ${t.kind} transition, so it must require a reason.`);
+    }
+    if (!WORKFLOW_ROLES.includes(t.role)) {
+      return fail(`transitions[${i}].role must be one of ${WORKFLOW_ROLES.join(', ')}.`);
+    }
+    // The transition's role is the role the flow was designed with.
+    // It need not equal the roles map's role for the from-state: the
+    // roles map is the per-workflow assignment and overrides the
+    // transition's role at validation time (ch. 14 mechanism, applied
+    // to custom workflows too). Reassigning a state's role must not
+    // force the transition table to change — that is the whole point
+    // of the roles map. On save the server re-derives the stored
+    // transition roles from the roles map, so the stored rows stay in
+    // step (see normalizeDefinition).
+    const key = `${t.from}->${t.to}`;
+    if (seen.has(key)) return fail(`Duplicate transition: ${key}.`);
+    seen.add(key);
+    outgoing.set(t.from, outgoing.get(t.from) + 1);
+  }
+  for (const s of states) {
+    if (!s.is_terminal && outgoing.get(s.code) === 0) {
+      return fail(`State ${s.code} is not terminal but has no outgoing transition.`);
+    }
+  }
+  // Reachability from the start state. The implicit cancel rule makes
+  // a listed 'cancelled' state reachable from any non-terminal state.
+  const start = starts[0].code;
+  const reached = new Set([start]);
+  if (codes.includes('cancelled')) reached.add('cancelled');
+  const queue = [start];
+  while (queue.length > 0) {
+    const cur = queue.shift();
+    for (const t of transitions) {
+      if (t.from === cur && !reached.has(t.to)) {
+        reached.add(t.to);
+        queue.push(t.to);
+      }
+    }
+  }
+  const unreachable = codes.filter((c) => !reached.has(c));
+  if (unreachable.length > 0) {
+    return fail(`States unreachable from the start state: ${unreachable.join(', ')}.`);
+  }
+  // Roles are checked last, so a definition with a broken state or
+  // transition shape is reported as such, not as a roles problem.
+  const rolesCheck = validateRolesMap(roles, states);
+  // A roles failure keeps its own error code ('invalid_roles'), so
+  // the pre-editor API contract is unchanged; structural failures
+  // are 'invalid_workflow'.
+  if (!rolesCheck.ok) return rolesCheck;
+  return { ok: true };
+}
+
+// Normalize a definition for storage: states in array order get
+// sequential sort_order values (the editor orders states by position),
+// and every transition's role is re-derived from its from-state's
+// role in the roles map, so the two can never drift apart.
+function normalizeDefinition({ states, transitions, roles }) {
+  const cleanStates = states.map((s, i) => ({
+    code: s.code,
+    label: String(s.label).trim(),
+    sort_order: i,
+    is_start: !!s.is_start,
+    is_terminal: !!s.is_terminal,
+  }));
+  const cleanTransitions = transitions.map((t) => ({
+    from: t.from,
+    to: t.to,
+    role: roles[t.from].role,
+    requiresReason: !!t.requiresReason,
+    requiresHandoff: !!t.requiresHandoff,
+    kind: t.kind,
+    selfCheck: false,
+  }));
+  return { states: cleanStates, transitions: cleanTransitions };
 }
 
 function requirePmOrAdmin(actorRoles) {
@@ -135,7 +340,34 @@ async function getWorkflowRow(db, id) {
   return rows[0] || null;
 }
 
-async function createWorkflow(db, { actorId, actorRoles, name, projectId, roles }) {
+// The workflow definition in force for one workflow id: the row's
+// states/transitions/roles. Returns null when the workflow does not
+// exist; callers fall back to the built-in definition.
+async function getWorkflowDefinition(db, workflowId) {
+  if (!workflowId) return null;
+  const row = await getWorkflowRow(db, String(workflowId).trim());
+  if (!row) return null;
+  return definitionFromRow(row);
+}
+
+// The definition a ticket follows: its own workflow when it has one,
+// otherwise the built-in 14-state definition. `missing` is set when
+// the ticket names a workflow that no longer exists (the delete guard
+// and the foreign key make this unreachable in practice); callers
+// treat it as an internal error rather than silently falling back,
+// because falling back would strand the ticket in unknown states.
+async function definitionForTicket(db, ticket) {
+  if (!ticket.workflow_id) {
+    return { definition: sm.BUILTIN_DEFINITION, workflow: null, missing: false };
+  }
+  const row = await getWorkflowRow(db, ticket.workflow_id);
+  if (!row) {
+    return { definition: null, workflow: null, missing: true };
+  }
+  return { definition: definitionFromRow(row), workflow: normalizeWorkflow(row), missing: false };
+}
+
+async function createWorkflow(db, { actorId, actorRoles, name, projectId, roles, states, transitions }) {
   if (!requirePmOrAdmin(actorRoles)) {
     return { ok: false, status: 403, error: 'wrong_role', message: 'Only the PM or an Admin may create a workflow.' };
   }
@@ -145,18 +377,27 @@ async function createWorkflow(db, { actorId, actorRoles, name, projectId, roles 
   if (!name || !String(name).trim()) {
     return { ok: false, status: 400, error: 'bad_request', message: 'name is required.' };
   }
-  const rolesCheck = validateRolesMap(roles);
-  if (!rolesCheck.ok) {
-    return { ok: false, status: 400, error: rolesCheck.error, message: rolesCheck.message };
+  // States/transitions default to the built-in definition, so a
+  // roles-only create (the pre-editor shape) still builds a workflow
+  // that behaves exactly like the default flow.
+  const nextStates = states === undefined || states === null ? sm.BUILTIN_STATES : states;
+  const nextTransitions = transitions === undefined || transitions === null
+    ? sm.BUILTIN_DEFINITION.transitions
+    : transitions;
+  const nextRoles = roles === undefined || roles === null ? DEFAULT_WORKFLOW_ROLES : roles;
+  const check = validateWorkflowDefinition({ states: nextStates, transitions: nextTransitions, roles: nextRoles });
+  if (!check.ok) {
+    return { ok: false, status: 400, error: check.error, message: check.message };
   }
+  const clean = normalizeDefinition({ states: nextStates, transitions: nextTransitions, roles: nextRoles });
   const target = cleanProjectId(projectId);
   if (target && !(await projectExists(db, target))) {
     return { ok: false, status: 400, error: 'unknown_project', message: `Unknown project: ${target}.` };
   }
   try {
     const { rows } = await db.query(
-      'INSERT INTO workflows (name, project_id, roles, created_by) VALUES ($1, $2, $3, $4) RETURNING *',
-      [String(name).trim(), target, JSON.stringify(roles), String(actorId).trim()]
+      'INSERT INTO workflows (name, project_id, roles, states, transitions, created_by) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
+      [String(name).trim(), target, JSON.stringify(nextRoles), JSON.stringify(clean.states), JSON.stringify(clean.transitions), String(actorId).trim()]
     );
     return { ok: true, status: 201, workflow: normalizeWorkflow(rows[0]) };
   } catch (err) {
@@ -210,7 +451,7 @@ async function getWorkflow(db, id, { assignedProjectId } = {}) {
   return { ok: true, status: 200, workflow: normalizeWorkflow(row) };
 }
 
-async function updateWorkflow(db, id, { actorId, actorRoles, name, roles, assignedProjectId } = {}) {
+async function updateWorkflow(db, id, { actorId, actorRoles, name, roles, states, transitions, assignedProjectId } = {}) {
   if (!requirePmOrAdmin(actorRoles)) {
     return { ok: false, status: 403, error: 'wrong_role', message: 'Only the PM or an Admin may update a workflow.' };
   }
@@ -231,18 +472,33 @@ async function updateWorkflow(db, id, { actorId, actorRoles, name, roles, assign
   if (name !== undefined && name !== null && !cleanName) {
     return { ok: false, status: 400, error: 'bad_request', message: 'name is required.' };
   }
-  if (roles !== undefined && roles !== null) {
-    const rolesCheck = validateRolesMap(roles);
-    if (!rolesCheck.ok) {
-      return { ok: false, status: 400, error: rolesCheck.error, message: rolesCheck.message };
+  const current = normalizeWorkflow(row);
+  const nextRoles = roles === undefined || roles === null ? current.roles : roles;
+  const nextStates = states === undefined || states === null ? current.states : states;
+  const nextTransitions = transitions === undefined || transitions === null ? current.transitions : transitions;
+  const check = validateWorkflowDefinition({ states: nextStates, transitions: nextTransitions, roles: nextRoles });
+  if (!check.ok) {
+    return { ok: false, status: 400, error: check.error, message: check.message };
+  }
+  // A state that still holds tickets cannot be removed: the tickets
+  // would be stranded in a state their workflow no longer knows.
+  const removed = (current.states || []).map((s) => s.code)
+    .filter((code) => !(nextStates || []).some((s) => s.code === code));
+  if (removed.length > 0) {
+    const { rows: inUse } = await db.query(
+      'SELECT DISTINCT status FROM tickets WHERE workflow_id = $1 AND status = ANY($2)',
+      [row.id, removed]
+    );
+    if (inUse.length > 0) {
+      return { ok: false, status: 400, error: 'state_in_use', message: `States in use by tickets cannot be removed: ${inUse.map((r) => r.status).join(', ')}.` };
     }
   }
+  const clean = normalizeDefinition({ states: nextStates, transitions: nextTransitions, roles: nextRoles });
   const nextName = cleanName || row.name;
-  const nextRoles = roles === undefined || roles === null ? asRolesMap(row.roles) : roles;
   try {
     const { rows } = await db.query(
-      'UPDATE workflows SET name = $1, roles = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3 RETURNING *',
-      [nextName, JSON.stringify(nextRoles), row.id]
+      'UPDATE workflows SET name = $1, roles = $2, states = $3, transitions = $4, updated_at = CURRENT_TIMESTAMP WHERE id = $5 RETURNING *',
+      [nextName, JSON.stringify(nextRoles), JSON.stringify(clean.states), JSON.stringify(clean.transitions), row.id]
     );
     return { ok: true, status: 200, workflow: normalizeWorkflow(rows[0]) };
   } catch (err) {
@@ -257,6 +513,8 @@ async function updateWorkflow(db, id, { actorId, actorRoles, name, roles, assign
 // deleted; an active workflow can only be deleted when the project has
 // another non-default workflow to fall back on (the project then falls
 // back to the default workflow); a non-active workflow deletes freely.
+// A workflow with tickets on it cannot be deleted at all: its tickets
+// would fall back to the built-in flow and strand in unknown states.
 async function deleteWorkflow(db, id, { actorId, actorRoles, assignedProjectId } = {}) {
   if (!requirePmOrAdmin(actorRoles)) {
     return { ok: false, status: 403, error: 'wrong_role', message: 'Only the PM or an Admin may delete a workflow.' };
@@ -273,6 +531,13 @@ async function deleteWorkflow(db, id, { actorId, actorRoles, assignedProjectId }
   }
   if (row.is_default) {
     return { ok: false, status: 400, error: 'default_workflow_readonly', message: 'The default workflow cannot be deleted.' };
+  }
+  const { rows: usedBy } = await db.query(
+    'SELECT id FROM tickets WHERE workflow_id = $1 LIMIT 1',
+    [row.id]
+  );
+  if (usedBy.length > 0) {
+    return { ok: false, status: 400, error: 'workflow_in_use', message: 'This workflow has tickets on it and cannot be deleted.' };
   }
   if (row.is_active) {
     const { rows } = await db.query(
@@ -324,6 +589,8 @@ async function getActiveWorkflow(db, projectId, { assignedProjectId } = {}) {
       project_id: null,
       name: DEFAULT_WORKFLOW_NAME,
       roles: DEFAULT_WORKFLOW_ROLES,
+      states: sm.BUILTIN_STATES,
+      transitions: sm.BUILTIN_DEFINITION.transitions,
       is_default: true,
       is_active: false,
       created_by: null,
@@ -396,6 +663,9 @@ async function setActiveWorkflow(db, { actorId, actorRoles, projectId, workflowI
 // in the database, else the built-in constant. A null project id
 // (uncategorized tickets) goes straight to the default. The two
 // queries are written in this fixed form so test fakes can match them.
+// NOTE (ch. 15): this map only ever overrides roles for tickets on the
+// built-in flow. A ticket on a custom workflow follows that workflow's
+// own transitions and roles; this map is never applied to it.
 async function getRoleMap(db, projectId) {
   const target = cleanProjectId(projectId);
   if (target) {
@@ -424,6 +694,11 @@ module.exports = {
   DEFAULT_WORKFLOW_ROLES,
   DEFAULT_WORKFLOW_NAME,
   validateRolesMap,
+  validateWorkflowDefinition,
+  normalizeDefinition,
+  definitionFromRow,
+  getWorkflowDefinition,
+  definitionForTicket,
   createWorkflow,
   listWorkflows,
   getWorkflow,

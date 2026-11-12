@@ -9,6 +9,7 @@
 const assert = require('node:assert/strict');
 const monitor = require('./monitor.js');
 const workflows = require('./workflows.js');
+const examples = require('./workflowExamples.js');
 
 const NOW = new Date('2026-11-12T12:00:00.000Z');
 function at(minutesFromNow) {
@@ -59,6 +60,25 @@ class FakeDb {
     return row;
   }
 
+  // Seed a workflow from one of the example definitions (ch. 15).
+  seedCustomWorkflow(example, projectId) {
+    const row = {
+      id: `wf-${++this.seq}`,
+      project_id: projectId || null,
+      name: example.name,
+      roles: JSON.parse(JSON.stringify(example.roles)),
+      states: JSON.parse(JSON.stringify(example.states)),
+      transitions: JSON.parse(JSON.stringify(example.transitions)),
+      is_default: false,
+      is_active: false,
+      created_by: 'pm-1',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    this.workflows.push(row);
+    return row;
+  }
+
   _norm(sql) {
     return sql.replace(/\s+/g, ' ').trim();
   }
@@ -78,6 +98,17 @@ class FakeDb {
         rows = rows.filter((t) => t.project_id === params[1]);
       }
       return { rows: rows.map((t) => ({ ...t })) };
+    }
+    // The monitor reads all in-scope tickets and filters by workflow
+    // definition in JS (ch. 15), so the unfiltered list is needed.
+    if (sql === 'SELECT * FROM tickets ORDER BY created_at ASC, id ASC') {
+      return { rows: this.tickets.map((t) => ({ ...t })) };
+    }
+    if (sql === 'SELECT * FROM tickets WHERE project_id = $1 ORDER BY created_at ASC, id ASC') {
+      return { rows: this.tickets.filter((t) => t.project_id === params[0]).map((t) => ({ ...t })) };
+    }
+    if (sql === 'SELECT * FROM tickets WHERE project_id IS NULL ORDER BY created_at ASC, id ASC') {
+      return { rows: this.tickets.filter((t) => !t.project_id).map((t) => ({ ...t })) };
     }
     if (sql.startsWith('SELECT * FROM ticket_transitions WHERE ticket_id')) {
       const rows = this.transitions
@@ -137,17 +168,22 @@ class FakeDb {
       const w = this.workflows.find((x) => x.is_default);
       return { rows: w ? [{ ...w }] : [] };
     }
+    // Definition lookups for a ticket's own workflow (ch. 15).
+    if (/^SELECT \* FROM workflows WHERE id = \$1/.test(sql)) {
+      const w = this.workflows.find((x) => x.id === params[0]);
+      return { rows: w ? [{ ...w }] : [] };
+    }
     throw new Error(`FakeDb: unhandled query: ${sql}`);
   }
 }
 
 // Seed a ticket whose latest applied transition was
 // `transitionMinutesAgo` minutes before NOW.
-function seedTicket(db, { title = 't', status, project_id = null, assignee_id = null, transitionMinutesAgo = 60 }) {
+function seedTicket(db, { title = 't', status, project_id = null, assignee_id = null, workflow_id = null, transitionMinutesAgo = 60 }) {
   const ticketId = `ticket-${++db.seq}`;
   const transitionId = `transition-${++db.seq}`;
   db.tickets.push({
-    id: ticketId, title, status, project_id, assignee_id,
+    id: ticketId, title, status, project_id, assignee_id, workflow_id,
     developer_id: null, description: '',
     created_at: iso(-180), updated_at: iso(-transitionMinutesAgo),
   });
@@ -408,6 +444,59 @@ async function main() {
     assert.equal(monitor.responsibleRole('needs_clarification'), 'pm');
     assert.equal(monitor.responsibleRole('delivered'), null);
     assert.equal(monitor.responsibleRole('requirement'), 'leader');
+  });
+
+  await ok('custom workflow: a working state with no transition for over 30 minutes is stalled', async () => {
+    const db = new FakeDb();
+    const wf = db.seedCustomWorkflow(examples.FLOW_WITH_CONFIRMATION, 'proj-1');
+    const { ticketId } = seedTicket(db, {
+      title: 'stuck planning', status: 'feature_planning',
+      project_id: 'proj-1', workflow_id: wf.id, transitionMinutesAgo: 45,
+    });
+    const rows = await monitor.listStalled(db, { now: NOW });
+    assert.equal(rows.length, 1);
+    const row = rows[0];
+    assert.equal(row.ticket_id, ticketId);
+    assert.equal(row.stalled_minutes, 45);
+    assert.equal(row.notify_role, 'leader');
+    assert.ok(row.next_actions.some((a) => a.to === 'user_confirmation'));
+  });
+
+  await ok('custom workflow: queue states and terminal states are never stalled, however old', async () => {
+    const db = new FakeDb();
+    const wf = db.seedCustomWorkflow(examples.FLOW_WITH_CONFIRMATION, 'proj-1');
+    // user_requirement waits to be claimed (outgoing pickup); delivered
+    // is terminal. Neither is stuck.
+    seedTicket(db, { title: 'waiting to be claimed', status: 'user_requirement', workflow_id: wf.id, transitionMinutesAgo: 180 });
+    seedTicket(db, { title: 'done', status: 'delivered', workflow_id: wf.id, transitionMinutesAgo: 180 });
+    const rows = await monitor.listStalled(db, { now: NOW });
+    assert.equal(rows.length, 0);
+  });
+
+  await ok('custom workflow: under 30 minutes is not stalled, and the built-in list is unchanged', async () => {
+    const db = new FakeDb();
+    const wf = db.seedCustomWorkflow(examples.FLOW_WITH_CONFIRMATION, 'proj-1');
+    seedTicket(db, { title: 'fresh', status: 'feature_planning', workflow_id: wf.id, transitionMinutesAgo: 29 });
+    seedTicket(db, { title: 'built-in stuck', status: 'in_dev', transitionMinutesAgo: 60 });
+    const rows = await monitor.listStalled(db, { now: NOW });
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].title, 'built-in stuck');
+    assert.equal(rows[0].notify_role, 'engineer');
+  });
+
+  await ok('isStalledState: built-in list for the default flow, generic rule for custom flows', async () => {
+    const custom = {
+      states: examples.FLOW_WITH_CONFIRMATION.states,
+      transitions: examples.FLOW_WITH_CONFIRMATION.transitions,
+      roles: examples.FLOW_WITH_CONFIRMATION.roles,
+    };
+    assert.equal(monitor.isStalledState(null, false, 'in_dev'), true);
+    assert.equal(monitor.isStalledState(null, false, 'requirement'), false);
+    assert.equal(monitor.isStalledState(null, false, 'delivered'), false);
+    assert.equal(monitor.isStalledState(custom, true, 'feature_planning'), true);
+    assert.equal(monitor.isStalledState(custom, true, 'user_requirement'), false);
+    assert.equal(monitor.isStalledState(custom, true, 'delivered'), false);
+    assert.equal(monitor.isStalledState(custom, true, 'cancelled'), false);
   });
 
   console.log(`\n${passed} PM stall monitor tests passed.`);

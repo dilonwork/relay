@@ -7,6 +7,13 @@
 // Every transition (and every rejected attempt) is written together with
 // the ticket's status change inside one transaction, so the status can
 // never change without an audit row (design doc ch. 7).
+//
+// A ticket follows one workflow (design doc ch. 15): its workflow_id
+// names the workflow whose states and transitions govern it; a ticket
+// with no workflow follows the built-in 14-state development flow.
+// The workflow is chosen at creation (default: the built-in flow) and
+// never changes afterwards — moving a ticket between workflows would
+// strand it in states the new workflow does not know.
 const sm = require('./stateMachine');
 const workflows = require('./workflows');
 
@@ -141,7 +148,7 @@ async function getTicketTransitions(db, id, { actorId, actorRoles, assignedProje
   return { ok: true, status: 200, transitions };
 }
 
-async function createTicket(db, { actorId, actorRoles, title, description, source, reason, projectId }) {
+async function createTicket(db, { actorId, actorRoles, title, description, source, reason, projectId, workflowId }) {
   if (!actorRoles || !actorRoles.includes('pm')) {
     return { ok: false, status: 403, error: 'wrong_role', message: 'Only the PM may create a ticket.' };
   }
@@ -173,18 +180,38 @@ async function createTicket(db, { actorId, actorRoles, title, description, sourc
       return { ok: false, status: 400, error: 'unknown_project', message: `Unknown project: ${cleanProjectId}.` };
     }
   }
+  // The workflow the ticket follows (design doc ch. 15). No workflow
+  // means the built-in 14-state development flow. A project workflow
+  // only applies to its own project's tickets; a global workflow
+  // (project_id NULL) applies anywhere. The ticket starts in the
+  // workflow's start state.
+  const cleanWorkflowId = workflowId === undefined || workflowId === null || !String(workflowId).trim()
+    ? null
+    : String(workflowId).trim();
+  let definition = sm.BUILTIN_DEFINITION;
+  if (cleanWorkflowId) {
+    const found = await workflows.getWorkflow(db, cleanWorkflowId);
+    if (!found.ok) {
+      return { ok: false, status: found.status, error: found.error, message: found.message };
+    }
+    if (found.workflow.project_id && found.workflow.project_id !== cleanProjectId) {
+      return { ok: false, status: 400, error: 'workflow_project_mismatch', message: 'This workflow belongs to a different project.' };
+    }
+    definition = workflows.definitionFromRow(found.workflow);
+  }
+  const startState = sm.startStateFor(definition);
 
   const ticket = await db.withTransaction(async (client) => {
     const { rows } = await client.query(
-      `INSERT INTO tickets (title, source, status, creator_id, assignee_id, developer_id, description, project_id)
-       VALUES ($1, $2, 'requirement', $3, NULL, NULL, $4, $5) RETURNING *`,
-      [String(title).trim(), src, String(actorId).trim(), String(description).trim(), cleanProjectId]
+      `INSERT INTO tickets (title, source, status, creator_id, assignee_id, developer_id, description, project_id, workflow_id)
+       VALUES ($1, $2, $3, $4, NULL, NULL, $5, $6, $7) RETURNING *`,
+      [String(title).trim(), src, startState, String(actorId).trim(), String(description).trim(), cleanProjectId, cleanWorkflowId]
     );
     const created = rows[0];
     await client.query(
       `INSERT INTO ticket_transitions (ticket_id, actor_id, actor_role, from_status, to_status, reason, handoff, artifacts, result)
-       VALUES ($1, $2, $3, NULL, 'requirement', $4, $5, $6, 'applied') RETURNING *`,
-      [created.id, String(actorId).trim(), 'pm', (reason && String(reason).trim()) || 'Ticket created', '', JSON.stringify([])]
+       VALUES ($1, $2, $3, NULL, $4, $5, $6, $7, 'applied') RETURNING *`,
+      [created.id, String(actorId).trim(), 'pm', startState, (reason && String(reason).trim()) || 'Ticket created', '', JSON.stringify([])]
     );
     return created;
   });
@@ -222,6 +249,19 @@ function nextOwnership(ticket, rule, actorId) {
   return { assigneeId: null, developerId: ticket.developer_id || null };
 }
 
+// Ownership after a transition on a custom workflow (ch. 15): the
+// generic version of the rule above. A pickup claims the ticket for
+// the actor; any other move leaves it waiting for the next role
+// (unassigned), including a backward move back to an earlier state.
+// Custom flows have no single developer role, so developer_id is
+// untouched (and self-check never applies to them).
+function nextOwnershipForCustom(ticket, rule, actorId) {
+  if (rule.kind === 'pickup' || rule.kind === 'cancel') {
+    return { assigneeId: actorId, developerId: ticket.developer_id || null };
+  }
+  return { assigneeId: null, developerId: ticket.developer_id || null };
+}
+
 async function transitionTicket(db, ticketId, { actorId, actorRoles, toStatus, reason, handoff, artifacts, assignedProjectId }) {
   if (!actorId || !String(actorId).trim() || !Array.isArray(actorRoles) || !toStatus) {
     return { ok: false, status: 400, error: 'bad_request', message: 'actor_id, actor roles and to_status are required.' };
@@ -241,12 +281,26 @@ async function transitionTicket(db, ticketId, { actorId, actorRoles, toStatus, r
       return { ok: false, status: 404, error: 'ticket_not_found', message: 'Ticket not found.' };
     }
 
-    // The required role comes from the project's active workflow
-    // (design doc ch. 14), falling back to the default workflow and
-    // then the built-in role map: the state machine, not the caller,
+    // The ticket follows its own workflow's definition (ch. 15); a
+    // ticket with no workflow follows the built-in flow, whose required
+    // role may still be overridden by the project's active workflow
+    // (design doc ch. 14) — the state machine, not the caller,
     // decides which role a transition requires.
-    const roleMap = await workflows.getRoleMap(client, ticket.project_id);
-    const check = sm.validateTransition({
+    const resolved = await workflows.definitionForTicket(client, ticket);
+    if (resolved.missing) {
+      return { ok: false, status: 500, error: 'workflow_not_found', message: 'This ticket names a workflow that no longer exists.' };
+    }
+    const isCustom = !!ticket.workflow_id;
+    // The required role comes from the ticket's own workflow (ch. 15):
+    // for a custom workflow it is that workflow's roles map; for the
+    // built-in flow it is the project's active workflow roles map,
+    // falling back to the default and then the built-in map (ch. 14).
+    // The state machine, not the caller, decides which role a
+    // transition requires.
+    const roleMap = isCustom
+      ? resolved.definition.roles
+      : await workflows.getRoleMap(client, ticket.project_id);
+    const check = sm.validateTransitionFor(resolved.definition, {
       ticket,
       actorId: String(actorId).trim(),
       actorRoles,
@@ -271,7 +325,9 @@ async function transitionTicket(db, ticketId, { actorId, actorRoles, toStatus, r
       return { ok: false, status, error: check.error, message: check.message, transition: rejectedRows[0] };
     }
 
-    const { assigneeId, developerId } = nextOwnership(ticket, check.rule, String(actorId).trim());
+    const { assigneeId, developerId } = isCustom
+      ? nextOwnershipForCustom(ticket, check.rule, String(actorId).trim())
+      : nextOwnership(ticket, check.rule, String(actorId).trim());
     const { rows: updatedRows } = await client.query(
       `UPDATE tickets SET status = $1, assignee_id = $2, developer_id = $3, updated_at = CURRENT_TIMESTAMP
        WHERE id = $4 RETURNING *`,
@@ -287,23 +343,31 @@ async function transitionTicket(db, ticketId, { actorId, actorRoles, toStatus, r
 }
 
 // Trial-stage claim queue (design doc ch. 12): tickets waiting for the
-// caller's roles to pick them up. The trial covers decomposing and
-// development only: a ticket in `requirement` waits for the role the
-// active workflow names for that state to decompose it, and a ticket
-// in `pending_dev` waits for that state's role to start it. In-progress
-// states (decomposing, in_dev, ...) are not claimable — they already
-// have an owner. Each entry carries the transition the caller would
-// take next. Under the default workflow the responsible roles are
-// leader and engineer, exactly as before (design doc ch. 14).
+// caller's roles to pick them up. For the built-in flow the trial
+// covers decomposing and development only: a ticket in `requirement`
+// waits for the role the active workflow names for that state to
+// decompose it, and a ticket in `pending_dev` waits for that state's
+// role to start it. In-progress states (decomposing, in_dev, ...) are
+// not claimable — they already have an owner. Each entry carries the
+// transition the caller would take next. Under the default workflow
+// the responsible roles are leader and engineer, exactly as before
+// (design doc ch. 14).
+//
+// For a custom workflow (ch. 15) the same idea generalizes: a ticket
+// is claimable when its current state has an outgoing 'pickup'
+// transition whose role the caller holds. The claimable states are
+// workflow-dependent, so the candidate set cannot be pre-filtered in
+// SQL; all in-scope tickets are read and filtered here.
 const CLAIMABLE_STATUSES = ['requirement', 'pending_dev'];
 const CLAIMABLE_TO = { requirement: 'decomposing', pending_dev: 'in_dev' };
 
 async function listClaimable(db, actorRoles, projectFilter, assignedProjectId) {
   const roles = Array.isArray(actorRoles) ? actorRoles : [];
   if (roles.length === 0) return [];
-  const rows = await listTickets(db, CLAIMABLE_STATUSES, projectFilter, assignedProjectId);
+  const rows = await listTickets(db, null, projectFilter, assignedProjectId);
   // One role-map lookup per project: tickets of the same project share
-  // their active workflow.
+  // their active workflow (design doc ch. 14). One definition lookup
+  // per workflow: tickets on the same workflow share it (ch. 15).
   const roleMaps = new Map();
   async function roleMapFor(projectId) {
     const key = projectId || '__default__';
@@ -312,24 +376,60 @@ async function listClaimable(db, actorRoles, projectFilter, assignedProjectId) {
     }
     return roleMaps.get(key);
   }
+  const definitions = new Map();
+  async function definitionFor(ticket) {
+    const key = ticket.workflow_id || '__builtin__';
+    if (!definitions.has(key)) {
+      const resolved = await workflows.definitionForTicket(db, ticket);
+      definitions.set(key, resolved.missing ? null : resolved.definition);
+    }
+    return definitions.get(key);
+  }
   const out = [];
   for (const t of rows) {
-    const roleMap = await roleMapFor(t.project_id);
-    const entry = roleMap ? roleMap[t.status] : null;
-    const role = entry ? entry.role : null;
-    if (!role || !roles.includes(role)) continue;
-    const rule = sm.TRANSITIONS.find((r) => r.from === t.status && r.to === CLAIMABLE_TO[t.status]);
+    if (!t.workflow_id) {
+      if (!CLAIMABLE_STATUSES.includes(t.status)) continue;
+      const roleMap = await roleMapFor(t.project_id);
+      const entry = roleMap ? roleMap[t.status] : null;
+      const role = entry ? entry.role : null;
+      if (!role || !roles.includes(role)) continue;
+      const rule = sm.TRANSITIONS.find((r) => r.from === t.status && r.to === CLAIMABLE_TO[t.status]);
+      out.push({
+        ...t,
+        next_transition: rule
+          ? {
+              to: rule.to,
+              role,
+              kind: rule.kind,
+              requires_reason: rule.requiresReason,
+              requires_handoff: rule.requiresHandoff,
+            }
+          : null,
+      });
+      continue;
+    }
+    const definition = await definitionFor(t);
+    if (!definition) continue;
+    const rule = (definition.transitions || []).find(
+      (r) => r.from === t.status && r.kind === 'pickup'
+    );
+    if (!rule) continue;
+    // The effective role is the workflow's roles map for the state
+    // (ch. 14 override); the transition row's role is the designed
+    // role and agrees with it after a save, but the map is the
+    // authority.
+    const entry = definition.roles ? definition.roles[t.status] : null;
+    const effectiveRole = (entry && entry.role) || rule.role;
+    if (!effectiveRole || !roles.includes(effectiveRole)) continue;
     out.push({
       ...t,
-      next_transition: rule
-        ? {
-            to: rule.to,
-            role,
-            kind: rule.kind,
-            requires_reason: rule.requiresReason,
-            requires_handoff: rule.requiresHandoff,
-          }
-        : null,
+      next_transition: {
+        to: rule.to,
+        role: effectiveRole,
+        kind: rule.kind,
+        requires_reason: rule.requiresReason,
+        requires_handoff: rule.requiresHandoff,
+      },
     });
   }
   return out;

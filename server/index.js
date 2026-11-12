@@ -3,7 +3,7 @@ process.env.TZ = process.env.TZ || 'America/Phoenix';
 const express = require('express');
 const cors = require('cors');
 const db = require('./database');
-const { legalTransitions } = require('./stateMachine');
+const { legalTransitions, legalTransitionsFor } = require('./stateMachine');
 const tickets = require('./tickets');
 const monitor = require('./monitor');
 const projects = require('./projects');
@@ -81,8 +81,19 @@ app.get('/api/auth/me', (req, res) => {
 });
 
 // Legal transition table: the single source of truth for the UI.
-app.get('/api/meta/transitions', (req, res) => {
-  res.json(legalTransitions());
+// ?workflow_id= returns that workflow's table (its own states and
+// transitions plus the implicit create/cancel rules); without it the
+// built-in 14-state table is returned, exactly as before.
+app.get('/api/meta/transitions', async (req, res) => {
+  try {
+    const workflowId = req.query.workflow_id ? String(req.query.workflow_id).trim() : '';
+    if (!workflowId) return res.json(legalTransitions());
+    const definition = await workflows.getWorkflowDefinition(db, workflowId);
+    if (!definition) return res.status(404).json({ error: 'workflow_not_found', message: 'Workflow not found.' });
+    res.json(legalTransitionsFor(definition));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.post('/api/tickets', async (req, res) => {
@@ -95,6 +106,9 @@ app.post('/api/tickets', async (req, res) => {
       source: req.body ? req.body.source : undefined,
       reason: req.body ? req.body.reason : undefined,
       projectId: req.body ? req.body.project_id : undefined,
+      // The workflow the ticket follows (design doc ch. 15); omitted
+      // means the built-in 14-state development flow.
+      workflowId: req.body ? req.body.workflow_id : undefined,
     });
     if (!result.ok) return res.status(result.status).json({ error: result.error, message: result.message });
     res.status(201).json(result.ticket);
@@ -320,6 +334,8 @@ app.post('/api/workflows', async (req, res) => {
       name: req.body ? req.body.name : undefined,
       projectId: req.body ? req.body.project_id : undefined,
       roles: req.body ? req.body.roles : undefined,
+      states: req.body ? req.body.states : undefined,
+      transitions: req.body ? req.body.transitions : undefined,
     });
     if (!result.ok) return res.status(result.status).json({ error: result.error, message: result.message });
     res.status(201).json(result.workflow);
@@ -335,6 +351,8 @@ app.patch('/api/workflows/:id', async (req, res) => {
       actorRoles: req.user.roles,
       name: req.body ? req.body.name : undefined,
       roles: req.body ? req.body.roles : undefined,
+      states: req.body ? req.body.states : undefined,
+      transitions: req.body ? req.body.transitions : undefined,
       assignedProjectId: req.user.project_id,
     });
     if (!result.ok) return res.status(result.status).json({ error: result.error, message: result.message });

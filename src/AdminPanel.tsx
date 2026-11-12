@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from './api';
-import type { AdminOverview, Project, User } from './api';
+import type { AdminOverview, Project, User, Workflow } from './api';
 import AdminApiKeys from './AdminApiKeys';
 import AdminOverviewPanel from './AdminOverview';
 import AdminUsers from './AdminUsers';
@@ -24,6 +24,7 @@ export default function AdminPanel() {
   const [overview, setOverview] = useState<AdminOverview | null>(null);
   const [users, setUsers] = useState<User[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
+  const [workflows, setWorkflows] = useState<Workflow[]>([]);
   const [adminError, setAdminError] = useState('');
   const [adminNotice, setAdminNotice] = useState('');
   const [busy, setBusy] = useState(false);
@@ -34,14 +35,16 @@ export default function AdminPanel() {
 
   const loadAdmin = useCallback(async () => {
     try {
-      const [ov, list, projs] = await Promise.all([
+      const [ov, list, projs, wfs] = await Promise.all([
         api.adminOverview(),
         api.adminListUsers(),
         api.listProjects(),
+        api.listWorkflows(),
       ]);
       setOverview(ov);
       setUsers(list);
       setProjects(projs);
+      setWorkflows(wfs);
     } catch (err) {
       if ((err as { status?: number }).status === 401) return;
       setAdminError(err instanceof Error ? err.message : 'Failed to load admin data.');
@@ -77,6 +80,7 @@ export default function AdminPanel() {
         <AdminUsers
           users={users}
           projects={projects}
+          workflows={workflows}
           adminError={adminError}
           adminNotice={adminNotice}
           busy={busy}

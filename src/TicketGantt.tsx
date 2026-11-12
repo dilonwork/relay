@@ -1,13 +1,13 @@
 import { Fragment } from 'react';
-import type { Project, Ticket } from './api';
+import type { Project, Ticket, Workflow } from './api';
 import {
-  TERMINAL_STATUSES,
   formatAxisTime,
   formatTime,
   ganttRange,
   groupGanttTickets,
+  isTerminalFor,
+  stateLabelFor,
   statusColor,
-  statusLabel,
 } from './helpers';
 import { TicketProjectHeader } from './TicketList';
 
@@ -19,6 +19,9 @@ interface TicketGanttProps {
   ganttTickets: Ticket[];
   journeys: Record<string, string[]>;
   ganttLoading: boolean;
+  // Resolves each ticket's own workflow for its status labels and the
+  // terminal check that ends its bar.
+  workflowById: Map<string, Workflow>;
   selectedId: string | null;
   // Opens the ticket detail in its own view.
   onSelectTicket: (id: string) => void;
@@ -32,6 +35,7 @@ export default function TicketGantt(props: TicketGanttProps) {
     ganttTickets,
     journeys,
     ganttLoading,
+    workflowById,
     selectedId,
     onSelectTicket,
   } = props;
@@ -54,6 +58,7 @@ export default function TicketGantt(props: TicketGanttProps) {
             tickets={ganttTickets}
             projects={props.projects}
             journeys={journeys}
+            workflowById={workflowById}
             selectedId={selectedId}
             onSelect={onSelectTicket}
           />
@@ -72,11 +77,12 @@ function GanttChart(props: {
   tickets: Ticket[];
   projects: Project[];
   journeys: Record<string, string[]>;
+  workflowById: Map<string, Workflow>;
   selectedId: string | null;
   onSelect: (id: string) => void;
 }) {
-  const { tickets, projects, journeys, selectedId, onSelect } = props;
-  const range = ganttRange(tickets);
+  const { tickets, projects, journeys, workflowById, selectedId, onSelect } = props;
+  const range = ganttRange(tickets, workflowById);
   const span = range.max - range.min;
   const groups = groupGanttTickets(tickets, projects);
   const ticks = [0, 0.25, 0.5, 0.75, 1].map((f) => range.min + span * f);
@@ -103,14 +109,16 @@ function GanttChart(props: {
             {g.name} ({g.rows.length})
           </div>
           {g.rows.map((t) => {
+            const workflow = t.workflow_id ? workflowById.get(t.workflow_id) : undefined;
+            const label = (code: string) => stateLabelFor(workflow, code);
             const start = new Date(t.created_at).getTime();
-            const end = TERMINAL_STATUSES.has(t.status)
+            const end = isTerminalFor(workflow, t.status)
               ? new Date(t.updated_at).getTime()
               : Date.now();
             const left = Math.max(0, ((start - range.min) / span) * 100);
             const width = Math.max(1.5, Math.min(100 - left, ((end - start) / span) * 100));
             const journey = journeys[t.id] || [];
-            const journeyText = journey.map(statusLabel).join(' → ');
+            const journeyText = journey.map(label).join(' → ');
             const tooltip = journeyText
               ? `${t.title}\n${journeyText}\n${formatTime(t.created_at)} → ${formatTime(
                   new Date(end).toISOString()
@@ -120,7 +128,7 @@ function GanttChart(props: {
               <Fragment key={t.id}>
                 <div className="gantt-label" title={t.title}>
                   <span className="gantt-title">{t.title}</span>
-                  <span className={`badge ${t.status}`}>{statusLabel(t.status)}</span>
+                  <span className={`badge ${t.status}`}>{label(t.status)}</span>
                 </div>
                 <div className="gantt-track">
                   <div

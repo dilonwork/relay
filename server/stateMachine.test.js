@@ -5,6 +5,7 @@
 // and the allowed-transitions helper used by the UI.
 const assert = require('node:assert/strict');
 const sm = require('./stateMachine.js');
+const examples = require('./workflowExamples.js');
 
 let passed = 0;
 function ok(name, fn) {
@@ -364,6 +365,92 @@ async function main() {
     const table = sm.legalTransitions();
     assert.equal(table.length, 20);
     assert.ok(table.some((t) => t.kind === 'cancel' && t.to === 'cancelled'));
+  });
+
+  await ok('validateTransitionFor: flow A walks, sends back, and cancels under its own definition', async () => {
+    const def = {
+      states: examples.FLOW_WITH_CONFIRMATION.states,
+      transitions: examples.FLOW_WITH_CONFIRMATION.transitions,
+      roles: examples.FLOW_WITH_CONFIRMATION.roles,
+    };
+    const overrides = def.roles;
+    const check = (status, role, to, extra = {}) => sm.validateTransitionFor(def, {
+      ticket: ticket(status), actorId: 'u-1', actorRoles: [role],
+      toStatus: to, reason: extra.reason || '', handoff: extra.handoff || '',
+      roleOverrides: overrides,
+    });
+    // The forward walk.
+    assert.equal(check('user_requirement', 'leader', 'feature_planning').ok, true);
+    assert.equal(check('feature_planning', 'leader', 'user_confirmation').ok, true);
+    assert.equal(check('user_confirmation', 'pm', 'spec_generation').ok, true);
+    assert.equal(check('spec_generation', 'engineer', 'delivered').ok, true);
+    // The backward move: PM only, reason required.
+    assert.equal(check('user_confirmation', 'pm', 'feature_planning', { reason: 'metric missing' }).ok, true);
+    assert.equal(check('user_confirmation', 'pm', 'feature_planning').error, 'reason_required');
+    assert.equal(check('user_confirmation', 'leader', 'feature_planning', { reason: 'x' }).error, 'wrong_role');
+    // Cancel: PM from any non-terminal state, even though 'cancelled'
+    // is not listed in this workflow's states.
+    assert.equal(check('feature_planning', 'pm', 'cancelled', { reason: 'dup' }).ok, true);
+    assert.equal(check('feature_planning', 'engineer', 'cancelled', { reason: 'dup' }).error, 'wrong_role');
+    assert.equal(check('feature_planning', 'pm', 'cancelled').error, 'reason_required');
+    // Unknown states and illegal moves.
+    assert.equal(check('user_requirement', 'leader', 'delivered').error, 'illegal_transition');
+    assert.equal(check('user_requirement', 'leader', 'no_such_state').error, 'unknown_status');
+    assert.equal(check('delivered', 'engineer', 'user_requirement').error, 'terminal');
+    assert.equal(check('cancelled', 'pm', 'user_requirement').error, 'terminal');
+    // Without role overrides the transition rows' own roles decide
+    // (the fixture rows agree with the roles map, so nothing changes).
+    const noOverride = sm.validateTransitionFor(def, {
+      ticket: ticket('user_requirement'), actorId: 'u-1', actorRoles: ['leader'],
+      toStatus: 'feature_planning',
+    });
+    assert.equal(noOverride.ok, true);
+  });
+
+  await ok('allowedTransitionsFor and legalTransitionsFor describe a custom definition', async () => {
+    const def = {
+      states: examples.FLOW_WITH_CONFIRMATION.states,
+      transitions: examples.FLOW_WITH_CONFIRMATION.transitions,
+      roles: examples.FLOW_WITH_CONFIRMATION.roles,
+    };
+    const moves = sm.allowedTransitionsFor(def, ticket('user_confirmation'), 'pm', def.roles);
+    // Both explicit moves, plus the universal cancel for the PM.
+    assert.deepEqual(moves.map((m) => m.to).sort(), ['cancelled', 'feature_planning', 'spec_generation']);
+    assert.deepEqual(
+      sm.allowedTransitionsFor(def, ticket('user_confirmation'), 'leader', def.roles),
+      []
+    );
+    assert.deepEqual(
+      sm.allowedTransitionsFor(def, ticket('delivered'), 'engineer', def.roles),
+      []
+    );
+    const table = sm.legalTransitionsFor(def);
+    // create (NULL -> start) + 5 explicit transitions + cancel.
+    // Rows use the same camelCase shape as the built-in table.
+    assert.equal(table.length, 7);
+    assert.deepEqual(table[0], { from: null, to: 'user_requirement', role: 'pm', requiresReason: false, requiresHandoff: false, selfCheck: false, kind: 'create' });
+    const cancel = table.find((t) => t.to === 'cancelled');
+    assert.deepEqual(cancel, { from: '*', to: 'cancelled', role: 'pm', requiresReason: true, requiresHandoff: false, selfCheck: false, kind: 'cancel' });
+    const back = table.find((t) => t.from === 'user_confirmation' && t.to === 'feature_planning');
+    assert.equal(back.requiresReason, true);
+    // The built-in definition reproduces the built-in table exactly.
+    assert.deepEqual(sm.legalTransitionsFor(sm.BUILTIN_DEFINITION), sm.legalTransitions());
+  });
+
+  await ok('isTerminalFor / startStateFor / stateCodes work on a custom definition', async () => {
+    const def = {
+      states: examples.FLOW_INCIDENT.states,
+      transitions: examples.FLOW_INCIDENT.transitions,
+      roles: examples.FLOW_INCIDENT.roles,
+    };
+    assert.equal(sm.startStateFor(def), 'system_event');
+    assert.equal(sm.isTerminalFor(def, 'closed'), true);
+    assert.equal(sm.isTerminalFor(def, 'cancelled'), true); // universal cancel target
+    assert.equal(sm.isTerminalFor(def, 'create_incident'), false);
+    assert.deepEqual(sm.stateCodes(def), ['system_event', 'create_incident', 'closed']);
+    assert.equal(sm.startStateFor(sm.BUILTIN_DEFINITION), 'requirement');
+    assert.equal(sm.isTerminalFor(sm.BUILTIN_DEFINITION, 'delivered'), true);
+    assert.equal(sm.isTerminalFor(sm.BUILTIN_DEFINITION, 'in_dev'), false);
   });
 
   console.log(`\n${passed} state machine tests passed.`);

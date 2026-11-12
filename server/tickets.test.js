@@ -5,6 +5,8 @@
 const assert = require('node:assert/strict');
 const tickets = require('./tickets.js');
 const workflows = require('./workflows.js');
+const sm = require('./stateMachine.js');
+const examples = require('./workflowExamples.js');
 
 let passed = 0;
 function ok(name, fn) {
@@ -30,7 +32,8 @@ class FakeDb {
 
   // Seed an active custom workflow for a project (design doc ch. 14):
   // roles start from the built-in default map, with `overrides`
-  // applied per state.
+  // applied per state. The row carries the built-in definition, as a
+  // migration-seeded default workflow would.
   seedActiveWorkflow(projectId, overrides = {}) {
     const roles = JSON.parse(JSON.stringify(workflows.DEFAULT_WORKFLOW_ROLES));
     for (const [status, entry] of Object.entries(overrides)) {
@@ -41,8 +44,29 @@ class FakeDb {
       project_id: projectId,
       name: 'Custom',
       roles,
+      states: sm.BUILTIN_STATES,
+      transitions: sm.BUILTIN_DEFINITION.transitions,
       is_default: false,
       is_active: true,
+      created_by: 'pm-1',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    this.workflows.push(row);
+    return row;
+  }
+
+  // Seed a workflow from one of the example definitions (ch. 15).
+  seedCustomWorkflow(example, projectId) {
+    const row = {
+      id: `wf-${++this.seq}`,
+      project_id: projectId || null,
+      name: example.name,
+      roles: JSON.parse(JSON.stringify(example.roles)),
+      states: JSON.parse(JSON.stringify(example.states)),
+      transitions: JSON.parse(JSON.stringify(example.transitions)),
+      is_default: false,
+      is_active: false,
       created_by: 'pm-1',
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
@@ -89,12 +113,13 @@ class FakeDb {
         id: `test-ticket-${++this.seq}`,
         title: params[0],
         source: params[1],
-        status: 'requirement',
-        creator_id: params[2],
+        status: params[2],
+        creator_id: params[3],
         assignee_id: null,
         developer_id: null,
-        description: params[3],
-        project_id: params[4] === undefined ? null : params[4],
+        description: params[4],
+        project_id: params[5] === undefined ? null : params[5],
+        workflow_id: params[6] === undefined ? null : params[6],
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       };
@@ -111,19 +136,21 @@ class FakeDb {
       return { rows: [{ ...t }] };
     }
     if (sql.startsWith('INSERT INTO ticket_transitions')) {
-      // Creation variant carries NULL from_status and a fixed 'requirement'.
-      // Parameter order: ticket, actor, role, [from, to,] reason, handoff, artifacts.
-      const isCreation = sql.includes("VALUES ($1, $2, $3, NULL, 'requirement'");
+      // Creation variant carries NULL from_status and the workflow's
+      // start state as to_status (a parameter now, not a fixed
+      // 'requirement'). Parameter order: ticket, actor, role, [from,
+      // to,] reason, handoff, artifacts.
+      const isCreation = sql.includes("VALUES ($1, $2, $3, NULL, $4, $5, $6, $7, 'applied')");
       const tr = {
         id: `test-transition-${++this.seq}`,
         ticket_id: params[0],
         actor_id: params[1],
         actor_role: params[2],
         from_status: isCreation ? null : params[3],
-        to_status: isCreation ? 'requirement' : params[4],
-        reason: isCreation ? params[3] : params[5],
-        handoff: isCreation ? params[4] : params[6],
-        artifacts: JSON.parse(isCreation ? params[5] : params[7]),
+        to_status: isCreation ? params[3] : params[4],
+        reason: isCreation ? params[4] : params[5],
+        handoff: isCreation ? params[5] : params[6],
+        artifacts: JSON.parse(isCreation ? params[6] : params[7]),
         result: sql.includes("'rejected'") ? 'rejected' : 'applied',
         created_at: new Date().toISOString(),
       };
@@ -142,6 +169,11 @@ class FakeDb {
     }
     if (sql === 'SELECT * FROM workflows WHERE is_default = true LIMIT 1') {
       const w = this.workflows.find((x) => x.is_default);
+      return { rows: w ? [{ ...w }] : [] };
+    }
+    // Definition lookups for a ticket's own workflow (ch. 15).
+    if (/^SELECT \* FROM workflows WHERE id = \$1/.test(sql)) {
+      const w = this.workflows.find((x) => x.id === params[0]);
       return { rows: w ? [{ ...w }] : [] };
     }
     throw new Error(`FakeDb: unhandled query: ${sql}`);
@@ -828,6 +860,211 @@ async function main() {
     const missing = await tickets.getTicketTransitions(db, 'no-such-ticket', { ...dev, assignedProjectId: 'proj-1' });
     assert.equal(missing.ok, false);
     assert.equal(missing.status, 404);
+  });
+
+  await ok('custom workflow: creating with a workflow starts in its start state, audited as such', async () => {
+    const db = new FakeDb();
+    const wf = db.seedCustomWorkflow(examples.FLOW_WITH_CONFIRMATION, 'proj-1');
+    const res = await tickets.createTicket(db, {
+      actorId: 'pm-1', actorRoles: ['pm'],
+      title: 'Spec for search', description: 'Goal, scope and acceptance criteria.',
+      projectId: 'proj-1', workflowId: wf.id,
+    });
+    assert.equal(res.ok, true, JSON.stringify(res));
+    assert.equal(res.ticket.status, 'user_requirement');
+    assert.equal(res.ticket.workflow_id, wf.id);
+    const history = await tickets.listTransitions(db, res.ticket.id);
+    assert.equal(history.length, 1);
+    assert.equal(history[0].from_status, null);
+    assert.equal(history[0].to_status, 'user_requirement');
+  });
+
+  await ok('custom workflow: unknown workflow is 404, another project\'s workflow is 400', async () => {
+    const db = new FakeDb();
+    const wf = db.seedCustomWorkflow(examples.FLOW_WITH_CONFIRMATION, 'proj-1');
+    const unknown = await tickets.createTicket(db, {
+      actorId: 'pm-1', actorRoles: ['pm'], title: 'x', description: 'y',
+      projectId: 'proj-1', workflowId: 'no-such-workflow',
+    });
+    assert.equal(unknown.ok, false);
+    assert.equal(unknown.status, 404);
+    const mismatch = await tickets.createTicket(db, {
+      actorId: 'pm-1', actorRoles: ['pm'], title: 'x', description: 'y',
+      projectId: 'proj-2', workflowId: wf.id,
+    });
+    assert.equal(mismatch.ok, false);
+    assert.equal(mismatch.status, 400);
+    assert.equal(mismatch.error, 'workflow_project_mismatch');
+    assert.equal((await tickets.listTickets(db, null)).length, 0);
+  });
+
+  await ok('flow A walks end to end, and confirmation can send the ticket back to planning', async () => {
+    const db = new FakeDb();
+    const wf = db.seedCustomWorkflow(examples.FLOW_WITH_CONFIRMATION, 'proj-1');
+    const created = await tickets.createTicket(db, {
+      actorId: 'pm-1', actorRoles: ['pm'], title: 'Spec for search',
+      description: 'Goal, scope and acceptance criteria.',
+      projectId: 'proj-1', workflowId: wf.id,
+    });
+    const id = created.ticket.id;
+    const leader = { actorId: 'leader-1', actorRoles: ['leader'] };
+    const pm = { actorId: 'pm-1', actorRoles: ['pm'] };
+    const engineer = { actorId: 'dev-1', actorRoles: ['engineer'] };
+    // Pickup assigns the leader; a forward move clears the assignee
+    // for the next role to pick up.
+    const pickup = await tickets.transitionTicket(db, id, { ...leader, toStatus: 'feature_planning' });
+    assert.equal(pickup.ok, true, JSON.stringify(pickup));
+    assert.equal(pickup.ticket.assignee_id, 'leader-1');
+    const forward = await tickets.transitionTicket(db, id, { ...leader, toStatus: 'user_confirmation' });
+    assert.equal(forward.ok, true);
+    assert.equal(forward.ticket.assignee_id, null);
+    // The backward move needs a reason, and the wrong role may not do it.
+    const noReason = await tickets.transitionTicket(db, id, { ...pm, toStatus: 'feature_planning', reason: '' });
+    assert.equal(noReason.ok, false);
+    assert.equal(noReason.status, 400);
+    assert.equal(noReason.error, 'reason_required');
+    const wrongRole = await tickets.transitionTicket(db, id, { ...leader, toStatus: 'feature_planning', reason: 'nope' });
+    assert.equal(wrongRole.ok, false);
+    assert.equal(wrongRole.status, 403);
+    const back = await tickets.transitionTicket(db, id, { ...pm, toStatus: 'feature_planning', reason: 'Acceptance metric missing' });
+    assert.equal(back.ok, true, JSON.stringify(back));
+    assert.equal(back.ticket.status, 'feature_planning');
+    // Forward again, then confirm and deliver.
+    await tickets.transitionTicket(db, id, { ...leader, toStatus: 'user_confirmation' });
+    const confirm = await tickets.transitionTicket(db, id, { ...pm, toStatus: 'spec_generation' });
+    assert.equal(confirm.ok, true);
+    const deliver = await tickets.transitionTicket(db, id, { ...engineer, toStatus: 'delivered' });
+    assert.equal(deliver.ok, true);
+    assert.equal(deliver.ticket.status, 'delivered');
+    // Terminal: nothing moves out of delivered (the service answers
+    // 403 for a terminal attempt, as for other non-validation
+    // rejections; only reason/handoff failures are 400).
+    const stuck = await tickets.transitionTicket(db, id, { ...engineer, toStatus: 'user_requirement' });
+    assert.equal(stuck.ok, false);
+    assert.equal(stuck.status, 403);
+    assert.equal(stuck.error, 'terminal');
+    const full = await tickets.getTicketWithHistory(db, id);
+    // The applied rows trace the path; the three rejected attempts
+    // (no reason, wrong role, terminal) are audited too (ch. 7).
+    assert.deepEqual(
+      full.transitions.filter((t) => t.result === 'applied').map((t) => `${t.from_status || '(created)'} -> ${t.to_status}`),
+      [
+        '(created) -> user_requirement',
+        'user_requirement -> feature_planning',
+        'feature_planning -> user_confirmation',
+        'user_confirmation -> feature_planning',
+        'feature_planning -> user_confirmation',
+        'user_confirmation -> spec_generation',
+        'spec_generation -> delivered',
+      ]
+    );
+    const rejected = full.transitions.filter((t) => t.result === 'rejected');
+    assert.equal(rejected.length, 3);
+    assert.deepEqual(
+      rejected.map((t) => `${t.from_status} -> ${t.to_status}`),
+      [
+        'user_confirmation -> feature_planning',
+        'user_confirmation -> feature_planning',
+        'delivered -> user_requirement',
+      ]
+    );
+  });
+
+  await ok('flow B walks end to end without a confirmation step', async () => {
+    const db = new FakeDb();
+    const wf = db.seedCustomWorkflow(examples.FLOW_WITHOUT_CONFIRMATION, 'proj-1');
+    const created = await tickets.createTicket(db, {
+      actorId: 'pm-1', actorRoles: ['pm'], title: 'Spec for filters',
+      description: 'Goal, scope and acceptance criteria.',
+      projectId: 'proj-1', workflowId: wf.id,
+    });
+    const id = created.ticket.id;
+    const steps = [
+      [{ actorId: 'leader-1', actorRoles: ['leader'] }, 'feature_planning'],
+      [{ actorId: 'leader-1', actorRoles: ['leader'] }, 'spec_generation'],
+      [{ actorId: 'dev-1', actorRoles: ['engineer'] }, 'delivered'],
+    ];
+    for (const [actor, to] of steps) {
+      const res = await tickets.transitionTicket(db, id, { ...actor, toStatus: to });
+      assert.equal(res.ok, true, `step to ${to} failed: ${res.message || ''}`);
+    }
+    const full = await tickets.getTicketWithHistory(db, id);
+    assert.equal(full.status, 'delivered');
+    assert.equal(full.transitions.length, 4);
+  });
+
+  await ok('flow C walks end to end, and any non-terminal state can be cancelled by the PM', async () => {
+    const db = new FakeDb();
+    const wf = db.seedCustomWorkflow(examples.FLOW_INCIDENT, 'proj-1');
+    const created = await tickets.createTicket(db, {
+      actorId: 'pm-1', actorRoles: ['pm'], title: 'Disk alert',
+      description: 'Goal, scope and acceptance criteria.',
+      projectId: 'proj-1', workflowId: wf.id,
+    });
+    const id = created.ticket.id;
+    const pm = { actorId: 'pm-1', actorRoles: ['pm'] };
+    const engineer = { actorId: 'dev-1', actorRoles: ['engineer'] };
+    const pickup = await tickets.transitionTicket(db, id, { ...pm, toStatus: 'create_incident' });
+    assert.equal(pickup.ok, true, JSON.stringify(pickup));
+    assert.equal(pickup.ticket.assignee_id, 'pm-1');
+    // Cancel needs a reason and the PM role.
+    const noReason = await tickets.transitionTicket(db, id, { ...pm, toStatus: 'cancelled', reason: '' });
+    assert.equal(noReason.ok, false);
+    assert.equal(noReason.error, 'reason_required');
+    const wrongRole = await tickets.transitionTicket(db, id, { ...engineer, toStatus: 'cancelled', reason: 'dup' });
+    assert.equal(wrongRole.ok, false);
+    assert.equal(wrongRole.status, 403);
+    const cancelled = await tickets.transitionTicket(db, id, { ...pm, toStatus: 'cancelled', reason: 'Duplicate of another incident' });
+    assert.equal(cancelled.ok, true);
+    assert.equal(cancelled.ticket.status, 'cancelled');
+    // A second ticket walks to closed instead.
+    const second = await tickets.createTicket(db, {
+      actorId: 'pm-1', actorRoles: ['pm'], title: 'CPU alert',
+      description: 'Goal, scope and acceptance criteria.',
+      projectId: 'proj-1', workflowId: wf.id,
+    });
+    const id2 = second.ticket.id;
+    await tickets.transitionTicket(db, id2, { ...pm, toStatus: 'create_incident' });
+    const closed = await tickets.transitionTicket(db, id2, { ...engineer, toStatus: 'closed' });
+    assert.equal(closed.ok, true, JSON.stringify(closed));
+    assert.equal(closed.ticket.status, 'closed');
+  });
+
+  await ok('queue: a custom ticket is claimable only from a pickup state and only by the state\'s role', async () => {
+    const db = new FakeDb();
+    const wf = db.seedCustomWorkflow(examples.FLOW_WITH_CONFIRMATION, 'proj-1');
+    const created = await tickets.createTicket(db, {
+      actorId: 'pm-1', actorRoles: ['pm'], title: 'Spec for search',
+      description: 'Goal, scope and acceptance criteria.',
+      projectId: 'proj-1', workflowId: wf.id,
+    });
+    const id = created.ticket.id;
+    const leader = { actorId: 'leader-1', actorRoles: ['leader'] };
+    const engineer = { actorId: 'dev-1', actorRoles: ['engineer'] };
+    // In user_requirement (a pickup state, role leader): the leader
+    // sees it, the engineer does not.
+    const forLeader = await tickets.listClaimable(db, ['leader']);
+    assert.equal(forLeader.length, 1);
+    assert.equal(forLeader[0].id, id);
+    assert.deepEqual(forLeader[0].next_transition, {
+      to: 'feature_planning', role: 'leader', kind: 'pickup',
+      requires_reason: false, requires_handoff: false,
+    });
+    assert.equal((await tickets.listClaimable(db, ['engineer'])).length, 0);
+    // After the pickup, feature_planning has no pickup transition:
+    // nobody can claim it from the queue.
+    await tickets.transitionTicket(db, id, { ...leader, toStatus: 'feature_planning' });
+    assert.equal((await tickets.listClaimable(db, ['leader'])).length, 0);
+    // The built-in queue is unaffected: a built-in ticket in
+    // requirement is still claimable by the leader.
+    const builtin = await tickets.createTicket(db, {
+      actorId: 'pm-1', actorRoles: ['pm'], title: 'Built-in ticket',
+      description: 'Goal, scope and acceptance criteria.',
+      projectId: 'proj-1',
+    });
+    const builtinQueue = await tickets.listClaimable(db, ['leader']);
+    assert.equal(builtinQueue.length, 1);
+    assert.equal(builtinQueue[0].id, builtin.ticket.id);
   });
 
   console.log(`\n${passed} ticket service tests passed.`);

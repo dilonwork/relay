@@ -1,10 +1,12 @@
-import type { Project } from './api';
+import type { Project, Workflow } from './api';
 
 interface NewTicketFormProps {
   title: string;
   description: string;
   source: string;
   projectId: string;
+  workflowId: string;
+  workflows: Workflow[];
   projects: Project[];
   isPm: boolean;
   busy: boolean;
@@ -12,6 +14,7 @@ interface NewTicketFormProps {
   onDescriptionChange: (value: string) => void;
   onSourceChange: (value: string) => void;
   onProjectIdChange: (value: string) => void;
+  onWorkflowIdChange: (value: string) => void;
   onSubmit: (e: React.FormEvent) => void;
 }
 
@@ -21,6 +24,8 @@ export default function NewTicketForm(props: NewTicketFormProps) {
     description,
     source,
     projectId,
+    workflowId,
+    workflows,
     projects,
     isPm,
     busy,
@@ -28,8 +33,17 @@ export default function NewTicketForm(props: NewTicketFormProps) {
     onDescriptionChange,
     onSourceChange,
     onProjectIdChange,
+    onWorkflowIdChange,
     onSubmit,
   } = props;
+
+  // Workflows usable for the chosen project: workflows of this project
+  // or global ones. The default workflow row is excluded — the
+  // "Default development flow" option above already means it
+  // (workflow_id null). A workflow of another project never appears here.
+  const usable = workflows.filter(
+    (w) => !w.is_default && (!w.project_id || w.project_id === projectId)
+  );
 
   return (
     <div className="card">
@@ -60,6 +74,21 @@ export default function NewTicketForm(props: NewTicketFormProps) {
               {projects.map((p) => (
                 <option key={p.id} value={p.id}>
                   {p.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="field" htmlFor="new-workflow">Workflow</label>
+            <select
+              id="new-workflow"
+              value={workflowId}
+              onChange={(e) => onWorkflowIdChange(e.target.value)}
+            >
+              <option value="">Default development flow (14 states)</option>
+              {usable.map((w) => (
+                <option key={w.id || `default-${w.name}`} value={w.id || ''}>
+                  {w.name} ({(w.states || []).length} states)
                 </option>
               ))}
             </select>
