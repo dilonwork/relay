@@ -314,6 +314,18 @@ app.get('/api/workflows', async (req, res) => {
   }
 });
 
+// Built-in example workflows for the editor's one-click templates
+// (design doc ch. 15). Read-only reference data, not project-scoped:
+// the single source is server/workflowExamples.js, also used by the
+// service tests. Any authenticated user may read them.
+app.get('/api/workflow-examples', async (req, res) => {
+  try {
+    res.json(workflows.listWorkflowExamples());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/api/workflows/:id', async (req, res) => {
   try {
     const result = await workflows.getWorkflow(db, req.params.id, {

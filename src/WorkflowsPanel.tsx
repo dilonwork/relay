@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from './api';
-import type { Project, Workflow, WorkflowState, WorkflowTransition } from './api';
+import type { Project, Workflow, WorkflowState, WorkflowTemplate, WorkflowTransition } from './api';
+import { buildLinearFlow } from './workflowQuickCreate';
 import {
   KIND_LABELS,
   ROLE_LABELS,
@@ -60,6 +61,19 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
   const [formTransitions, setFormTransitions] = useState<WorkflowTransition[]>([]);
   const [formRoles, setFormRoles] = useState<RolesMap>(emptyRoles());
 
+  // One-click templates (GET /api/workflow-examples, single source
+  // server/workflowExamples.js) and Quick create rows. Only used
+  // while creating a new workflow.
+  const [examples, setExamples] = useState<WorkflowTemplate[]>([]);
+  const [examplesLoading, setExamplesLoading] = useState(false);
+  const [examplesError, setExamplesError] = useState('');
+  const [quickRows, setQuickRows] = useState<{ label: string; role: string }[]>([
+    { label: '', role: 'leader' },
+    { label: '', role: 'leader' },
+  ]);
+  const [advFrom, setAdvFrom] = useState('');
+  const [advTo, setAdvTo] = useState('');
+
   const load = useCallback(async () => {
     setLoading(true);
     setError('');
@@ -93,26 +107,118 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
   }
 
   function openCreate() {
-    const fallback = workflows.find((w) => w.is_default);
     setEditingId(null);
     setReadOnly(false);
     setFormName('');
     setFormProjectId(selectedProject !== 'all' ? selectedProject : projects[0]?.id || '');
-    // New workflows start from the default workflow's full definition
-    // (its 14 states, transitions and roles), so the form is pre-filled
-    // with today's behaviour and the user edits from there.
-    if (fallback) {
-      setFormStates(clone(fallback.states || []).sort((a, b) => a.sort_order - b.sort_order));
-      setFormTransitions(clone(fallback.transitions || []));
-      setFormRoles(clone(fallback.roles || {}));
-    } else {
-      setFormStates([]);
-      setFormTransitions([]);
-      setFormRoles(emptyRoles());
-    }
+    // New workflows start blank: no states, transitions or roles.
+    // Add states below, apply a template, or use Quick create. The
+    // default workflow itself is untouched, and existing workflows
+    // are unaffected.
+    setFormStates([]);
+    setFormTransitions([]);
+    setFormRoles(emptyRoles());
+    setQuickRows([
+      { label: '', role: 'leader' },
+      { label: '', role: 'leader' },
+    ]);
+    setAdvFrom('');
+    setAdvTo('');
     setFormOpen(true);
     setError('');
     setNotice('');
+    loadExamples();
+  }
+
+  async function loadExamples() {
+    setExamplesLoading(true);
+    setExamplesError('');
+    try {
+      setExamples(await api.listWorkflowExamples());
+    } catch (err) {
+      if ((err as { status?: number }).status === 401) return; // handled by onUnauthorized
+      setExamplesError(err instanceof Error ? err.message : 'Failed to load templates.');
+    } finally {
+      setExamplesLoading(false);
+    }
+  }
+
+  // --- Start from: templates and Quick create (create mode only) ---
+
+  function applyTemplate(t: WorkflowTemplate) {
+    if (
+      formStates.length > 0 &&
+      !window.confirm('Replace the current states, transitions and roles with this template?')
+    ) {
+      return;
+    }
+    setFormStates(clone(t.states).sort((a, b) => a.sort_order - b.sort_order));
+    setFormTransitions(clone(t.transitions));
+    setFormRoles(clone(t.roles));
+    setNotice(`Template applied: ${t.name}. Adjust it below, then save.`);
+    setError('');
+  }
+
+  function setQuickRow(index: number, patch: { label?: string; role?: string }) {
+    setQuickRows((prev) => prev.map((r, i) => (i === index ? { ...r, ...patch } : r)));
+  }
+
+  function addQuickRow() {
+    setQuickRows((prev) => [...prev, { label: '', role: 'leader' }]);
+  }
+
+  function removeQuickRow(index: number) {
+    setQuickRows((prev) => prev.filter((_, i) => i !== index));
+  }
+
+  function handleQuickGenerate() {
+    const result = buildLinearFlow(quickRows);
+    if (!result.ok) {
+      setError(result.error);
+      return;
+    }
+    if (
+      formStates.length > 0 &&
+      !window.confirm('Replace the current states, transitions and roles with the generated linear flow?')
+    ) {
+      return;
+    }
+    setFormStates(result.states);
+    setFormTransitions(result.transitions);
+    setFormRoles(result.roles);
+    setNotice(`Linear flow generated: ${result.states.length} states, ${result.transitions.length} transitions.`);
+    setError('');
+  }
+
+  // Advanced (Quick create): add one backward transition to the flow
+  // being built. Backward transitions always require a reason (the
+  // server enforces it); finer tuning lives in the Transitions
+  // table below.
+  function addBackwardTransition() {
+    const from = advFrom || formStates[formStates.length - 1]?.code || '';
+    const to = advTo || formStates[formStates.length - 2]?.code || '';
+    if (formStates.length < 2 || !from || !to) {
+      setError('Add at least two states before adding a backward transition.');
+      return;
+    }
+    if (from === to) {
+      setError('A backward transition must go to a different state.');
+      return;
+    }
+    if (!formStates.some((s) => s.code === from) || !formStates.some((s) => s.code === to)) {
+      setError('Both states of a backward transition must exist in the States table.');
+      return;
+    }
+    if (formTransitions.some((t) => t.from === from && t.to === to)) {
+      setError(`A transition ${from} → ${to} already exists.`);
+      return;
+    }
+    setFormTransitions((prev) => [
+      ...prev,
+      { from, to, role: formRoles[from]?.role || 'leader', requiresReason: true, requiresHandoff: false, kind: 'backward', selfCheck: false },
+    ]);
+    setNotice(`Backward transition added: ${from} → ${to} (reason required).`);
+    setError('');
   }
 
   function openEdit(w: Workflow) {
@@ -532,6 +638,152 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
               </div>
             )}
           </div>
+
+          {!editingId && !readOnly && (
+            <>
+              <h3>Start from</h3>
+              <p className="muted">
+                New workflows start blank — add states below, apply a
+                template, or use Quick create to chain states into a
+                linear flow. The default workflow itself is untouched.
+              </p>
+              <div className="form-row">
+                <div>
+                  <label className="field">Template</label>
+                  {examplesLoading ? (
+                    <p className="muted" style={{ margin: '0.25rem 0' }}>Loading templates…</p>
+                  ) : examples.length > 0 ? (
+                    <p style={{ margin: '0.25rem 0' }}>
+                      {examples.map((ex, i) => (
+                        <span key={ex.name}>
+                          {i > 0 && ' · '}
+                          <button className="link" type="button" onClick={() => applyTemplate(ex)} disabled={busy}>
+                            {ex.name}
+                          </button>
+                        </span>
+                      ))}
+                    </p>
+                  ) : (
+                    <p className="muted" style={{ margin: '0.25rem 0' }}>
+                      {examplesError ? `Templates could not be loaded: ${examplesError}` : 'No templates available.'}
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              <h3>Quick create</h3>
+              <p className="muted">
+                Type state names in order and pick who owns each one;
+                Generate chains them into a linear flow (first state is
+                the start, last is terminal). The last state is terminal
+                and has no role. Responsibilities are filled with a
+                default sentence — refine them in the Roles table below.
+              </p>
+              <table>
+                <thead>
+                  <tr>
+                    <th>State name</th>
+                    <th>Responsible role</th>
+                    <th />
+                  </tr>
+                </thead>
+                <tbody>
+                  {quickRows.map((r, i) => {
+                    const isLast = i === quickRows.length - 1;
+                    return (
+                      <tr key={i}>
+                        <td>
+                          <input
+                            type="text"
+                            value={r.label}
+                            onChange={(e) => setQuickRow(i, { label: e.target.value })}
+                            placeholder="e.g. 使用者需求"
+                            aria-label={`Quick create state ${i + 1} name`}
+                          />
+                        </td>
+                        <td>
+                          <select
+                            value={isLast ? '' : r.role}
+                            onChange={(e) => setQuickRow(i, { role: e.target.value })}
+                            disabled={isLast}
+                            aria-label={`Quick create state ${i + 1} role`}
+                          >
+                            {isLast ? (
+                              <option value="">— terminal —</option>
+                            ) : (
+                              WORKFLOW_ROLES.map((role) => (
+                                <option key={role} value={role}>
+                                  {ROLE_LABELS[role] || role}
+                                </option>
+                              ))
+                            )}
+                          </select>
+                        </td>
+                        <td>
+                          <button
+                            className="link"
+                            type="button"
+                            onClick={() => removeQuickRow(i)}
+                            disabled={quickRows.length <= 1}
+                          >
+                            Delete
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+              <button className="link" type="button" onClick={addQuickRow}>
+                + Add state
+              </button>{' '}
+              <button className="primary" type="button" onClick={handleQuickGenerate} disabled={busy}>
+                Generate linear flow
+              </button>
+              <details style={{ marginTop: '0.5rem' }}>
+                <summary>Advanced — return transition</summary>
+                <p className="muted">
+                  Add a backward transition to the flow (for example,
+                  send a ticket back a step when confirmation fails).
+                  Backward transitions always require a reason. Anything
+                  finer lives in the Transitions table below.
+                </p>
+                <div className="form-row">
+                  <div>
+                    <label className="field">From</label>
+                    <select
+                      value={advFrom || formStates[formStates.length - 1]?.code || ''}
+                      onChange={(e) => setAdvFrom(e.target.value)}
+                      disabled={formStates.length < 2}
+                    >
+                      {formStates.map((s) => (
+                        <option key={s.code} value={s.code}>
+                          {s.label || s.code}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="field">To</label>
+                    <select
+                      value={advTo || formStates[formStates.length - 2]?.code || ''}
+                      onChange={(e) => setAdvTo(e.target.value)}
+                      disabled={formStates.length < 2}
+                    >
+                      {formStates.map((s) => (
+                        <option key={s.code} value={s.code}>
+                          {s.label || s.code}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+                <button className="link" type="button" onClick={addBackwardTransition} disabled={busy || formStates.length < 2}>
+                  + Add backward transition
+                </button>
+              </details>
+            </>
+          )}
 
           <h3>States</h3>
           <p className="muted">

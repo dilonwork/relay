@@ -66,6 +66,17 @@ export interface Workflow {
   updated_at: string | null;
 }
 
+// A built-in example workflow for the editor's one-click templates
+// (design doc ch. 15): the same shape as a Workflow, but without the
+// stored row fields. The single source is server/workflowExamples.js,
+// served by GET /api/workflow-examples.
+export interface WorkflowTemplate {
+  name: string;
+  states: WorkflowState[];
+  transitions: WorkflowTransition[];
+  roles: Workflow['roles'];
+}
+
 export interface Transition {
   id: string;
   ticket_id: string;
@@ -244,6 +255,7 @@ export const api = {
     return request<Workflow[]>(`/api/workflows${qs}`);
   },
   getWorkflow: (id: string) => request<Workflow>(`/api/workflows/${encodeURIComponent(id)}`),
+  listWorkflowExamples: () => request<WorkflowTemplate[]>('/api/workflow-examples'),
   createWorkflow: (payload: { name: string; project_id?: string | null; roles: Workflow['roles']; states?: WorkflowState[]; transitions?: WorkflowTransition[] }) =>
     request<Workflow>('/api/workflows', { method: 'POST', body: JSON.stringify(payload) }),
   updateWorkflow: (id: string, payload: { name?: string; roles?: Workflow['roles']; states?: WorkflowState[]; transitions?: WorkflowTransition[] }) =>

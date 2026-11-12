@@ -111,6 +111,7 @@ relay/
 │   ├── NewTicketForm.tsx # create-ticket form
 │   ├── ProjectsPanel.tsx # project list / create project
 │   ├── WorkflowsPanel.tsx # workflow list / state machine editor / set active
+│   ├── workflowQuickCreate.ts # quick-create builder: rows to a linear flow (shared with the server tests)
 │   ├── AdminPanel.tsx    # Admin shell: Overview / Users / API keys tabs
 │   ├── AdminOverview.tsx # system overview, tickets by status, audit
 │   ├── AdminUsers.tsx    # user list, create/edit, assign project, reset password, workflow responsibilities
@@ -135,6 +136,7 @@ relay/
 │   ├── apikeys.test.js
 │   ├── monitor.test.js
 │   ├── workflows.test.js
+│   ├── workflowQuickCreate.test.js
 │   └── migrations.test.js
 ├── db/
 │   └── migrations/       # schema as SQL migrations (001-013)
@@ -228,8 +230,8 @@ are walked end to end (including the backward move), the definition
 validator's rules are tested case by case, and the migration files are
 tested for the 001→013 sequence.
 
-131 tests in total: state machine 21, tickets 30, projects 7, auth 13,
-admin 7, API keys 6, monitor 17, workflows 21, migrations 9.
+144 tests in total: state machine 21, tickets 30, projects 7, auth 13,
+admin 7, API keys 6, monitor 17, workflows 23, quick-create builder 10, migrations 10.
 
 ## Accounts & authentication
 
@@ -372,8 +374,15 @@ handlers.
   never drift apart. Backward and Return transitions must require a
   reason. Cancel is built in for every workflow (PM, any non-terminal
   state, reason required) and is not listed in the editor. A new
-  workflow starts as a full copy of the default workflow; the default
-  workflow itself is read-only (view only).
+  workflow starts blank (no states); add states below, apply one of
+  the three built-in templates with one click
+  (`GET /api/workflow-examples`, single source
+  `server/workflowExamples.js`), or use Quick create: type state names
+  in order, pick the responsible role per state, and Generate chains
+  them into a linear flow (first state is the start, last is
+  terminal); backward transitions and other advanced settings live in
+  the Advanced section and are not required. The default workflow
+  itself is read-only (view only).
 - **Tickets choose a workflow when created:** the New ticket form offers
   the default 14-state development flow plus the project's (and global)
   workflows. A ticket follows its workflow for its whole life; the
