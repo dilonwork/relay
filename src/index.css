@@ -35,20 +35,103 @@ header p { margin: 0; color: #5a6b7c; }
   margin-bottom: 16px;
 }
 
-.user-bar {
+/* App layout: fixed left sidebar (Jira-style navigation) + content area. */
+.layout { display: flex; min-height: 100vh; align-items: stretch; }
+
+.sidebar {
+  width: 232px;
+  flex: 0 0 auto;
+  background: #0f2a3d;
+  color: #dbe7ee;
   display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  align-items: center;
-  background: #fff;
-  border: 1px solid #cfdbe4;
-  border-radius: 8px;
-  padding: 10px 14px;
-  margin-bottom: 16px;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px 12px;
+  position: sticky;
+  top: 0;
+  height: 100vh;
 }
 
-.user-bar .who { font-weight: 600; color: #0f2a3d; }
-.user-bar .spacer { flex: 1; }
+.sidebar-brand { display: flex; align-items: center; justify-content: space-between; padding: 0 6px; }
+.brand-text { font-size: 20px; font-weight: 700; color: #fff; }
+
+.collapse-toggle {
+  background: none;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  color: #dbe7ee;
+  border-radius: 6px;
+  cursor: pointer;
+  padding: 2px 9px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.sidebar-nav { display: flex; flex-direction: column; gap: 4px; }
+.sidebar-nav button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  padding: 9px 10px;
+  cursor: pointer;
+  font-size: 14px;
+  color: #dbe7ee;
+}
+.sidebar-nav button:hover { background: rgba(255, 255, 255, 0.08); }
+.sidebar-nav button.active { background: #0e7c7b; color: #fff; }
+.nav-icon { width: 20px; text-align: center; flex: 0 0 auto; }
+
+.sidebar-filter label.field { color: #9fb4c0; margin: 0 0 4px 0; }
+
+.sidebar-user {
+  margin-top: auto;
+  border-top: 1px solid rgba(255, 255, 255, 0.15);
+  padding-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.sidebar-user .who { font-weight: 600; color: #fff; }
+.sidebar-user .sidebar-username { color: #9fb4c0; font-weight: 400; }
+.sidebar-user .roles { display: flex; flex-wrap: wrap; gap: 4px; }
+.sidebar-user button.link {
+  color: #8fd0cf;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-align: left;
+}
+
+.content { flex: 1; min-width: 0; }
+
+/* Collapsed sidebar: icon rail. */
+.layout.collapsed .sidebar { width: 60px; padding: 16px 8px; }
+.layout.collapsed .brand-text,
+.layout.collapsed .nav-label,
+.layout.collapsed .sidebar-filter,
+.layout.collapsed .sidebar-user .who,
+.layout.collapsed .sidebar-user .roles { display: none; }
+.layout.collapsed .sidebar-brand { justify-content: center; padding: 0; }
+.layout.collapsed .sidebar-nav button { justify-content: center; padding: 9px 0; }
+.layout.collapsed .sidebar-user button.link { justify-content: center; padding: 0; }
+
+/* Narrow screens: the sidebar collapses to the icon rail automatically. */
+@media (max-width: 720px) {
+  .sidebar { width: 60px; padding: 16px 8px; }
+  .brand-text,
+  .nav-label,
+  .sidebar-filter,
+  .sidebar-user .who,
+  .sidebar-user .roles { display: none; }
+  .sidebar-brand { justify-content: center; padding: 0; }
+  .sidebar-nav button { justify-content: center; padding: 9px 0; }
+  .sidebar-user button.link { justify-content: center; padding: 0; }
+  .content { padding: 12px; }
+}
 
 .auth-wrap { max-width: 420px; margin: 60px auto 0; }
 .auth-wrap h1 { margin: 0 0 8px 0; font-size: 24px; color: #0f2a3d; }
@@ -167,6 +250,27 @@ button.link {
 .banner.notice { background: #e2f2e9; border: 1px solid #9fd0ae; color: #1d6b3c; }
 
 .muted { color: #5a6b7c; font-size: 13px; }
+
+/* Dashboard: project overview rows. */
+.dashboard-list { display: flex; flex-direction: column; gap: 8px; }
+.dashboard-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  text-align: left;
+  background: #fff;
+  border: 1px solid #cfdbe4;
+  border-radius: 8px;
+  padding: 12px 14px;
+  cursor: pointer;
+  font-size: 14px;
+  color: #1a2332;
+}
+.dashboard-row:hover { background: #eef6f6; }
+.dashboard-row h3 { margin: 0; font-size: 15px; color: #0f2a3d; }
+.dashboard-row .dashboard-counts { color: #5a6b7c; font-size: 13px; }
 
 /* Gantt view: list / Gantt toggle, shared time axis, one bar per ticket. */
 .gantt-view-toggle { display: flex; gap: 6px; margin-bottom: 12px; }

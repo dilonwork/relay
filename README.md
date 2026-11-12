@@ -212,6 +212,17 @@ ticket service is tested against an in-memory fake implementing the same
   Inter-ticket dependencies are out of scope — they would need a new
   data model.
 
+## Dashboard
+
+- **Default page:** the app lands on the Dashboard, a project overview
+  listing every project with its ticket counts (in progress / waiting /
+  done, computed from `GET /api/tickets`).
+- **Project view:** clicking a project opens that project's view with
+  its Gantt chart; the Gantt/List toggle switches to the ticket table
+  for the same project. Uncategorized tickets get their own row.
+- The Dashboard is a sidebar item alongside Tickets, New ticket,
+  Projects and Admin.
+
 ## API
 
 Every `/api` endpoint except `/api/health`, `/api/auth/status`,

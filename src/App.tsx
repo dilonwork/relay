@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api, getToken, onUnauthorized, setToken } from './api';
 import type { LegalTransition, Project, QueueEntry, Ticket, TicketWithHistory, User } from './api';
-import { QUEUE_TABS, ROLE_LABELS, journeyFromTransitions, statusLabel, targetsForUser } from './helpers';
+import { QUEUE_TABS, ROLE_LABELS, countTicketsByProject, journeyFromTransitions, statusLabel, targetsForUser } from './helpers';
 import AdminPanel from './AdminPanel';
+import Dashboard from './Dashboard';
 import NewTicketForm from './NewTicketForm';
 import ProjectsPanel from './ProjectsPanel';
 import TicketDetail from './TicketDetail';
@@ -11,20 +12,24 @@ import TicketList from './TicketList';
 // Top-level views: one module on screen at a time. 'detail' is the
 // ticket detail opened from the Tickets view; it is not a nav item —
 // the Tickets nav button stays active while a detail is open.
-type MainView = 'tickets' | 'new' | 'projects' | 'admin' | 'detail';
+// 'dashboard' is the default landing page (project overview).
+type MainView = 'dashboard' | 'tickets' | 'new' | 'projects' | 'admin' | 'detail';
 
 export default function App() {
   const [authState, setAuthState] = useState<'loading' | 'login' | 'setup' | 'app'>('loading');
   const [user, setUser] = useState<User | null>(null);
   const [authError, setAuthError] = useState('');
 
-  const [mainView, setMainView] = useState<MainView>('tickets');
+  const [mainView, setMainView] = useState<MainView>('dashboard');
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [tab, setTab] = useState('all');
   const [display, setDisplay] = useState<'list' | 'gantt'>('list');
   const [ganttTickets, setGanttTickets] = useState<Ticket[]>([]);
   const [journeys, setJourneys] = useState<Record<string, string[]>>({});
   const [ganttLoading, setGanttLoading] = useState(false);
   const [tickets, setTickets] = useState<QueueEntry[]>([]);
+  const [dashboardTickets, setDashboardTickets] = useState<Ticket[]>([]);
+  const [dashboardLoading, setDashboardLoading] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<TicketWithHistory | null>(null);
   const [meta, setMeta] = useState<LegalTransition[]>([]);
@@ -61,7 +66,7 @@ export default function App() {
   useEffect(() => {
     onUnauthorized(() => {
       setUser(null);
-      setMainView('tickets');
+      setMainView('dashboard');
       setAuthState('login');
     });
     (async () => {
@@ -149,10 +154,30 @@ export default function App() {
     }
   }, [projectFilter]);
 
+  // Dashboard data: every ticket, unfiltered, so the project overview
+  // counts (in progress / waiting / done) are computed from the same
+  // source as the ticket lists.
+  const loadDashboard = useCallback(async () => {
+    setDashboardLoading(true);
+    try {
+      setDashboardTickets(await api.listTickets());
+    } catch (err) {
+      if ((err as { status?: number }).status === 401) return; // handled by onUnauthorized
+      setError(err instanceof Error ? err.message : 'Failed to load dashboard data.');
+    } finally {
+      setDashboardLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     if (authState !== 'app' || mainView !== 'tickets' || display !== 'gantt') return;
     loadGantt();
   }, [display, mainView, authState, loadGantt]);
+
+  useEffect(() => {
+    if (authState !== 'app' || mainView !== 'dashboard') return;
+    loadDashboard();
+  }, [mainView, authState, loadDashboard]);
 
   useEffect(() => {
     if (authState !== 'app') return;
@@ -184,7 +209,7 @@ export default function App() {
       setToken(res.token);
       setUser(res.user);
       setLoginPassword('');
-      setMainView('tickets');
+      setMainView('dashboard');
       setAuthState('app');
     } catch (err) {
       setAuthError(err instanceof Error ? err.message : 'Login failed.');
@@ -207,7 +232,7 @@ export default function App() {
       setToken(res.token);
       setUser(res.user);
       setSetupPassword('');
-      setMainView('tickets');
+      setMainView('dashboard');
       setAuthState('app');
     } catch (err) {
       setAuthError(err instanceof Error ? err.message : 'Setup failed.');
@@ -225,7 +250,7 @@ export default function App() {
     setToken(null);
     setUser(null);
     setSelectedId(null);
-    setMainView('tickets');
+    setMainView('dashboard');
     setAuthState('login');
   }
 
@@ -347,6 +372,15 @@ export default function App() {
     setMainView('tickets');
   }
 
+  // Clicking a project on the Dashboard opens that project's view with
+  // its Gantt chart; the Gantt/List toggle in the Tickets view switches
+  // to the ticket table (same project filter).
+  function openProjectFromDashboard(id: string) {
+    setProjectFilter(id);
+    setDisplay('gantt');
+    setMainView('tickets');
+  }
+
   // Switching the Tickets view back to List reloads the list, as the
   // toggle did before; switching to Gantt loads through the effect.
   function handleDisplayChange(next: 'list' | 'gantt') {
@@ -447,6 +481,8 @@ export default function App() {
   const selectedTarget = targets.find((t) => t.to === targetStatus);
   const isAdmin = user.roles.includes('admin');
   const isPm = user.roles.includes('pm');
+  // The Tickets nav item stays active while a ticket detail is open.
+  const activeView = mainView === 'detail' ? 'tickets' : mainView;
   const canManageProjects = isPm || isAdmin;
   // The project currently in view: a specific project (single-project
   // view), 'none' for uncategorized, or undefined for all projects.
@@ -454,6 +490,7 @@ export default function App() {
     projectFilter !== 'all' && projectFilter !== 'none'
       ? projects.find((p) => p.id === projectFilter)
       : undefined;
+  const dashboardCounts = countTicketsByProject(dashboardTickets);
 
   function projectName(id: string | null): string {
     if (!id) return '—';
@@ -461,7 +498,104 @@ export default function App() {
   }
 
   return (
-    <div className="container">
+    <div className={sidebarCollapsed ? 'layout collapsed' : 'layout'}>
+      <aside className="sidebar">
+        <div className="sidebar-brand">
+          <span className="brand-text">Relay</span>
+          <button
+            className="collapse-toggle"
+            onClick={() => setSidebarCollapsed((v) => !v)}
+            aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          >
+            {sidebarCollapsed ? '»' : '«'}
+          </button>
+        </div>
+
+        <nav className="sidebar-nav" aria-label="Modules">
+          <button
+            className={activeView === 'dashboard' ? 'active' : ''}
+            onClick={() => setMainView('dashboard')}
+            title="Dashboard"
+          >
+            <span className="nav-icon" aria-hidden="true">▤</span>
+            <span className="nav-label">Dashboard</span>
+          </button>
+          <button
+            className={activeView === 'tickets' ? 'active' : ''}
+            onClick={() => setMainView('tickets')}
+            title="Tickets"
+          >
+            <span className="nav-icon" aria-hidden="true">☰</span>
+            <span className="nav-label">Tickets</span>
+          </button>
+          <button
+            className={mainView === 'new' ? 'active' : ''}
+            onClick={() => setMainView('new')}
+            title="New ticket"
+          >
+            <span className="nav-icon" aria-hidden="true">+</span>
+            <span className="nav-label">New ticket</span>
+          </button>
+          {canManageProjects && (
+            <button
+              className={mainView === 'projects' ? 'active' : ''}
+              onClick={() => setMainView('projects')}
+              title="Projects"
+            >
+              <span className="nav-icon" aria-hidden="true">▦</span>
+              <span className="nav-label">Projects</span>
+            </button>
+          )}
+          {isAdmin && (
+            <button
+              className={mainView === 'admin' ? 'active' : ''}
+              onClick={() => setMainView('admin')}
+              title="Admin"
+            >
+              <span className="nav-icon" aria-hidden="true">⚙</span>
+              <span className="nav-label">Admin</span>
+            </button>
+          )}
+        </nav>
+
+        <div className="sidebar-filter">
+          <label className="field" htmlFor="project-filter">Project</label>
+          <select
+            id="project-filter"
+            value={projectFilter}
+            onChange={(e) => setProjectFilter(e.target.value)}
+          >
+            <option value="all">All projects</option>
+            <option value="none">Uncategorized</option>
+            {projects.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="sidebar-user">
+          <span className="who">
+            {user.display_name || user.username}{' '}
+            <span className="sidebar-username">({user.username})</span>
+          </span>
+          <span className="roles">
+            {user.roles.map((r) => (
+              <span key={r} className="badge">
+                {ROLE_LABELS[r] || r}
+              </span>
+            ))}
+          </span>
+          <button className="link logout" onClick={handleLogout} title="Log out">
+            <span className="nav-icon" aria-hidden="true">⎋</span>
+            <span className="nav-label">Log out</span>
+          </button>
+        </div>
+      </aside>
+
+      <div className="container content">
       <header>
         <div>
           <h1>Relay</h1>
@@ -470,7 +604,8 @@ export default function App() {
         <button
           className="link"
           onClick={() => {
-            if (display === 'gantt') loadGantt();
+            if (mainView === 'dashboard') loadDashboard();
+            else if (display === 'gantt') loadGantt();
             else loadTickets(tab);
             if (selectedId) loadDetail(selectedId);
           }}
@@ -479,56 +614,17 @@ export default function App() {
         </button>
       </header>
 
-      <div className="user-bar">
-        <span className="who">
-          {user.display_name || user.username} <span className="muted">({user.username})</span>
-        </span>
-        {user.roles.map((r) => (
-          <span key={r} className="badge">
-            {ROLE_LABELS[r] || r}
-          </span>
-        ))}
-        <span className="spacer" />
-        <button className="link" onClick={handleLogout}>
-          Log out
-        </button>
-      </div>
-
       {error && <div className="banner error">{error}</div>}
       {notice && <div className="banner notice">{notice}</div>}
 
-      <nav className="tabs" aria-label="Views">
-        <button
-          className={mainView === 'tickets' || mainView === 'detail' ? 'active' : ''}
-          onClick={() => setMainView('tickets')}
-        >
-          Tickets
-        </button>
-        <button
-          className={mainView === 'new' ? 'active' : ''}
-          onClick={() => setMainView('new')}
-        >
-          New ticket
-        </button>
-        {canManageProjects && (
-          <button
-            className={mainView === 'projects' ? 'active' : ''}
-            onClick={() => setMainView('projects')}
-          >
-            Projects
-          </button>
-        )}
-        {isAdmin && (
-          <button
-            className={mainView === 'admin' ? 'active' : ''}
-            onClick={() => setMainView('admin')}
-          >
-            Admin
-          </button>
-        )}
-      </nav>
-
-      {mainView === 'admin' && isAdmin ? (
+      {mainView === 'dashboard' ? (
+        <Dashboard
+          projects={projects}
+          counts={dashboardCounts}
+          loading={dashboardLoading}
+          onSelectProject={openProjectFromDashboard}
+        />
+      ) : mainView === 'admin' && isAdmin ? (
         <AdminPanel />
       ) : mainView === 'projects' && canManageProjects ? (
         <ProjectsPanel
@@ -601,6 +697,7 @@ export default function App() {
           projectName={projectName}
         />
       )}
+      </div>
     </div>
   );
 }
