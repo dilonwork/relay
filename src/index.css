@@ -113,6 +113,18 @@ header p { margin: 0; color: #5a6b7c; }
 
 .content { flex: 1; min-width: 0; }
 
+/* Mobile drawer controls: hidden on desktop, shown at ≤720px. */
+.menu-button { display: none; }
+.drawer-close { display: none; }
+.sidebar-overlay { display: none; }
+
+/* Ticket cards: mobile-only view of the ticket list (≤720px). */
+.ticket-cards { display: none; }
+
+/* Gantt scroll container: lets the timeline scroll horizontally on
+   narrow screens instead of squeezing the bars unreadable. */
+.gantt-scroll { min-width: 0; }
+
 /* Collapsed sidebar: icon rail. */
 .layout.collapsed .sidebar { width: 60px; padding: 16px 8px; }
 .layout.collapsed .brand-text,
@@ -126,20 +138,123 @@ header p { margin: 0; color: #5a6b7c; }
 .layout.collapsed .sidebar-subnav { padding-left: 0; }
 .layout.collapsed .sidebar-user button.link { justify-content: center; padding: 0; }
 
-/* Narrow screens: the sidebar collapses to the icon rail automatically. */
+/* Narrow screens (≤720px): mobile drawer navigation, card views and
+   44px touch targets. Desktop behaviour is unchanged. */
 @media (max-width: 720px) {
-  .sidebar { width: 60px; padding: 16px 8px; }
-  .brand-text,
-  .nav-label,
-  .nav-chevron,
-  .sidebar-filter,
-  .sidebar-user .who,
-  .sidebar-user .roles { display: none; }
-  .sidebar-brand { justify-content: center; padding: 0; }
-  .sidebar-nav button { justify-content: center; padding: 9px 0; }
-  .sidebar-subnav { padding-left: 0; }
-  .sidebar-user button.link { justify-content: center; padding: 0; }
   .content { padding: 12px; }
+
+  /* Hamburger button above the page header. */
+  .menu-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 44px;
+    margin-bottom: 8px;
+    padding: 8px 14px;
+    border: 1px solid #cfdbe4;
+    border-radius: 6px;
+    background: #fff;
+    color: #0f2a3d;
+    font-size: 14px;
+    cursor: pointer;
+  }
+
+  /* Sidebar becomes an off-canvas drawer, hidden by default. The
+     60px icon rail is gone on mobile: it took space without labels. */
+  .sidebar {
+    position: fixed;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    z-index: 60;
+    width: min(280px, 84vw);
+    height: 100vh;
+    height: 100dvh;
+    padding: 16px 12px;
+    transform: translateX(-105%);
+    visibility: hidden;
+    transition: transform 0.2s ease, visibility 0s linear 0.2s;
+    box-shadow: none;
+  }
+  .layout.nav-open .sidebar {
+    transform: translateX(0);
+    visibility: visible;
+    transition: transform 0.2s ease;
+    box-shadow: 0 0 32px rgba(15, 42, 61, 0.35);
+  }
+
+  /* Scrim behind the open drawer; tapping it closes the drawer. */
+  .layout.nav-open .sidebar-overlay {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 55;
+    background: rgba(15, 42, 61, 0.5);
+  }
+
+  /* Drawer close button in the brand row. */
+  .drawer-close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 44px;
+    min-height: 44px;
+    background: none;
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    border-radius: 6px;
+    color: #dbe7ee;
+    font-size: 15px;
+    cursor: pointer;
+  }
+
+  /* 44px touch targets for nav and buttons. */
+  .sidebar-nav button { min-height: 44px; padding: 9px 10px; }
+  .collapse-toggle { min-height: 44px; min-width: 44px; padding: 8px 10px; }
+  .tabs button { min-height: 44px; padding: 8px 14px; }
+  button.primary { min-height: 44px; }
+  button.link { min-height: 44px; display: inline-flex; align-items: center; }
+
+  /* Ticket list: cards replace the 6-column table. */
+  .ticket-table { display: none; }
+  .ticket-cards { display: flex; flex-direction: column; gap: 8px; }
+  .ticket-card {
+    min-height: 44px;
+    padding: 12px;
+    border: 1px solid #e2e8ee;
+    border-radius: 8px;
+    background: #f8fafb;
+    cursor: pointer;
+  }
+  .ticket-card.selected { background: #eef6f6; }
+  .ticket-card-title { font-weight: 600; color: #0f2a3d; overflow-wrap: anywhere; }
+  .ticket-card-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 10px;
+    align-items: center;
+    margin-top: 6px;
+    font-size: 13px;
+  }
+  .ticket-card-next { margin-top: 4px; font-size: 13px; color: #5a6b7c; }
+
+  /* Other tables (history, admin, projects) scroll horizontally
+     inside their card instead of overflowing the page. */
+  table { display: block; max-width: 100%; overflow-x: auto; }
+
+  /* Ticket detail and forms stack in a single column. */
+  .detail-grid { grid-template-columns: 1fr; gap: 2px; }
+  .detail-grid dt { margin-top: 8px; }
+  .detail-grid dt:first-child { margin-top: 0; }
+  .form-row { flex-direction: column; gap: 0; }
+  .form-row > div { min-width: 0; }
+
+  /* Gantt: fixed 600px timeline scrolls inside its card; the label
+     column sticks to the left so rows stay identifiable. */
+  .gantt-scroll .gantt-grid { min-width: 600px; }
+  .gantt-label { position: sticky; left: 0; background: #fff; z-index: 1; }
+
+  /* Login / setup: less top margin on small screens. */
+  .auth-wrap { margin-top: 24px; }
 }
 
 .auth-wrap { max-width: 420px; margin: 60px auto 0; }

@@ -49,13 +49,15 @@ export default function TicketGantt(props: TicketGanttProps) {
       ) : ganttTickets.length === 0 ? (
         <p className="muted">No tickets in this project view.</p>
       ) : (
-        <GanttChart
-          tickets={ganttTickets}
-          projects={props.projects}
-          journeys={journeys}
-          selectedId={selectedId}
-          onSelect={onSelectTicket}
-        />
+        <div className="gantt-scroll">
+          <GanttChart
+            tickets={ganttTickets}
+            projects={props.projects}
+            journeys={journeys}
+            selectedId={selectedId}
+            onSelect={onSelectTicket}
+          />
+        </div>
       )}
     </div>
   );

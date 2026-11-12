@@ -26,6 +26,10 @@ export default function App() {
 
   const [mainView, setMainView] = useState<MainView>('dashboard');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  // Mobile drawer: at ≤720px the sidebar is hidden off-canvas and opens
+  // as an overlay drawer via the hamburger button. Desktop behaviour
+  // (including the collapse toggle) is unchanged.
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [ticketsGroupOpen, setTicketsGroupOpen] = useState(true);
   // Which Tickets sub-page a ticket detail was opened from, so going
   // back returns there instead of always to the list.
@@ -189,6 +193,13 @@ export default function App() {
     if (mainView === 'tickets-list' || mainView === 'tickets-gantt' || mainView === 'detail') {
       setTicketsGroupOpen(true);
     }
+  }, [mainView]);
+
+  // Closing the mobile drawer whenever the view changes (a nav item,
+  // a project row or a ticket was tapped), so the content underneath
+  // is visible again. Also runs on mount, where it is a no-op.
+  useEffect(() => {
+    setMobileNavOpen(false);
   }, [mainView]);
 
   useEffect(() => {
@@ -526,8 +537,18 @@ export default function App() {
     return projects.find((p) => p.id === id)?.name || '—';
   }
 
+  // While the mobile drawer is open the desktop `collapsed` class is
+  // dropped, so the drawer renders at full width with labels instead
+  // of the 60px icon rail; on desktop this class is never applied
+  // (the hamburger button is hidden above 720px).
+  const layoutClass = mobileNavOpen
+    ? 'layout nav-open'
+    : sidebarCollapsed
+      ? 'layout collapsed'
+      : 'layout';
+
   return (
-    <div className={sidebarCollapsed ? 'layout collapsed' : 'layout'}>
+    <div className={layoutClass}>
       <aside className="sidebar">
         <div className="sidebar-brand">
           <span className="brand-text">Relay</span>
@@ -538,6 +559,14 @@ export default function App() {
             title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
           >
             {sidebarCollapsed ? '»' : '«'}
+          </button>
+          <button
+            className="drawer-close"
+            onClick={() => setMobileNavOpen(false)}
+            aria-label="Close navigation"
+            title="Close navigation"
+          >
+            ✕
           </button>
         </div>
 
@@ -650,7 +679,22 @@ export default function App() {
         </div>
       </aside>
 
+      {/* Mobile drawer scrim: tapping it closes the drawer. Hidden on
+          desktop (display: none above 720px). */}
+      <div
+        className="sidebar-overlay"
+        onClick={() => setMobileNavOpen(false)}
+        aria-hidden="true"
+      />
+
       <div className="container content">
+      <button
+        className="menu-button"
+        onClick={() => setMobileNavOpen(true)}
+        aria-label="Open navigation"
+      >
+        <span aria-hidden="true">☰</span> Menu
+      </button>
       <header>
         <div>
           <h1>Relay</h1>
