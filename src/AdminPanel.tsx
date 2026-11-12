@@ -4,19 +4,21 @@ import type { AdminOverview, Project, User, Workflow } from './api';
 import AdminApiKeys from './AdminApiKeys';
 import AdminOverviewPanel from './AdminOverview';
 import AdminUsers from './AdminUsers';
+import WorkflowsPanel from './WorkflowsPanel';
 
-// Admin is split into three sub-pages, one concern each, navigated by
+// Admin is split into four sub-pages, one concern each, navigated by
 // tabs (reusing the .tabs style from the ticket lists). The shell owns
 // the shared data (overview / users / projects, loaded together),
 // the shared banners and busy flag, and which sub-page is shown;
 // each sub-page owns its own form state and handlers. Default tab is
 // Overview. Only admins ever reach this component (App.tsx gates the
 // Admin nav item and view on the admin role).
-type AdminTab = 'overview' | 'users' | 'keys';
+type AdminTab = 'overview' | 'users' | 'workflows' | 'keys';
 
 const ADMIN_TABS: { key: AdminTab; label: string }[] = [
   { key: 'overview', label: 'Overview' },
   { key: 'users', label: 'Users' },
+  { key: 'workflows', label: 'Workflows' },
   { key: 'keys', label: 'API keys' },
 ];
 
@@ -90,6 +92,8 @@ export default function AdminPanel() {
           onRefresh={loadAdmin}
           onOpenKeys={openKeysForUser}
         />
+      ) : adminTab === 'workflows' ? (
+        <WorkflowsPanel projects={projects} />
       ) : (
         <AdminApiKeys
           users={users}

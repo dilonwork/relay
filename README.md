@@ -190,8 +190,8 @@ account or password anywhere in the code.
 ## Layout
 
 - **Left sidebar:** a dark sidebar holds the module navigation —
-  Dashboard, Tickets, New ticket, Projects (PM or Admin only), Workflows
-  (PM or Admin only) and Admin (admin only) — plus a project filter, the
+  Dashboard, Tickets, New ticket, Projects (PM or Admin only)
+  and Admin (admin only; includes Workflows) — plus a project filter, the
   signed-in user's name, username and role badges, and Log out. Tickets is an expandable group
   with two sub-pages, All tickets and Gantt; the group stays active on
   either sub-page and while a ticket detail is open. The active module is
@@ -361,8 +361,8 @@ handlers.
 ## Workflows
 
 - **Custom workflows:** a workflow maps every ticket state to the role
-  responsible for it, plus a responsibilities sentence per state. The
-  PM or an Admin creates a named workflow for a project (name + one
+  responsible for it, plus a responsibilities sentence per state. An
+  Admin creates a named workflow for a project (name + one
   role/responsibilities row per state, pre-filled from the default
   workflow), edits it, sets it active for its project, or deletes it.
 - **State machine editor:** a workflow is not just a role map — it
@@ -409,7 +409,7 @@ handlers.
   per user, which states they own in each workflow.
 - **Endpoints:** see the API table (`/api/workflows`,
   `/api/projects/:id/active-workflow`). Creating, updating, deleting
-  and setting the active workflow are PM or Admin; a duplicate name
+  and setting the active workflow are Admin only; a duplicate name
   in the same project answers 409 `workflow_name_taken`. An assigned
   account sees only its own project's workflows plus the global
   default; cross-project reads answer 403 `out_of_scope`.
@@ -473,11 +473,11 @@ log records the role actually exercised.
 | `GET` | `/api/projects/:id` | One project |
 | `GET` | `/api/workflows?project_id=<id>` | List workflows (project's plus the global default); an assigned caller only sees their project's workflows plus the default |
 | `GET` | `/api/workflows/:id` | One workflow; reading another project's workflow is rejected 403 `out_of_scope` for an assigned caller |
-| `POST` | `/api/workflows` | Create a workflow (PM or Admin; `name`, `project_id`, `roles`) |
-| `PATCH` | `/api/workflows/:id` | Update a workflow's name and/or roles (PM or Admin; the default workflow is read-only) |
-| `DELETE` | `/api/workflows/:id` | Delete a workflow (PM or Admin; the default can never be deleted, an active workflow needs an alternative) |
+| `POST` | `/api/workflows` | Create a workflow (admin only; `name`, `project_id`, `roles`) |
+| `PATCH` | `/api/workflows/:id` | Update a workflow's name and/or roles (admin only; the default workflow is read-only) |
+| `DELETE` | `/api/workflows/:id` | Delete a workflow (admin only; the default can never be deleted, an active workflow needs an alternative) |
 | `GET` | `/api/projects/:id/active-workflow` | The workflow in force for a project: `{workflow, is_default}` |
-| `POST` | `/api/projects/:id/active-workflow` | Set a project's active workflow (`workflow_id`, or null to switch back to the default; PM or Admin) |
+| `POST` | `/api/projects/:id/active-workflow` | Set a project's active workflow (`workflow_id`, or null to switch back to the default; admin only) |
 | `GET` | `/api/admin/overview` | System overview (admin only) |
 | `GET` | `/api/admin/users` | List accounts (admin only) |
 | `POST` | `/api/admin/users` | Create an account (admin only) |
