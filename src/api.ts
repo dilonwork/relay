@@ -25,6 +25,22 @@ export interface Project {
   ticket_count?: number;
 }
 
+// A workflow (design doc ch. 14): a named mapping of every ticket
+// state to the role responsible for it, plus a responsibilities
+// sentence per state. project_id null means the global default
+// workflow, which is read-only and the fallback for every project.
+export interface Workflow {
+  id: string | null;
+  project_id: string | null;
+  name: string;
+  roles: Record<string, { role: string | null; responsibilities: string }>;
+  is_default: boolean;
+  is_active: boolean;
+  created_by: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
 export interface Transition {
   id: string;
   ticket_id: string;
@@ -195,6 +211,29 @@ export const api = {
   createProject: (payload: { name: string; description: string }) =>
     request<Project>('/api/projects', { method: 'POST', body: JSON.stringify(payload) }),
   getProject: (id: string) => request<Project>(`/api/projects/${encodeURIComponent(id)}`),
+  listWorkflows: (projectId?: string) => {
+    const qs = projectId ? `?project_id=${encodeURIComponent(projectId)}` : '';
+    return request<Workflow[]>(`/api/workflows${qs}`);
+  },
+  getWorkflow: (id: string) => request<Workflow>(`/api/workflows/${encodeURIComponent(id)}`),
+  createWorkflow: (payload: { name: string; project_id?: string | null; roles: Workflow['roles'] }) =>
+    request<Workflow>('/api/workflows', { method: 'POST', body: JSON.stringify(payload) }),
+  updateWorkflow: (id: string, payload: { name?: string; roles?: Workflow['roles'] }) =>
+    request<Workflow>(`/api/workflows/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
+  deleteWorkflow: (id: string) =>
+    request<Workflow>(`/api/workflows/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  getActiveWorkflow: (projectId: string) =>
+    request<{ workflow: Workflow | null; is_default: boolean }>(
+      `/api/projects/${encodeURIComponent(projectId)}/active-workflow`
+    ),
+  setActiveWorkflow: (projectId: string, workflowId: string | null) =>
+    request<{ workflow: Workflow | null; is_default: boolean }>(
+      `/api/projects/${encodeURIComponent(projectId)}/active-workflow`,
+      { method: 'POST', body: JSON.stringify({ workflow_id: workflowId }) }
+    ),
   adminOverview: () => request<AdminOverview>('/api/admin/overview'),
   adminListUsers: () => request<User[]>('/api/admin/users'),
   adminCreateUser: (payload: { username: string; password: string; display_name: string; roles: string[] }) =>

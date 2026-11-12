@@ -110,6 +110,7 @@ relay/
 │   ├── TicketDetail.tsx  # ticket detail view with transition history
 │   ├── NewTicketForm.tsx # create-ticket form
 │   ├── ProjectsPanel.tsx # project list / create project
+│   ├── WorkflowsPanel.tsx # workflow list / create / edit / set active
 │   ├── AdminPanel.tsx    # Admin shell: Overview / Users / API keys tabs
 │   ├── AdminOverview.tsx # system overview, tickets by status, audit
 │   ├── AdminUsers.tsx    # user list, create/edit, assign project, reset password
@@ -121,6 +122,8 @@ relay/
 │   ├── stateMachine.js   # 14 states, 20 legal transitions, role checks
 │   ├── tickets.js        # ticket service: create / transition / history / claim queue
 │   ├── projects.js       # project service
+│   ├── workflows.js      # workflow service: CRUD, active workflow, role maps
+│   ├── monitor.js        # PM stall monitor: detect stalled tickets, reminder state
 │   ├── auth.js           # users, scrypt passwords, sessions, API keys, auth middleware
 │   ├── admin.js          # admin overview aggregation, project assignment
 │   ├── stateMachine.test.js
@@ -128,9 +131,11 @@ relay/
 │   ├── projects.test.js
 │   ├── auth.test.js
 │   ├── admin.test.js
-│   └── apikeys.test.js
+│   ├── apikeys.test.js
+│   ├── monitor.test.js
+│   └── workflows.test.js
 ├── db/
-│   └── migrations/       # schema as SQL migrations (001-008)
+│   └── migrations/       # schema as SQL migrations (001-010)
 ├── doc/
 │   └── design.md         # design document (Traditional Chinese)
 ├── screenshots/          # README screenshots (see screenshots/README.md)
@@ -156,8 +161,9 @@ the frontend and backend ports and then starts the same dev servers.
 The backend needs a PostgreSQL database (default name `relay`, see
 `.env.example`). Creating that database is a separate deployment step and is
 not done by the code in this repo; the server creates the `tickets`,
-`ticket_transitions`, `users`, `sessions`, `api_keys` and `projects` tables
-itself on startup (migrations `db/migrations/001-008`).
+`ticket_transitions`, `users`, `sessions`, `api_keys`, `projects`,
+`monitor_reminders` and `workflows` tables itself on startup (migrations
+`db/migrations/001-010`).
 
 On first run the users table is empty, so the app shows a setup screen:
 create the first admin account there (username, display name, password).
@@ -180,9 +186,9 @@ account or password anywhere in the code.
 ## Layout
 
 - **Left sidebar:** a dark sidebar holds the module navigation —
-  Dashboard, Tickets, New ticket, Projects (PM or Admin only) and Admin
-  (admin only) — plus a project filter, the signed-in user's name,
-  username and role badges, and Log out. Tickets is an expandable group
+  Dashboard, Tickets, New ticket, Projects (PM or Admin only), Workflows
+  (PM or Admin only) and Admin (admin only) — plus a project filter, the
+  signed-in user's name, username and role badges, and Log out. Tickets is an expandable group
   with two sub-pages, All tickets and Gantt; the group stays active on
   either sub-page and while a ticket detail is open. The active module is
   highlighted. A collapse toggle shrinks the sidebar to a 60px icon rail;
@@ -195,7 +201,8 @@ account or password anywhere in the code.
   default view; Tickets holds the ticket list (All tickets sub-page, with
   the Claimable queue tab and the project filter) and the Gantt timeline
   (Gantt sub-page), and the ticket creation entry; New ticket is the
-  create form; Projects is the project list; Admin is the admin area (see [Admin](#admin)).
+  create form; Projects is the project list; Workflows is the workflow
+  manager (see [Workflows](#workflows)); Admin is the admin area (see [Admin](#admin)).
 - **Ticket detail is its own view:** clicking a ticket (from the list, a
   Gantt bar or the claimable queue) opens the detail view with its full
   transition history and handoff notes; a back link returns to the
@@ -210,7 +217,13 @@ npm test
 Tests run with plain Node (`node:assert/strict`, no test framework) and do
 not need a live database: the state machine is tested directly, and the
 ticket service is tested against an in-memory fake implementing the same
-`query()` interface as the real `pg` pool.
+`query()` interface as the real `pg` pool. The PM stall monitor is tested
+the same way, with controlled clocks for the 30-minute stall rule and
+the 15-minute reminder cycle. The workflow service is tested the same
+way, including the three-layer role-map fallback and the delete rules.
+
+101 tests in total: state machine 18, tickets 24, projects 7, auth 13,
+admin 7, API keys 6, monitor 13, workflows 13.
 
 ## Accounts & authentication
 
@@ -291,6 +304,16 @@ ticket service is tested against an in-memory fake implementing the same
   question. A missing required reason or handoff note is a validation
   error (400); a wrong role, illegal transition or self-work attempt is
   an authorization error (403). Both are audited as rejected attempts.
+- **PM monitor:** the PM duty agent polls `GET /api/monitor/stalled`
+  every 15 minutes for tickets stuck in a working state (or
+  `needs_clarification`) with no transition for over 30 minutes. The
+  server detects the stall, keeps the reminder count and the escalation
+  flag, and tells the agent who to remind and what would unblock the
+  ticket; the agent sends the reminder and records it with
+  `POST /api/monitor/stalled/:id/reminded`, and escalates to the main
+  chat after 3 reminders with `POST /api/monitor/stalled/:id/escalated`.
+  At most one reminder per ticket per 15-minute cycle. The server has
+  no channel to the chat rooms, so it never sends a message itself.
 
 ## Admin
 
@@ -326,6 +349,30 @@ handlers.
   assigning a ticket is PM only. A duplicate name answers 409
   `project_name_taken`; an unknown project on create or assign answers
   400 `unknown_project`.
+
+## Workflows
+
+- **Custom workflows:** a workflow maps every ticket state to the role
+  responsible for it, plus a responsibilities sentence per state. The
+  PM or an Admin creates a named workflow for a project (name + one
+  role/responsibilities row per state, pre-filled from the default
+  workflow), edits it, sets it active for its project, or deletes it.
+- **Default workflow:** one global default workflow (`Default`,
+  read-only) ships with the system and behaves exactly like the
+  built-in flow. A project without an active workflow follows it;
+  switching a project's active workflow back to `null` returns it to
+  the default. Deleting the active workflow is refused while the
+  project has no other workflow to fall back on.
+- **Routing follows the active workflow:** ticket transitions, the
+  claimable queue and the stall monitor's notify role all resolve
+  through the ticket's project workflow (active → default → built-in).
+  Cancel stays PM-only and is never overridden.
+- **Endpoints:** see the API table (`/api/workflows`,
+  `/api/projects/:id/active-workflow`). Creating, updating, deleting
+  and setting the active workflow are PM or Admin; a duplicate name
+  in the same project answers 409 `workflow_name_taken`. An assigned
+  account sees only its own project's workflows plus the global
+  default; cross-project reads answer 403 `out_of_scope`.
 
 ## Gantt view
 
@@ -378,9 +425,19 @@ log records the role actually exercised.
 | `POST` | `/api/tickets/:id/transitions` | Transition a ticket (`to_status`, `reason`, `handoff`, `artifacts`); a transition on another project's ticket is rejected 403 `out_of_scope` for an assigned caller |
 | `PATCH` | `/api/tickets/:id/project` | Assign a ticket to a project, or back to uncategorized (`project_id` null; PM only) |
 | `GET` | `/api/queue?project_id=<id\|none>` | Tickets the caller can claim in the trial stages, with the next transition; optionally filtered by project; an assigned caller only sees their project's queue |
+| `GET` | `/api/monitor/stalled` | Stalled tickets in the caller's project scope, with reminder state and flags (PM only) |
+| `POST` | `/api/monitor/stalled/:id/reminded` | Record that a reminder was sent for a stalled ticket (PM only) |
+| `POST` | `/api/monitor/stalled/:id/escalated` | Record that a stalled ticket was escalated to the main chat (PM only, after 3 reminders) |
 | `GET` | `/api/projects` | List projects with ticket counts |
 | `POST` | `/api/projects` | Create a project (PM or Admin) |
 | `GET` | `/api/projects/:id` | One project |
+| `GET` | `/api/workflows?project_id=<id>` | List workflows (project's plus the global default); an assigned caller only sees their project's workflows plus the default |
+| `GET` | `/api/workflows/:id` | One workflow; reading another project's workflow is rejected 403 `out_of_scope` for an assigned caller |
+| `POST` | `/api/workflows` | Create a workflow (PM or Admin; `name`, `project_id`, `roles`) |
+| `PATCH` | `/api/workflows/:id` | Update a workflow's name and/or roles (PM or Admin; the default workflow is read-only) |
+| `DELETE` | `/api/workflows/:id` | Delete a workflow (PM or Admin; the default can never be deleted, an active workflow needs an alternative) |
+| `GET` | `/api/projects/:id/active-workflow` | The workflow in force for a project: `{workflow, is_default}` |
+| `POST` | `/api/projects/:id/active-workflow` | Set a project's active workflow (`workflow_id`, or null to switch back to the default; PM or Admin) |
 | `GET` | `/api/admin/overview` | System overview (admin only) |
 | `GET` | `/api/admin/users` | List accounts (admin only) |
 | `POST` | `/api/admin/users` | Create an account (admin only) |

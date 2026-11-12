@@ -4,6 +4,7 @@
 // { query, withTransaction } interface as server/database.js.
 const assert = require('node:assert/strict');
 const tickets = require('./tickets.js');
+const workflows = require('./workflows.js');
 
 let passed = 0;
 function ok(name, fn) {
@@ -19,11 +20,35 @@ class FakeDb {
   constructor() {
     this.tickets = [];
     this.transitions = [];
+    this.workflows = [];
     this.projects = [
       { id: 'proj-1', name: 'WebTracker', description: '' },
       { id: 'proj-2', name: 'Drydock', description: '' },
     ];
     this.seq = 0;
+  }
+
+  // Seed an active custom workflow for a project (design doc ch. 14):
+  // roles start from the built-in default map, with `overrides`
+  // applied per state.
+  seedActiveWorkflow(projectId, overrides = {}) {
+    const roles = JSON.parse(JSON.stringify(workflows.DEFAULT_WORKFLOW_ROLES));
+    for (const [status, entry] of Object.entries(overrides)) {
+      roles[status] = { ...roles[status], ...entry };
+    }
+    const row = {
+      id: `wf-${++this.seq}`,
+      project_id: projectId,
+      name: 'Custom',
+      roles,
+      is_default: false,
+      is_active: true,
+      created_by: 'pm-1',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    this.workflows.push(row);
+    return row;
   }
 
   _norm(sql) {
@@ -107,6 +132,17 @@ class FakeDb {
     }
     if (sql.startsWith('SELECT * FROM ticket_transitions WHERE ticket_id')) {
       return { rows: this.transitions.filter((tr) => tr.ticket_id === params[0]).map((tr) => ({ ...tr })) };
+    }
+    // Workflow role maps (design doc ch. 14): getRoleMap's two fixed
+    // queries. An empty workflows table means the built-in fallback,
+    // which is what proves the existing tests are unaffected.
+    if (sql === 'SELECT * FROM workflows WHERE project_id = $1 AND is_active = true LIMIT 1') {
+      const w = this.workflows.find((x) => x.project_id === params[0] && x.is_active);
+      return { rows: w ? [{ ...w }] : [] };
+    }
+    if (sql === 'SELECT * FROM workflows WHERE is_default = true LIMIT 1') {
+      const w = this.workflows.find((x) => x.is_default);
+      return { rows: w ? [{ ...w }] : [] };
     }
     throw new Error(`FakeDb: unhandled query: ${sql}`);
   }
@@ -520,6 +556,60 @@ async function main() {
     // An account holding both trial roles sees both queues.
     const both = await tickets.listClaimable(db, ['leader', 'engineer']);
     assert.deepEqual(both.map((t) => t.id).sort(), [a.ticket.id, b.ticket.id].sort());
+  });
+
+  await ok('workflow override: a custom workflow reroutes the queue and the transition role', async () => {
+    const db = new FakeDb();
+    // proj-1 runs a custom workflow where pending_dev belongs to the
+    // tester instead of the engineer; proj-2 stays on the default.
+    db.seedActiveWorkflow('proj-1', { pending_dev: { role: 'tester' } });
+    const pm = { actorId: 'pm-1', actorRoles: ['pm'] };
+    const a = await tickets.createTicket(db, { ...pm, title: 'a', description: 'd', projectId: 'proj-1' });
+    const b = await tickets.createTicket(db, { ...pm, title: 'b', description: 'd', projectId: 'proj-2' });
+    for (const t of [a, b]) {
+      await tickets.transitionTicket(db, t.ticket.id, { actorId: 'leader-1', actorRoles: ['leader'], toStatus: 'decomposing', reason: '' });
+      await tickets.transitionTicket(db, t.ticket.id, {
+        actorId: 'leader-1', actorRoles: ['leader'], toStatus: 'pending_dev', reason: 'done', handoff: 'work list',
+      });
+    }
+    // The custom workflow's ticket waits for a tester, not an engineer.
+    const testerQueue = await tickets.listClaimable(db, ['tester']);
+    assert.equal(testerQueue.length, 1);
+    assert.equal(testerQueue[0].id, a.ticket.id);
+    assert.deepEqual(testerQueue[0].next_transition, {
+      to: 'in_dev', role: 'tester', kind: 'pickup', requires_reason: false, requires_handoff: false,
+    });
+    const engineerQueue = await tickets.listClaimable(db, ['engineer']);
+    assert.equal(engineerQueue.length, 1);
+    assert.equal(engineerQueue[0].id, b.ticket.id);
+    assert.deepEqual(engineerQueue[0].next_transition, {
+      to: 'in_dev', role: 'engineer', kind: 'pickup', requires_reason: false, requires_handoff: false,
+    });
+    // The tester may pick up the custom-workflow ticket; the engineer
+    // is refused with wrong_role, and the audit row names the tester.
+    const byTester = await tickets.transitionTicket(db, a.ticket.id, {
+      actorId: 'qa-1', actorRoles: ['tester'], toStatus: 'in_dev', reason: '',
+    });
+    assert.equal(byTester.ok, true);
+    assert.equal(byTester.transition.actor_role, 'tester');
+    const byEngineer = await tickets.transitionTicket(db, b.ticket.id, {
+      actorId: 'dev-1', actorRoles: ['engineer'], toStatus: 'in_dev', reason: '',
+    });
+    assert.equal(byEngineer.ok, true);
+    // Engineer on the custom-workflow ticket would have been refused;
+    // prove it on a fresh ticket in the same state.
+    const c = await tickets.createTicket(db, { ...pm, title: 'c', description: 'd', projectId: 'proj-1' });
+    await tickets.transitionTicket(db, c.ticket.id, { actorId: 'leader-1', actorRoles: ['leader'], toStatus: 'decomposing', reason: '' });
+    await tickets.transitionTicket(db, c.ticket.id, {
+      actorId: 'leader-1', actorRoles: ['leader'], toStatus: 'pending_dev', reason: 'done', handoff: 'work list',
+    });
+    const refused = await tickets.transitionTicket(db, c.ticket.id, {
+      actorId: 'dev-1', actorRoles: ['engineer'], toStatus: 'in_dev', reason: '',
+    });
+    assert.equal(refused.ok, false);
+    assert.equal(refused.error, 'wrong_role');
+    assert.equal(refused.transition.actor_role, 'tester');
+    assert.equal((await tickets.getTicket(db, c.ticket.id)).status, 'pending_dev');
   });
 
   await ok('create with a project stores it; unknown project is 400', async () => {

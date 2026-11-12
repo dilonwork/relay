@@ -31,6 +31,8 @@
 10. 實作分期與未決事項
 11. 帳號、認證與管理
 12. Agent 接入（第二期）
+13. PM 監控（防卡住）
+14. 自訂 Workflow
 - 附錄 A 狀態代碼對照
 - 附錄 B 工單生命週期範例
 
@@ -100,6 +102,8 @@
 
 退回路徑：Review 不過 → 回開發中；測試不過 → 回開發中；測試中驗收標準不清楚 → 待驗收澄清，PM 補充後回測試中；部署失敗 → 回測試中；拆解或開發看不懂 → 待澄清。任一非終點狀態，PM 可切至已取消。已交付與已取消為終點，不再轉出。
 
+> **自訂 Workflow（第 14 章）：**各狀態的負責角色不一定是上表寫死的角色——專案的 active workflow 可以改寫每個狀態的負責角色（例如把待開發改成由 Tester 接取）。狀態機本身不變，只換「誰能切」；轉換角色改走 active workflow，cancel 維持 PM-only。
+
 | 狀態 | 代碼 | 含義與進入條件 |
 | --- | --- | --- |
 | 需求 | `requirement` | PM 已開立，等待 Leader 開始拆解 |
@@ -145,6 +149,8 @@
 | Deployer | 部署中 → 測試中 | 部署失敗；附失敗原因，退回測試重驗 |
 
 > **強制檢查：**系統在執行每一筆轉換前，依序檢查四件事——專案範圍（已指派的帳號只能碰自己專案的工單，見第 12 章）、目前狀態是否允許這條轉換、執行者角色是否在上表內、是否違反「不得處理自己開發的工單」。任一項不過，轉換不成立。
+
+> **自訂 Workflow（第 14 章）：**「執行者角色是否在上表內」這一項改走專案的 active workflow：轉換要求的角色是 active workflow 為該狀態指定的角色，不是上表寫死的角色；沒有 active workflow 時退回預設 workflow，再沒有則退回內建對照（與上表一致）。Cancel 維持 PM-only，不接受 workflow 改寫。
 
 ---
 
@@ -198,6 +204,32 @@ ticket_transitions
   artifacts     附帶產出參照（JSON）
   result        applied | rejected
   created_at    伺服器時間戳記（不可改）
+```
+
+PM 監控另有一張提醒狀態表（第 13 章）：
+
+```
+monitor_reminders
+  ticket_id           對應工單（主鍵，刪工單時連帶刪除）
+  last_transition_id  目前卡住回合的最新 applied 轉換 id
+  reminder_count      本回合已提醒次數
+  last_reminded_at    上次提醒時間（未提醒為空）
+  escalated_at        本回合升級時間（未升級為空）
+  updated_at
+```
+
+自訂 Workflow 另有一張表（第 14 章）：
+
+```
+workflows
+  id            UUID / 主鍵
+  project_id    所屬專案；可空，空即全域預設 workflow（只有一筆預設）
+  name          workflow 名稱；同一專案內唯一
+  roles         JSONB：14 個狀態各一筆 {role, responsibilities}
+  is_default    是否為全域預設 workflow（唯讀）
+  is_active     是否為該專案目前生效的 workflow（每專案最多一筆）
+  created_by    建立者帳號 ID
+  created_at / updated_at
 ```
 
 上表為綱要而非最終 DDL；欄位型別、索引與拆解子單的關聯方式（一個需求拆成多張開發單時，父子工單如何連結）在實作第一期定案，見第 10 章。
@@ -282,7 +314,7 @@ api_keys
 - 工單的優先級與分級欄位是否需要（例如嚴重度），以及是否影響接單順序。
 - 值班來源的工單若只需處置、不需開發，是否走完整開發鏈，還是允許在特定狀態直接交付。
 - 操作介面形式：先以 API 加簡單列表頁面，還是一開始就做完整的工單看板。
-- 通知方式：狀態轉換後是否主動通知下一手負責人，透過哪個頻道。
+- 通知方式：狀態轉換後是否主動通知下一手負責人，透過哪個頻道。—— PM 監控（第 13 章）已回答其中一半：卡住偵測與提醒狀態由 server 提供，發送由 PM 值班 Agent 負責；其他狀態轉換的主動通知仍待定。
 
 ---
 
@@ -371,6 +403,114 @@ api_keys
 ### 試行範圍說明
 
 - API 金鑰本身不限階段：金鑰認證與會話認證相同，不會因為某段不在試行範圍就擋下呼叫。試行的意思是：接單佇列與交接必填目前只覆蓋拆解與開發兩段，交接是否足夠也在這兩段驗證。其他階段照原有規則走，不另外設 Agent 專用限制。
+
+### PM 監控
+
+- PM 每 15 分鐘輪詢 `GET /api/monitor/stalled` 看範圍內卡住的單（第 13 章）。三個監控端點皆須 PM 角色，並走同一條專案範圍檢查（`stateMachine.checkProjectScope`）；跨專案的提醒或升級紀錄回 403 `out_of_scope`。
+
+---
+
+## 13. PM 監控（防卡住）
+
+> 本章實作於工單 c3f13041：PM 負責整個任務順利跑完、不被卡住，每 15 分鐘檢查一次、提醒成員。
+
+### 卡住的定義
+
+- 處於工作中狀態（`decomposing`、`in_dev`、`in_review`、`in_test`、`pending_deploy`）超過 30 分鐘沒有任何轉換，或處於 `needs_clarification` 超過 30 分鐘沒人回。
+- 時鐘是最新一筆 applied 轉換紀錄（`ticket_transitions` 的 `created_at`），不是 `tickets.updated_at`：把工單移專案也會更新 `updated_at`，被拒的嘗試也不會推進工單，兩者都不該重置時鐘。
+- 刻意未納入：`requirement`、`pending_dev`、`pending_review`、`pending_test`（等接取的佇列狀態）與 `needs_acceptance_clarification`。規格只列五個工作中狀態加待澄清；若 Leader 要把等接取的佇列也納入監控，改 `server/monitor.js` 的 `STALLED_STATES` 一行即可。
+
+### 分工：伺服器偵測、值班 Agent 發送
+
+- Relay server 沒有通往 Muse 聊天室的通道，所以「通知到角色聊天室」不可能由 server 直接做。分工如下：
+  - Server：偵測卡住、保存提醒狀態（`monitor_reminders` 表）、去重、判斷是否該升級，並提供 PM 輪詢的端點。
+  - PM 值班 Agent：每 15 分鐘呼叫 `GET /api/monitor/stalled`，對 `needs_reminder` 為真的單發提醒、呼叫 `POST .../reminded` 回報；對 `needs_escalation` 為真的單升級到主聊天室給 Dylan、呼叫 `POST .../escalated` 回報。
+- 15 分鐘的節奏由 PM 值班排程控制（repo 外），server 只提供「現在該提醒誰」的狀態；server 本身不跑定時任務（不新增依賴）。
+
+### 提醒狀態與去重
+
+- 每張單在 `monitor_reminders` 最多一列，以「卡住回合」（episode）區分：回合的 key 是最新一筆 applied 轉換的 id。工單一有新轉換，回合就換了，提醒次數從 0 重新算、升級狀態清空——轉換路徑不需掛鉤子，server 在讀取時比對 key 即可。
+- 每個 15 分鐘週期每張單最多一則提醒：`needs_reminder` 只在「從未提醒」或「上次提醒已滿 15 分鐘」時為真；提醒後 PM 呼叫 ack 端點寫入 `last_reminded_at`，15 分鐘內再查就不會重複 flagged。即使 PM 沒來得及 ack，下次輪詢仍只會發一則（一個週期一則）。
+- 升級：同一回合提醒滿 3 次（約 45 分鐘）仍卡住，`needs_escalation` 為真；PM 升級後呼叫 ack 端點寫入 `escalated_at`，同一回合只升級一次。升級後提醒照常每 15 分鐘繼續（單子還卡著），直到工單移動、回合結束。提醒滿 3 次後，下一次輪詢即 flag 升級；PM 也可在發完第 3 則提醒後立刻重查一次、同一週期內升級，兩種做法都符合「提醒 3 次後升級」。
+- `needs_clarification` 的負責角色是 PM：提醒的對象就是 PM 自己——輪詢的 PM Agent 看到後應直接補充澄清（本職工作），而不是再轉發一則訊息給自己。
+
+### 端點（皆須 PM 角色，皆走專案範圍檢查）
+
+- `GET /api/monitor/stalled`：範圍內全部卡住的單，每筆附 `stalled_since`、`stalled_minutes`、`reminder_count`、`last_reminded_at`、`escalated_at`、`needs_reminder`、`needs_escalation`、`notify_role`（負責角色）與 `next_actions`（該角色下一步合法轉換，即「解開需要什麼」）。
+- `POST /api/monitor/stalled/:id/reminded`：記錄已發提醒；同一回合次數 +1，新回合重置為 1。單子當下沒卡住回 400 `not_stalled`；非 PM 回 403 `wrong_role`；跨專案回 403 `out_of_scope`。
+- `POST /api/monitor/stalled/:id/escalated`：記錄已升級；同一回合只接受一次，未滿 3 次提醒或已升級過回 400 `not_due`。
+
+### 備註
+
+- migration 009 是 `monitor_reminders` 表。先前討論的 CHECK 約束補漏（第 14 個狀態 `needs_acceptance_clarification`）若另開 migration，編號順延為 011（010 已是 workflows 表，本單不碰那個問題）。
+- 未驗證：migration SQL 與 upsert 語句未在 live PostgreSQL 上實際執行（本機無資料庫）；合併部署前應在 develop 預覽環境以真實工單跑一次完整週期（卡住 → 提醒 → 3 次 → 升級）。
+
+---
+
+## 14. 自訂 Workflow
+
+> 本章實作於工單 3269ec1c：專案可以自訂每個狀態由哪個角色負責，取代內建的固定對照；預設 workflow 的行為與今天完全一致。
+
+### 動機
+
+第 5／6 章的狀態機與角色對照是寫死在程式裡的：待開發永遠等工程師、測試中永遠是 Tester。不同專案想換分工（例如某專案的待開發由 Tester 先接去寫測試計畫）時，過去只能改程式。自訂 Workflow 把「狀態 → 角色」這層對照搬進資料庫：每個專案可以有一套具名 workflow，工單的路由、接單佇列與卡住提醒都改走該專案生效的 workflow。
+
+### 資料模型
+
+- `workflows` 表（綱要見第 8 章，DDL 為 migration 010）：`name`、每個狀態的 `{role, responsibilities}`（`roles` JSONB）、`is_default`／`is_active` 旗標。
+- `roles` 的形狀：14 個狀態缺一不可、多餘的 key 拒絕。非終態的 `role` 必須是 6 個 workflow 角色（pm／leader／engineer／reviewer／tester／deployer）之一，`responsibilities` 是非空字串；終態（`delivered`／`cancelled`）的 `role` 必須是 `null`，`responsibilities` 是字串。驗證函式為 `server/workflows.js` 的 `validateRolesMap`。
+- 名稱唯一：同一專案內（`project_id`，`name`）唯一，撞名回 409 `workflow_name_taken`（沿用 projects 的慣例，service 收到 23505 回 409）。
+
+### 旗標語意
+
+- `is_default`：全域預設 workflow 只有一筆（`project_id` NULL），是所有專案的 fallback。**唯讀**：更新、刪除、設為 active 都拒絕（400 `default_workflow_readonly`）。
+- `is_active`：每個專案最多一筆。設為 active 時，把同一專案其他 workflow 的 `is_active` 清掉（同一交易內完成）。切回預設＝把該專案的 active 全部清掉（`workflow_id` 傳 `null`）。
+- 刪除守則：預設 workflow 永遠不能刪；active workflow 在該專案沒有其他非預設 workflow 可替代時不能刪（400 `active_workflow_no_alternative`）；有其他非預設 workflow 時可刪，刪後該專案退回預設 workflow。非 active 的 workflow 可直接刪。
+
+### Seed 與預設 workflow
+
+- migration 010 用 `INSERT ... SELECT ... WHERE NOT EXISTS (SELECT 1 FROM workflows WHERE is_default)` 寫入一筆名為 `Default` 的預設 workflow，內容等於目前內建流程，確保既有行為完全不變。
+- 預設 workflow 的角色對照從 `server/stateMachine.js` 的 `TRANSITIONS` 推導（每個狀態取第一條 `from` 為該狀態的規則之 role）：requirement→leader，decomposing→leader，needs_clarification→pm，pending_dev→engineer，in_dev→engineer，pending_review→reviewer，in_review→reviewer，pending_test→tester，in_test→tester，needs_acceptance_clarification→pm，pending_deploy→deployer，deploying→deployer，delivered／cancelled→null。
+- **responsibilities 文字是我補寫的**：現有文件與程式沒有現成寫法，預設 workflow 每個狀態的職責句是我為本單新寫的（見 `server/workflows.js` 的 `DEFAULT_RESPONSIBILITIES`），不是從既有文件抄來的。
+- Seed 的 JSON 與 `server/workflows.js` 的 `DEFAULT_WORKFLOW_ROLES` 完全一致：以程式產生（node 讀 workflows.js 印出 JSON 再寫進 SQL），不要手抄兩份。
+
+### 角色解析：三層 fallback
+
+`workflows.getRoleMap(db, projectId)` 回傳該專案生效的 roles map：
+
+1. 該專案的 active workflow；
+2. 否則 DB 裡 `is_default` 的預設 workflow；
+3. 否則程式內建 `DEFAULT_WORKFLOW_ROLES` 常數（從 TRANSITIONS 推導，見上）。
+
+`projectId` 為 null（未分類工單）直接走預設。這個三層 fallback 保證既有行為不變，即使 seed 還沒跑過。兩條查詢寫成固定形式，方便測試 fake 處理：`SELECT * FROM workflows WHERE project_id = $1 AND is_active = true LIMIT 1`，以及 `SELECT * FROM workflows WHERE is_default = true LIMIT 1`。
+
+### 角色解析的三個整合點
+
+- **轉換（`server/tickets.js` 的 `transitionTicket`）**：在交易內（用傳入的 client）先以 `getRoleMap(db, ticket.project_id)` 取角色 map，傳給 `validateTransition` 當 `roleOverrides`。`stateMachine.js` 的 `validateTransition` 與 `allowedTransitions` 各加一個可選參數 `roleOverrides`（狀態→角色的 map）：有 override 時，該條規則的 `from` 狀態之要求角色改為 override 的角色（僅當 override 是 6 個 workflow 角色之一）；回傳的 rule 其 role 亦改為 override 後的角色，稽核列才能正確記錄。Cancel 規則維持 PM-only，不接受 override。沒傳 `roleOverrides` 時行為與今天完全一致。
+- **接單佇列（`server/tickets.js` 的 `listClaimable`）**：不再用寫死的 CLAIMABLE 常數。先取 requirement／pending_dev 兩種等待狀態的工單，再按每張單所屬專案的 role map 決定該狀態的負責角色（同一專案的 map 快取起來，只查一次），只有呼叫者持有該角色時才列入；`next_transition` 從 TRANSITIONS 找該 from 狀態的唯一出路規則（requirement→decomposing，pending_dev→in_dev），但 role 欄位填 workflow 的角色。預設 workflow 下結果與今天完全相同。
+- **PM 監控（`server/monitor.js` 的 `listStalled`）**：每張卡住工單的 `notify_role` 與 `next_actions` 改按該單所屬專案的 role map 解析（同一專案快取一次）；`next_actions` 呼叫 `allowedTransitions` 時把該單的 role map 當 `roleOverrides` 傳入。原本的 `responsibleRole(status)`（內建推導）保留並 export，當 fallback 與既有測試用。
+
+### 端點
+
+| 方法 | 端點 | 說明 |
+| --- | --- | --- |
+| `GET` | `/api/workflows?project_id=` | 列表；已指派帳號只能看到自己專案的 workflow＋全域預設，跨專案回 403 `out_of_scope` |
+| `GET` | `/api/workflows/:id` | 單筆；同上範圍檢查（`project_id` 為 null 的 workflow 視為全域、所有人可見） |
+| `POST` | `/api/workflows` | 建立（PM 或 Admin；name 必填、未知專案 400、重名 409、roles 驗證 400） |
+| `PATCH` | `/api/workflows/:id` | 更新 name／roles（PM 或 Admin；預設唯讀） |
+| `DELETE` | `/api/workflows/:id` | 刪除（PM 或 Admin；見刪除守則） |
+| `GET` | `/api/projects/:id/active-workflow` | 回傳 `{workflow, is_default}`：有 active 就回 active，否則回預設 workflow 並標 `is_default: true` |
+| `POST` | `/api/projects/:id/active-workflow` | body `{workflow_id: string \| null}`，null＝切回預設（PM 或 Admin） |
+
+### 前端
+
+- 側邊欄 Workflows 項目（只對 PM／Admin 顯示），點開時載入該專案的 workflows 與 active workflow。
+- Workflow 管理畫面（`src/WorkflowsPanel.tsx`，版式沿用 ProjectsPanel 的 card＋table＋form 風格）：專案篩選、workflow 列表（name、Default／Active 徽章、各狀態角色摘要）、建立表單（name＋14 個狀態各一列：角色下拉＋職責文字欄；新建時預設值從預設 workflow 的 roles 帶入）、編輯表單（同樣結構）、設為 active 按鈕、切回預設按鈕、刪除按鈕；後端錯誤訊息顯示在畫面上。角色下拉選項用 6 個 workflow 角色（不要含 admin），label 沿用 `helpers.ts` 的 `ROLE_LABELS`。
+
+### 備註
+
+- 未驗證：migration 010 的 SQL 未在 live PostgreSQL 上實際執行（本機無資料庫）；合併部署前應在 develop 預覽環境確認預設 workflow 正常寫入，且既有工單的轉換、佇列與監控行為不變。
+- live DB CHECK 約束漏第 14 個狀態的問題（另開 migration 待決定）本單不碰；若另開，編號順延為 011。
 
 ---
 

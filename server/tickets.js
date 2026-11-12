@@ -8,6 +8,7 @@
 // the ticket's status change inside one transaction, so the status can
 // never change without an audit row (design doc ch. 7).
 const sm = require('./stateMachine');
+const workflows = require('./workflows');
 
 const SOURCES = ['project', 'oncall'];
 
@@ -240,9 +241,11 @@ async function transitionTicket(db, ticketId, { actorId, actorRoles, toStatus, r
       return { ok: false, status: 404, error: 'ticket_not_found', message: 'Ticket not found.' };
     }
 
-    // The required role comes from the state machine, not from the caller:
-    // the actor is the authenticated user, and the role actually exercised
-    // is the rule's role (design doc ch. 11).
+    // The required role comes from the project's active workflow
+    // (design doc ch. 14), falling back to the default workflow and
+    // then the built-in role map: the state machine, not the caller,
+    // decides which role a transition requires.
+    const roleMap = await workflows.getRoleMap(client, ticket.project_id);
     const check = sm.validateTransition({
       ticket,
       actorId: String(actorId).trim(),
@@ -251,6 +254,7 @@ async function transitionTicket(db, ticketId, { actorId, actorRoles, toStatus, r
       reason: cleanReason,
       handoff: cleanHandoff,
       assignedProjectId,
+      roleOverrides: roleMap,
     });
 
     if (!check.ok) {
@@ -284,38 +288,51 @@ async function transitionTicket(db, ticketId, { actorId, actorRoles, toStatus, r
 
 // Trial-stage claim queue (design doc ch. 12): tickets waiting for the
 // caller's roles to pick them up. The trial covers decomposing and
-// development only: a ticket in `requirement` waits for a leader to
-// decompose it, and a ticket in `pending_dev` waits for an engineer to
-// start it. In-progress states (decomposing, in_dev, ...) are not
-// claimable — they already have an owner. Each entry carries the
-// transition the caller would take next.
-const CLAIMABLE = [
-  { status: 'requirement', role: 'leader' },
-  { status: 'pending_dev', role: 'engineer' },
-];
+// development only: a ticket in `requirement` waits for the role the
+// active workflow names for that state to decompose it, and a ticket
+// in `pending_dev` waits for that state's role to start it. In-progress
+// states (decomposing, in_dev, ...) are not claimable — they already
+// have an owner. Each entry carries the transition the caller would
+// take next. Under the default workflow the responsible roles are
+// leader and engineer, exactly as before (design doc ch. 14).
+const CLAIMABLE_STATUSES = ['requirement', 'pending_dev'];
+const CLAIMABLE_TO = { requirement: 'decomposing', pending_dev: 'in_dev' };
 
 async function listClaimable(db, actorRoles, projectFilter, assignedProjectId) {
   const roles = Array.isArray(actorRoles) ? actorRoles : [];
-  const wanted = CLAIMABLE.filter((c) => roles.includes(c.role));
-  if (wanted.length === 0) return [];
-  const statuses = [...new Set(wanted.map((c) => c.status))];
-  const rows = await listTickets(db, statuses, projectFilter, assignedProjectId);
-  return rows.map((t) => {
-    const claim = wanted.find((c) => c.status === t.status);
-    const rule = sm.TRANSITIONS.find((r) => r.from === t.status && r.role === claim.role);
-    return {
+  if (roles.length === 0) return [];
+  const rows = await listTickets(db, CLAIMABLE_STATUSES, projectFilter, assignedProjectId);
+  // One role-map lookup per project: tickets of the same project share
+  // their active workflow.
+  const roleMaps = new Map();
+  async function roleMapFor(projectId) {
+    const key = projectId || '__default__';
+    if (!roleMaps.has(key)) {
+      roleMaps.set(key, await workflows.getRoleMap(db, projectId || null));
+    }
+    return roleMaps.get(key);
+  }
+  const out = [];
+  for (const t of rows) {
+    const roleMap = await roleMapFor(t.project_id);
+    const entry = roleMap ? roleMap[t.status] : null;
+    const role = entry ? entry.role : null;
+    if (!role || !roles.includes(role)) continue;
+    const rule = sm.TRANSITIONS.find((r) => r.from === t.status && r.to === CLAIMABLE_TO[t.status]);
+    out.push({
       ...t,
       next_transition: rule
         ? {
             to: rule.to,
-            role: rule.role,
+            role,
             kind: rule.kind,
             requires_reason: rule.requiresReason,
             requires_handoff: rule.requiresHandoff,
           }
         : null,
-    };
-  });
+    });
+  }
+  return out;
 }
 
 module.exports = {

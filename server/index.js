@@ -5,7 +5,9 @@ const cors = require('cors');
 const db = require('./database');
 const { legalTransitions } = require('./stateMachine');
 const tickets = require('./tickets');
+const monitor = require('./monitor');
 const projects = require('./projects');
+const workflows = require('./workflows');
 const auth = require('./auth');
 const admin = require('./admin');
 
@@ -182,6 +184,48 @@ app.get('/api/queue', async (req, res) => {
   }
 });
 
+// --- PM stall monitor (design doc ch. 13) ---
+// The server detects stalled tickets and keeps the reminder state;
+// the PM duty agent polls every 15 minutes and sends the reminders
+// and escalations itself — the server has no channel to the chat
+// rooms. All three endpoints are PM-only and scoped to the caller's
+// assigned project, like the ticket reads.
+app.get('/api/monitor/stalled', async (req, res) => {
+  try {
+    res.json(await monitor.listStalled(db, { assignedProjectId: req.user.project_id }));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/monitor/stalled/:id/reminded', async (req, res) => {
+  try {
+    const result = await monitor.acknowledgeReminder(db, req.params.id, {
+      actorId: req.user.id,
+      actorRoles: req.user.roles,
+      assignedProjectId: req.user.project_id,
+    });
+    if (!result.ok) return res.status(result.status).json({ error: result.error, message: result.message });
+    res.json({ ticket: result.ticket, reminder: result.reminder });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/monitor/stalled/:id/escalated', async (req, res) => {
+  try {
+    const result = await monitor.acknowledgeEscalation(db, req.params.id, {
+      actorId: req.user.id,
+      actorRoles: req.user.roles,
+      assignedProjectId: req.user.project_id,
+    });
+    if (!result.ok) return res.status(result.status).json({ error: result.error, message: result.message });
+    res.json({ ticket: result.ticket, reminder: result.reminder });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // --- Project endpoints (Project view) ---
 // Any authenticated user may list projects; creating one is PM or Admin.
 
@@ -230,6 +274,116 @@ app.patch('/api/tickets/:id/project', async (req, res) => {
     });
     if (!result.ok) return res.status(result.status).json({ error: result.error, message: result.message });
     res.json(result.ticket);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- Workflow endpoints (design doc ch. 14) ---
+// A workflow maps each ticket state to the role responsible for it.
+// Reads are project-scoped like the ticket reads: an account assigned
+// to one project only sees that project's workflows plus the global
+// default; asking for another project's list is 403 out_of_scope.
+// Mutations are PM or Admin; the service enforces it.
+app.get('/api/workflows', async (req, res) => {
+  try {
+    const projectId = req.query.project_id ? String(req.query.project_id).trim() : undefined;
+    if (req.user.project_id && projectId && projectId !== req.user.project_id) {
+      return res.status(403).json({ error: 'out_of_scope', message: 'This project is not the one you are assigned to.' });
+    }
+    res.json(await workflows.listWorkflows(db, {
+      projectId,
+      assignedProjectId: req.user.project_id,
+    }));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/workflows/:id', async (req, res) => {
+  try {
+    const result = await workflows.getWorkflow(db, req.params.id, {
+      assignedProjectId: req.user.project_id,
+    });
+    if (!result.ok) return res.status(result.status).json({ error: result.error, message: result.message });
+    res.json(result.workflow);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/workflows', async (req, res) => {
+  try {
+    const result = await workflows.createWorkflow(db, {
+      actorId: req.user.id,
+      actorRoles: req.user.roles,
+      name: req.body ? req.body.name : undefined,
+      projectId: req.body ? req.body.project_id : undefined,
+      roles: req.body ? req.body.roles : undefined,
+    });
+    if (!result.ok) return res.status(result.status).json({ error: result.error, message: result.message });
+    res.status(201).json(result.workflow);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.patch('/api/workflows/:id', async (req, res) => {
+  try {
+    const result = await workflows.updateWorkflow(db, req.params.id, {
+      actorId: req.user.id,
+      actorRoles: req.user.roles,
+      name: req.body ? req.body.name : undefined,
+      roles: req.body ? req.body.roles : undefined,
+      assignedProjectId: req.user.project_id,
+    });
+    if (!result.ok) return res.status(result.status).json({ error: result.error, message: result.message });
+    res.json(result.workflow);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/workflows/:id', async (req, res) => {
+  try {
+    const result = await workflows.deleteWorkflow(db, req.params.id, {
+      actorId: req.user.id,
+      actorRoles: req.user.roles,
+      assignedProjectId: req.user.project_id,
+    });
+    if (!result.ok) return res.status(result.status).json({ error: result.error, message: result.message });
+    res.json(result.workflow);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// The workflow in force for a project: its active workflow, otherwise
+// the global default (is_default true). Setting the active workflow
+// takes a workflow id, or null to clear it back to the default.
+app.get('/api/projects/:id/active-workflow', async (req, res) => {
+  try {
+    const result = await workflows.getActiveWorkflow(db, req.params.id, {
+      assignedProjectId: req.user.project_id,
+    });
+    if (!result.ok) return res.status(result.status).json({ error: result.error, message: result.message });
+    res.json({ workflow: result.workflow, is_default: result.is_default });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/projects/:id/active-workflow', async (req, res) => {
+  try {
+    const result = await workflows.setActiveWorkflow(db, {
+      actorId: req.user.id,
+      actorRoles: req.user.roles,
+      projectId: req.params.id,
+      workflowId: req.body ? req.body.workflow_id : undefined,
+      assignedProjectId: req.user.project_id,
+    });
+    if (!result.ok) return res.status(result.status).json({ error: result.error, message: result.message });
+    res.json({ workflow: result.workflow, is_default: result.is_default });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

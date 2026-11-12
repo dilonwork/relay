@@ -117,10 +117,15 @@ function checkProjectScope(ticket, actorRoles, assignedProjectId) {
 // role list. `assignedProjectId` is the project the actor's account is
 // assigned to (Agent assignment; null/undefined means unassigned, so the
 // scope check is skipped and the caller keeps today's behavior).
+// `roleOverrides` is an optional roles map from the project's active
+// workflow (design doc ch. 14): when it names a valid workflow role for
+// the ticket's current state, that role replaces the rule's built-in
+// role — including in the returned rule, so the audit row records the
+// role actually exercised. Cancel stays PM-only and ignores overrides.
 // Missing-content failures (reason_required, handoff_required) are
 // validation errors, not authorization failures: the caller distinguishes
 // them by error code, and the service maps them to 400 (see tickets.js).
-function validateTransition({ ticket, actorId, actorRoles, toStatus, reason, handoff, assignedProjectId }) {
+function validateTransition({ ticket, actorId, actorRoles, toStatus, reason, handoff, assignedProjectId, roleOverrides }) {
   const roles = Array.isArray(actorRoles) ? actorRoles : [];
   // Project scope first: an assigned actor has no business with a ticket
   // outside their project, so nothing else about the attempt is
@@ -147,9 +152,17 @@ function validateTransition({ ticket, actorId, actorRoles, toStatus, reason, han
     return { ok: true, rule: CANCEL_RULE, attemptedRole: 'pm' };
   }
 
-  const rule = findRule(from, toStatus);
-  if (!rule) {
+  const found = findRule(from, toStatus);
+  if (!found) {
     return { ok: false, error: 'illegal_transition', message: `Cannot move a ticket from ${from} to ${toStatus}.`, attemptedRole: attemptedRoleFallback(roles) };
+  }
+  // Workflow override (design doc ch. 14): the active workflow may
+  // reassign the role responsible for this state. Only a valid workflow
+  // role counts; anything else keeps the built-in role.
+  let rule = found;
+  const override = roleOverrides && roleOverrides[from];
+  if (override && ROLES.includes(override.role) && override.role !== found.role) {
+    rule = { ...found, role: override.role };
   }
   if (!roles.includes(rule.role)) {
     return { ok: false, error: 'wrong_role', message: `Moving from ${from} to ${toStatus} requires role ${rule.role}, which you do not hold.`, attemptedRole: rule.role };
@@ -168,11 +181,16 @@ function validateTransition({ ticket, actorId, actorRoles, toStatus, reason, han
 
 // Transitions the given role may take from the ticket's current state.
 // Used by the UI to offer only legal targets; the server re-validates.
-function allowedTransitions(ticket, actorRole) {
+// `roleOverrides` is the active workflow's roles map (design doc
+// ch. 14): the role required for a transition out of the current state
+// is the override's role when it names a valid workflow role.
+function allowedTransitions(ticket, actorRole, roleOverrides) {
   if (!ROLES.includes(actorRole) || isTerminal(ticket.status)) return [];
+  const override = roleOverrides && roleOverrides[ticket.status];
+  const effectiveRole = override && ROLES.includes(override.role) ? override.role : null;
   const out = [];
   for (const rule of TRANSITIONS) {
-    if (rule.from === ticket.status && rule.role === actorRole) {
+    if (rule.from === ticket.status && (effectiveRole || rule.role) === actorRole) {
       out.push({ to: rule.to, requiresReason: rule.requiresReason, requiresHandoff: rule.requiresHandoff, kind: rule.kind });
     }
   }
