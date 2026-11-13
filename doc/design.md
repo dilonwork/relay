@@ -248,7 +248,7 @@ document_categories
 
 documents
   id            UUID / primary key
-  project_id    Owning project; nullable, uncategorized documents are null (project scoping)
+  project_id    Owning project; nullable, unassigned documents are null (project scoping)
   category_id   Owning category (required)
   title         Document title
   content       Document content (Markdown text)

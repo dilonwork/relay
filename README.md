@@ -465,7 +465,7 @@ each sub-page owns its own form state and handlers.
   category is stored in the database, not in frontend state, so it
   survives refresh. Categories are global, not per-project.
 - **Filing a document:** the File a document form takes a title, a
-  category, a project (or Uncategorized) and Markdown content; a
+  category, a project (required) and Markdown content; a
   .md / .txt file can be uploaded instead and its text lands in the
   content field (the title is pre-filled from the file name when it is
   still empty). Filing, adding a category and deleting a document are
@@ -473,13 +473,16 @@ each sub-page owns its own form state and handlers.
   project scope.
 - **Agent upload:** agents file documents with an API key via
   `POST /api/documents/upload`: a JSON body with `title`,
-  `category_id`, `project_id` and the file content base64-encoded in
+  `category_id`, `project_id` (optional) and the file content base64-encoded in
   `content_base64`. No PM/Admin role is required — the endpoint exists
   so agents can file their own output — but the upload must land in a
   project in the caller's scope (an account assigned to one project
-  may only upload to that project). Decoded content is capped at
-  1 MiB (413 `content_too_large` above it); the category and the
-  project must already exist. Uploaded documents are filed with
+  may only upload to that project; an assigned account uploading
+  without a project gets 403 `out_of_scope`). An unassigned account
+  may omit `project_id`; the document is then filed as Unassigned.
+  Decoded content is capped at 1 MiB (413 `content_too_large` above
+  it); the category must already exist, and the project must already
+  exist when one is given. Uploaded documents are filed with
   `source='agent'` and show up in the Documents page like any other
   document.
 - **Download:** each document has a Download button; the stored
