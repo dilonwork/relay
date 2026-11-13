@@ -288,6 +288,38 @@ async function main() {
     assert.equal(db.workflows[0].is_active, false);
   });
 
+  await ok('guest is refused all four workflow mutations', async () => {
+    const db = new FakeDb();
+    const created = await workflows.createWorkflow(db, {
+      ...ADMIN, name: 'A', projectId: 'proj-1', roles: workflows.DEFAULT_WORKFLOW_ROLES,
+    });
+    assert.equal(created.ok, true);
+    const id = created.workflow.id;
+    const GUEST = { actorId: 'guest-1', actorRoles: ['guest'] };
+    const create = await workflows.createWorkflow(db, {
+      ...GUEST, name: 'B', projectId: 'proj-1', roles: workflows.DEFAULT_WORKFLOW_ROLES,
+    });
+    assert.equal(create.ok, false);
+    assert.equal(create.status, 403);
+    assert.equal(create.error, 'wrong_role');
+    const update = await workflows.updateWorkflow(db, id, { ...GUEST, name: 'Renamed' });
+    assert.equal(update.ok, false);
+    assert.equal(update.status, 403);
+    assert.equal(update.error, 'wrong_role');
+    const del = await workflows.deleteWorkflow(db, id, { ...GUEST });
+    assert.equal(del.ok, false);
+    assert.equal(del.status, 403);
+    assert.equal(del.error, 'wrong_role');
+    const setActive = await workflows.setActiveWorkflow(db, { ...GUEST, projectId: 'proj-1', workflowId: id });
+    assert.equal(setActive.ok, false);
+    assert.equal(setActive.status, 403);
+    assert.equal(setActive.error, 'wrong_role');
+    // Nothing was mutated: the workflow is still there, unchanged.
+    assert.equal(db.workflows.length, 1);
+    assert.equal(db.workflows[0].name, 'A');
+    assert.equal(db.workflows[0].is_active, false);
+  });
+
   await ok('create: name required, unknown project is 400, duplicate name is 409', async () => {
     const db = new FakeDb();
     const noName = await workflows.createWorkflow(db, {

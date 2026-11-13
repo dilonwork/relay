@@ -258,6 +258,54 @@ async function main() {
     assert.equal((await tickets.listTickets(db, null)).length, 0);
   });
 
+  await ok('guest is read-only: no create, no transition, reads work, queue is empty', async () => {
+    const db = new FakeDb();
+    // Create is PM only.
+    const notPm = await tickets.createTicket(db, {
+      actorId: 'guest-1', actorRoles: ['guest'], title: 'x', description: 'y',
+    });
+    assert.equal(notPm.ok, false);
+    assert.equal(notPm.status, 403);
+    assert.equal(notPm.error, 'wrong_role');
+    // A ticket driven to pending_dev by the real roles.
+    const pm = { actorId: 'pm-1', actorRoles: ['pm'] };
+    const made = await tickets.createTicket(db, { ...pm, title: 't', description: 'd' });
+    assert.equal(made.ok, true);
+    const id = made.ticket.id;
+    await tickets.transitionTicket(db, id, { actorId: 'leader-1', actorRoles: ['leader'], toStatus: 'decomposing', reason: '' });
+    await tickets.transitionTicket(db, id, { actorId: 'leader-1', actorRoles: ['leader'], toStatus: 'pending_dev', reason: 'done', handoff: 'work list' });
+    // The guest may not pick it up: wrong_role, and the audit row
+    // names the rule's role (engineer), never 'guest' — the audit
+    // table's actor_role CHECK allows only workflow roles.
+    const pickup = await tickets.transitionTicket(db, id, {
+      actorId: 'guest-1', actorRoles: ['guest'], toStatus: 'in_dev', reason: '',
+    });
+    assert.equal(pickup.ok, false);
+    assert.equal(pickup.status, 403);
+    assert.equal(pickup.error, 'wrong_role');
+    assert.equal(pickup.transition.actor_role, 'engineer');
+    assert.equal((await tickets.getTicket(db, id)).status, 'pending_dev');
+    // A rule-less attempt falls back to 'pm' in the audit row, which
+    // the CHECK also allows.
+    const illegal = await tickets.transitionTicket(db, id, {
+      actorId: 'guest-1', actorRoles: ['guest'], toStatus: 'delivered', reason: '',
+    });
+    assert.equal(illegal.ok, false);
+    assert.equal(illegal.error, 'illegal_transition');
+    assert.equal(illegal.transition.actor_role, 'pm');
+    // Reads work: detail, history, and the ticket list.
+    const detail = await tickets.getTicketDetail(db, id, { actorId: 'guest-1', actorRoles: ['guest'] });
+    assert.equal(detail.ok, true);
+    assert.equal(detail.ticket.id, id);
+    const history = await tickets.getTicketTransitions(db, id, { actorId: 'guest-1', actorRoles: ['guest'] });
+    assert.equal(history.ok, true);
+    assert.equal((await tickets.listTickets(db, null)).length, 1);
+    // Nothing is claimable: the queue answers "what is waiting for
+    // me", and nothing ever waits for a read-only guest.
+    assert.deepEqual(await tickets.listClaimable(db, ['guest']), []);
+    assert.equal((await tickets.listClaimable(db, ['engineer'])).length, 1);
+  });
+
   await ok('full lifecycle to delivered replays the design doc example', async () => {
     const db = new FakeDb();
     const created = await tickets.createTicket(db, {

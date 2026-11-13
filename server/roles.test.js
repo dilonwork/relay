@@ -33,11 +33,33 @@ function ok(name, fn) {
     assert.equal(helpers.ROLE_LABELS.ui_ux, 'UI&UX');
   });
 
+  await ok('guest is an account role, labelled 訪客, never a workflow role', () => {
+    // Guest reads with PM's visibility but takes no transition, so it
+    // is an account role like admin: in ALL_ROLES, never in any
+    // WORKFLOW_ROLES list, and no workflow may name it as the role
+    // responsible for a state.
+    assert.ok(auth.ALL_ROLES.includes('guest'));
+    assert.ok(helpers.ALL_ROLES.includes('guest'));
+    assert.equal(helpers.ROLE_LABELS.guest, '訪客');
+    for (const list of [auth.WORKFLOW_ROLES, sm.ROLES, workflows.WORKFLOW_ROLES, helpers.WORKFLOW_ROLES]) {
+      assert.ok(!list.includes('guest'), JSON.stringify(list));
+    }
+    for (const t of sm.BUILTIN_DEFINITION.transitions) {
+      assert.notEqual(t.role, 'guest');
+    }
+    for (const entry of Object.values(workflows.DEFAULT_WORKFLOW_ROLES)) {
+      assert.notEqual(entry.role, 'guest');
+    }
+    // No transition is offered to a guest, from any state.
+    assert.deepEqual(sm.allowedTransitions({ status: 'pending_dev' }, 'guest'), []);
+    assert.deepEqual(sm.allowedTransitions({ status: 'requirement' }, 'guest'), []);
+  });
+
   await ok('the backend and frontend role lists agree', () => {
     assert.deepEqual([...workflows.WORKFLOW_ROLES], [...sm.ROLES]);
     assert.deepEqual([...helpers.WORKFLOW_ROLES], [...sm.ROLES]);
-    assert.deepEqual([...helpers.ALL_ROLES], [...sm.ROLES, 'admin']);
-    assert.deepEqual([...auth.ALL_ROLES], [...auth.WORKFLOW_ROLES, 'admin']);
+    assert.deepEqual([...helpers.ALL_ROLES], [...sm.ROLES, 'guest', 'admin']);
+    assert.deepEqual([...auth.ALL_ROLES], [...auth.WORKFLOW_ROLES, 'guest', 'admin']);
   });
 
   await ok('the default 14-state flow is unchanged: no ui_ux anywhere', () => {

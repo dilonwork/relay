@@ -27,14 +27,16 @@ export const ROLE_LABELS: Record<string, string> = {
   tester: 'Tester',
   deployer: 'Deployer',
   ui_ux: 'UI&UX',
+  guest: '訪客',
   admin: 'Admin',
 };
 
-export const ALL_ROLES = ['pm', 'leader', 'engineer', 'reviewer', 'tester', 'deployer', 'ui_ux', 'admin'];
+export const ALL_ROLES = ['pm', 'leader', 'engineer', 'reviewer', 'tester', 'deployer', 'ui_ux', 'guest', 'admin'];
 
 // The seven workflow roles a workflow may assign to a ticket state
-// (design doc ch. 14). 'admin' is an account-management role, never a
-// workflow role, so it is not listed here.
+// (design doc ch. 14). 'admin' and 'guest' are account roles, never
+// workflow roles, so neither is listed here: admin manages accounts,
+// guest reads with PM's visibility but takes no transition.
 export const WORKFLOW_ROLES = ['pm', 'leader', 'engineer', 'reviewer', 'tester', 'deployer', 'ui_ux'];
 
 // Queue tabs: every "waiting" state is its own queue; done groups the two

@@ -312,6 +312,25 @@ async function main() {
     assert.equal((await due(at(15))).needs_reminder, false);
   });
 
+  await ok('guest may not acknowledge reminders or escalations (read-only)', async () => {
+    const db = new FakeDb();
+    const { ticketId } = seedTicket(db, { title: 'slow', status: 'in_dev', transitionMinutesAgo: 60 });
+    const GUEST = { actorId: 'guest-1', actorRoles: ['guest'] };
+    const reminded = await monitor.acknowledgeReminder(db, ticketId, { ...GUEST, now: NOW });
+    assert.equal(reminded.ok, false);
+    assert.equal(reminded.status, 403);
+    assert.equal(reminded.error, 'wrong_role');
+    const escalated = await monitor.acknowledgeEscalation(db, ticketId, { ...GUEST, now: NOW });
+    assert.equal(escalated.ok, false);
+    assert.equal(escalated.status, 403);
+    assert.equal(escalated.error, 'wrong_role');
+    // The read side has no role gate: the stalled list is visible to
+    // a guest exactly as it is to the PM.
+    const stalled = await monitor.listStalled(db, { now: NOW });
+    assert.equal(stalled.length, 1);
+    assert.equal(stalled[0].ticket_id, ticketId);
+  });
+
   await ok('a new episode resets the reminder count and clears the escalation', async () => {
     const db = new FakeDb();
     const { ticketId } = seedTicket(db, { title: 'moves on', status: 'in_dev', transitionMinutesAgo: 60 });

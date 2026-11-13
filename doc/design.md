@@ -266,7 +266,7 @@ users
   username      帳號名稱，大小寫不區分且唯一
   password_hash scrypt 雜湊（格式 scrypt$鹽$雜湊），不存明文
   display_name  顯示名稱
-  roles         角色陣列：pm / leader / engineer / reviewer / tester / deployer / ui_ux / admin 的子集
+  roles         角色陣列：pm / leader / engineer / reviewer / tester / deployer / ui_ux / guest / admin 的子集
   project_id    指派的專案（Agent 指派，第 11–12 章）：可空，未指派即看全部專案；刪專案時清空
   is_active     停用後無法登入，既有會話立即失效
   created_at / updated_at
@@ -352,10 +352,10 @@ api_keys
 ### 帳號與角色
 
 - 一個帳號有一組使用者名稱（大小寫不區分、唯一）、顯示名稱、密碼，以及一個或多個角色。
-- 角色共八種：七個流程角色（PM、Leader、工程師、Reviewer、Tester、Deployer、UI&UX）加一個管理者角色（`admin`）。管理者不是流程角色，不能用來切工單狀態。
+- 角色共九種：七個流程角色（PM、Leader、工程師、Reviewer、Tester、Deployer、UI&UX）加兩個帳號角色：`guest`（唯讀，具備 PM 的視野、不能做任何寫入）與管理者（`admin`）。這兩個都不是流程角色，不能用來切工單狀態。
 - 一個帳號可同時持有多個角色，例如工程師兼 Reviewer。轉換時系統檢查帳號是否持有該轉換要求的角色；持有任一符合的角色即可，不需切換身分。
 - 帳號可停用：停用後無法登入，既有會話立即失效。
-- 資料庫層也鎖角色清單：`users.roles` 有 CHECK 約束 `users_roles_check`，只允許上述八種角色的子集。UI&UX 角色由 migration 014 補進 CHECK（工單 45e47047）——f5d2020 只改了 JS 常數，漏了 DB CHECK，導致建 ui_ux 帳號在 live DB 被擋；003 就地更新為完整八種清單，014 在既有資料庫上 DROP＋ADD（有 guard，見第 15 章 migration 011 的寫法）。
+- 資料庫層也鎖角色清單：`users.roles` 有 CHECK 約束 `users_roles_check`，只允許上述九種角色的子集。UI&UX 角色由 migration 014 補進 CHECK（工單 45e47047）——f5d2020 只改了 JS 常數，漏了 DB CHECK，導致建 ui_ux 帳號在 live DB 被擋；003 就地更新為完整八種清單，014 在既有資料庫上 DROP＋ADD（有 guard，見第 15 章 migration 011 的寫法）。Guest 角色由 migration 016 補進 CHECK（工單 5519e03c），003 再就地更新為完整九種清單。
 
 ### 密碼
 
@@ -780,6 +780,7 @@ Migration 015（`db/migrations/015_create_documents.sql`，冪等）：
 | --- | --- |
 | 瀏覽／下載 | 任何登入帳號，專案範圍與工單一致（被指派到某專案的帳號只看得到該專案的文件，未分類文件對其不在範圍內） |
 | 歸檔文件、新增類別、刪除文件 | PM 或 Admin（與建立專案同一個規則：文件是需整理的流程產物） |
+| Agent 上傳文件（`POST /api/documents/upload`） | 任何登入帳號（以 API key 為主；session 也可，API key 與 session 在認證上完全等價，見第 12 章）；不設 PM／Admin 限制，但必須上傳到自己專案範圍內的專案，`project_id` 必填 |
 | Prototype「實作」按鈕 | 只有 PM（因為開單本身就是 PM 專屬，見下） |
 
 ### 端點
@@ -790,9 +791,22 @@ Migration 015（`db/migrations/015_create_documents.sql`，冪等）：
 | `POST` | `/api/document-categories` | 新增類別（PM 或 Admin；重名回 409 `category_name_taken`） |
 | `GET` | `/api/documents?project_id=<id\|none>&category_id=<id>` | 文件列表（專案＋類別篩選；被指派帳號只看得到自己專案的） |
 | `POST` | `/api/documents` | 歸檔文件（PM 或 Admin；類別不存在回 400 `unknown_category`，專案不存在回 400 `unknown_project`） |
+| `POST` | `/api/documents/upload` | Agent 上傳文件（見下；任何登入帳號，專案範圍內才可上傳） |
 | `GET` | `/api/documents/:id` | 單一文件 |
 | `DELETE` | `/api/documents/:id` | 刪除文件（PM 或 Admin） |
 | `GET` | `/api/documents/:id/download` | 下載：`text/markdown`，`Content-Disposition: attachment`，檔名由標題產生（見下） |
+
+### Agent 上傳（工單 63544206）
+
+給 agent 一個上傳端點，寫進同一張 `documents` 表、走同一套列表／下載：上傳完的文件在 Document 頁面看得到、下載得到，不另建儲存。
+
+- **格式：JSON ＋ base64，不是 multipart。** multipart 需要再加一個解析依賴（multer／busboy 之類），而 agent 本來就用 JSON 打 API；`content_base64` 帶檔案內容的 base64，JSON body 直接收，不加新依賴。請求欄位：`title`、`category_id`、`project_id`、`content_base64`，四個都必填。
+- **認證與權限：** 路由掛在既有 `requireAuth` 之下，`X-API-Key` 與 session 完全等價（第 12 章）；無效 key 在 middleware 就回 401，不進 service。不設 PM／Admin 限制——這端點就是要讓 agent 上傳——權限只有「已認證＋專案範圍內」：被指派到某專案的帳號只能上傳到該專案（`assignedProjectId` 範圍檢查，與列表的範圍規則一致），否則回 403 `out_of_scope`；未被指派的帳號可上傳到任一已存在的專案。
+- **分類與專案必須已存在：** 未知分類回 400 `unknown_category`、未知專案回 400 `unknown_project`，不自動建類別；`project_id` 必填（手動歸檔允許未分類，agent 上傳不允許——沒有專案可掛的文件在 Document 頁面不會出現在任何專案檢視裡，寧可在上傳時就擋下）。
+- **內容驗證：** `content_base64` 必須是標準 base64（正確字母表與補位；`Buffer.from` 本身很寬鬆，只靠它會默默接受亂碼，所以多做一次 round-trip 驗證）且解出來的 bytes 必須是合法 UTF-8（`content` 是 TEXT 欄位，無效 UTF-8 會在資料庫層報錯變 500，所以先在 service 擋下），否則回 400 `invalid_content`。缺標題／缺分類／缺專案／缺內容都回 400。
+- **上限：** 解碼後內容最多 1 MiB（`MAX_AGENT_UPLOAD_BYTES`），超過回 413 `content_too_large`。base64 會膨脹 4/3，1 MiB 內容上線約 1.4 MB，所以全域 `express.json()` 上限從預設 100 KB 放寬到 2 MB（見 `server/index.js`）；service 層的 1 MiB 才是真正執行的上限，超過 2 MB 的 body 由 JSON parser 直接回 413。
+- **來源：** 上傳的文件一律 `source='agent'`（呼叫方不能自選來源，歸檔出處才可信）；寫入邏輯與手動歸檔共用同一個 `insertDocumentRow`，只有前面的驗證與權限規則不同。
+- **前端不用改：** 上傳完的文件走既有的 `GET /api/documents` 列表與 `GET /api/documents/:id/download`，Document 頁面直接看得到、下載得到。
 
 ### 下載
 
@@ -817,7 +831,7 @@ Prototype 類別的文件在列表有一顆「實作」按鈕（只有 PM 看得
 
 ### 測試
 
-- `server/documents.test.js`（14 項）：檔名 slug（ASCII、中文、無可用字元、超長截斷）、類別列表順序、新增類別（PM 成功、重名 409、engineer 403、缺名 400）、歸檔文件（PM／Admin 成功、engineer 403、缺標題／缺類別／未知類別／未知專案皆 400）、列表篩選（專案、類別、合併、未分類）與被指派帳號的範圍（含 `none` 篩選被指派覆蓋）、單一文件讀取（404、跨專案 403）、刪除（403、404、跨專案 403）、下載檔名與 404。
+- `server/documents.test.js`（21 項）：檔名 slug（ASCII、中文、無可用字元、超長截斷）、類別列表順序、新增類別（PM 成功、重名 409、engineer 403、缺名 400）、歸檔文件（PM／Admin 成功、engineer 403、缺標題／缺類別／未知類別／未知專案皆 400）、列表篩選（專案、類別、合併、未分類）與被指派帳號的範圍（含 `none` 篩選被指派覆蓋）、單一文件讀取（404、跨專案 403）、刪除（403、404、跨專案 403）、下載檔名與 404；Agent 上傳（engineer 上傳成功、`source='agent'`、中文內容 round-trip；上傳後列表可見、下載內容一致；任何角色都可上傳、無 PM／Admin 限制；缺標題／缺分類／缺專案／缺內容與未知分類／未知專案皆 400；亂碼 base64、缺補位、非 UTF-8 內容皆 400 `invalid_content`；超過 1 MiB 回 413、剛好 1 MiB 成功；被指派帳號只能上傳到自己專案、跨專案 403、未被指派可上傳到任一專案）。
 - `server/migrations.test.js` 補 015 檢查（兩張表、Prototype／Undefined 種子、種子有 `WHERE NOT EXISTS` 保護）。
 - `server/viewHash.test.js` 補 `#/documents` 來回對照與 `gateView` 不擋 Documents。
 - 前端編輯器／列表沒有瀏覽器測試基礎設施，實際點按（歸檔、上傳、＋ icon 新增類別、下載、實作開單後導到新工單）留待 Tester／Reviewer 在真機上驗。

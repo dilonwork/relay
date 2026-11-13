@@ -288,6 +288,16 @@ async function main() {
     assert.equal(await auth.countUsers(db), 1);
   });
 
+  await ok('guest is a valid account role', async () => {
+    const db = new FakeDb();
+    const created = await auth.createUser(db, {
+      username: 'guest', password: 'correct horse battery staple', displayName: 'Guest', roles: ['guest'],
+    });
+    assert.equal(created.ok, true, JSON.stringify(created));
+    assert.deepEqual(created.user.roles, ['guest']);
+    assert.equal(await auth.countUsers(db), 1);
+  });
+
   await ok('public user data carries the assigned project (null when unassigned)', async () => {
     const db = new FakeDb();
     const created = await auth.createUser(db, {
