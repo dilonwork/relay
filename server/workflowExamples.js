@@ -16,16 +16,16 @@
 
 // Flow A: user requirement, with a confirmation step that can send
 // the ticket back to planning.
-//   使用者需求 -> 功能規劃 -> 使用者確認 -> 產生規格書 -> 交付
-//   使用者確認不通過 -> 回功能規劃 (backward, reason required)
+//   User requirement -> Feature planning -> User confirmation -> Generate spec -> Delivered
+//   User confirmation rejected -> back to Feature planning (backward, reason required)
 const FLOW_WITH_CONFIRMATION = {
   name: 'Spec flow (with confirmation)',
   states: [
-    { code: 'user_requirement', label: '使用者需求', sort_order: 0, is_start: true, is_terminal: false },
-    { code: 'feature_planning', label: '功能規劃', sort_order: 1, is_start: false, is_terminal: false },
-    { code: 'user_confirmation', label: '使用者確認', sort_order: 2, is_start: false, is_terminal: false },
-    { code: 'spec_generation', label: '產生規格書', sort_order: 3, is_start: false, is_terminal: false },
-    { code: 'delivered', label: '交付', sort_order: 4, is_start: false, is_terminal: true },
+    { code: 'user_requirement', label: 'User requirement', sort_order: 0, is_start: true, is_terminal: false },
+    { code: 'feature_planning', label: 'Feature planning', sort_order: 1, is_start: false, is_terminal: false },
+    { code: 'user_confirmation', label: 'User confirmation', sort_order: 2, is_start: false, is_terminal: false },
+    { code: 'spec_generation', label: 'Generate spec', sort_order: 3, is_start: false, is_terminal: false },
+    { code: 'delivered', label: 'Delivered', sort_order: 4, is_start: false, is_terminal: true },
   ],
   transitions: [
     { from: 'user_requirement', to: 'feature_planning', role: 'leader', requiresReason: false, requiresHandoff: false, kind: 'pickup', selfCheck: false },
@@ -44,14 +44,14 @@ const FLOW_WITH_CONFIRMATION = {
 };
 
 // Flow B: same as A without the confirmation step.
-//   使用者需求 -> 功能規劃 -> 產生規格書 -> 交付
+//   User requirement -> Feature planning -> Generate spec -> Delivered
 const FLOW_WITHOUT_CONFIRMATION = {
   name: 'Spec flow (no confirmation)',
   states: [
-    { code: 'user_requirement', label: '使用者需求', sort_order: 0, is_start: true, is_terminal: false },
-    { code: 'feature_planning', label: '功能規劃', sort_order: 1, is_start: false, is_terminal: false },
-    { code: 'spec_generation', label: '產生規格書', sort_order: 2, is_start: false, is_terminal: false },
-    { code: 'delivered', label: '交付', sort_order: 3, is_start: false, is_terminal: true },
+    { code: 'user_requirement', label: 'User requirement', sort_order: 0, is_start: true, is_terminal: false },
+    { code: 'feature_planning', label: 'Feature planning', sort_order: 1, is_start: false, is_terminal: false },
+    { code: 'spec_generation', label: 'Generate spec', sort_order: 2, is_start: false, is_terminal: false },
+    { code: 'delivered', label: 'Delivered', sort_order: 3, is_start: false, is_terminal: true },
   ],
   transitions: [
     { from: 'user_requirement', to: 'feature_planning', role: 'leader', requiresReason: false, requiresHandoff: false, kind: 'pickup', selfCheck: false },
@@ -67,13 +67,13 @@ const FLOW_WITHOUT_CONFIRMATION = {
 };
 
 // Flow C: a system event becomes an incident, then closes.
-//   系統事件 -> 建立報案 -> 結束
+//   System event -> Create incident -> Closed
 const FLOW_INCIDENT = {
   name: 'Incident flow',
   states: [
-    { code: 'system_event', label: '系統事件', sort_order: 0, is_start: true, is_terminal: false },
-    { code: 'create_incident', label: '建立報案', sort_order: 1, is_start: false, is_terminal: false },
-    { code: 'closed', label: '結束', sort_order: 2, is_start: false, is_terminal: true },
+    { code: 'system_event', label: 'System event', sort_order: 0, is_start: true, is_terminal: false },
+    { code: 'create_incident', label: 'Create incident', sort_order: 1, is_start: false, is_terminal: false },
+    { code: 'closed', label: 'Closed', sort_order: 2, is_start: false, is_terminal: true },
   ],
   transitions: [
     { from: 'system_event', to: 'create_incident', role: 'pm', requiresReason: false, requiresHandoff: false, kind: 'pickup', selfCheck: false },

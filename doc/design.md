@@ -1,837 +1,837 @@
-# Agent 工單系統設計文件
+# Agent Ticket System Design Document
 
-> 文件版本：v1.1（已鎖定四項決定，其餘章節為在此基礎上的設計展開）
-> 日期：2026 年 11 月 11 日
-> v1.1 新增：第 11 章帳號、認證與管理（2026 年 11 月 11 日鎖定並實作）
-> v1.2 新增：第 15 章自訂 Workflow：狀態機編輯器（2026 年 11 月 12 日）
-> 適用範圍：Project 需求開發流程為主線；值班（On-Call）告警為工單來源之一，共用同一條流水線
+> Document version: v1.1 (four decisions locked; the rest of the chapters expand on them)
+> Date: 2026-11-11
+> v1.1 added: Ch. 11 Accounts, Authentication, and Administration (locked and implemented 2026-11-11)
+> v1.2 added: Ch. 15 Custom Workflows: State Machine Editor (2026-11-12)
+> Scope: the Project requirement development flow is the main line; on-call alerts are one ticket source, sharing the same pipeline
 
-以工單流水線串起專案開發流程：PM 建立需求，Leader 拆解，工程師開發，依序經過 Review、測試與部署，最後交付。每個 Agent 只接自己職責內的工單，每次狀態轉換都可回溯。
+Tickets carry project development work through a pipeline: the PM creates a requirement, the Leader decomposes it, the engineer develops it, and it passes through Review, testing, and deployment in order before delivery. Each agent only takes tickets within its own responsibility, and every state transition is traceable.
 
-## 已鎖定的決定
+## Locked Decisions
 
-| 決定 | 內容 | 展開章節 |
+| Decision | Content | Expanded in |
 | --- | --- | --- |
-| 開發鏈狀態 | 需求 → 拆解（待澄清來回）→ 開發 → Review → 測試（待驗收澄清來回）→ 部署 → 已交付，另設已取消終點 | 第 5 章 |
-| 誰能切狀態 | PM、Leader、工程師、Reviewer、Tester、Deployer 各認自己的轉換；不得審自己的 code | 第 6 章 |
-| 工單存放 | PostgreSQL 獨立資料庫，與 WebTracker 資料庫分開、同台 PostgreSQL | 第 8 章 |
-| 帳號與認證 | 帳號持有多個角色；密碼 scrypt 雜湊；7 天 Bearer 會話；首次啟用建第一位管理者；管理者可管帳號與看全系統概覽，但不繞過流程角色檢查 | 第 11 章 |
-| Agent 接入 | Agent 以 API 金鑰登入，繼承帳號角色；試行階段的接單佇列限拆解與開發兩段；兩段交接必填交接說明 | 第 12 章 |
+| Development chain states | Requirement → Decomposition (clarification round-trips) → Development → Review → Testing (acceptance-clarification round-trips) → Deployment → Delivered, with Cancelled as a terminal state | Ch. 5 |
+| Who may switch states | PM, Leader, engineer, Reviewer, Tester, and Deployer each take their own transitions; nobody reviews their own code | Ch. 6 |
+| Ticket storage | Independent PostgreSQL database, separate from the WebTracker database, on the same PostgreSQL server | Ch. 8 |
+| Accounts and authentication | Accounts hold multiple roles; passwords are scrypt-hashed; 7-day Bearer sessions; first activation creates the first admin; admins can manage accounts and see the system overview but cannot bypass flow role checks | Ch. 11 |
+| Agent access | Agents log in with API keys and inherit the account's roles; the trial pickup queue covers the decomposition and development stages; handoff notes are required for both stages | Ch. 12 |
 
-## 目錄
+## Contents
 
-1. 目的與設計原則
-2. 系統定位與工單來源
-3. 已鎖定決定總覽
-4. 角色與職責
-5. 開發鏈狀態機
-6. 狀態轉換權限
-7. 回溯與稽核
-8. 資料模型與儲存
-9. Agent 接單與交接規則
-10. 實作分期與未決事項
-11. 帳號、認證與管理
-12. Agent 接入（第二期）
-13. PM 監控（防卡住）
-14. 自訂 Workflow
-15. 自訂 Workflow：狀態機編輯器
-16. URL Hash 路由（重新整理與 Deep Link）
-17. Document（文件收錄）
-- 附錄 A 狀態代碼對照
-- 附錄 B 工單生命週期範例
+1. Purpose and Design Principles
+2. System Positioning and Ticket Sources
+3. Locked Decisions Overview
+4. Roles and Responsibilities
+5. Development Chain State Machine
+6. State Transition Permissions
+7. Traceability and Audit
+8. Data Model and Storage
+9. Agent Pickup and Handoff Rules
+10. Implementation Phases and Open Items
+11. Accounts, Authentication, and Administration
+12. Agent Access (Phase 2)
+13. PM Monitoring (Stall Prevention)
+14. Custom Workflows
+15. Custom Workflows: State Machine Editor
+16. URL Hash Routing (Refresh and Deep Links)
+17. Documents (Filing Cabinet)
+- Appendix A State Code Reference
+- Appendix B Ticket Lifecycle Example
 
 ---
 
-## 1. 目的與設計原則
+## 1. Purpose and Design Principles
 
-本系統要解決的問題很單純：工作在人與 Agent 之間流轉時，常常靠口頭或訊息交接，誰接了、做到哪、為什麼退回，事後無從查起。本系統借用 Jira 式的工單概念，把每一件工作做成一張工單，交接一律透過工單的狀態轉換完成，轉換本身即是紀錄。
+The problem this system solves is simple: when work flows between people and agents, handoffs often happen by word of mouth or chat messages, and afterwards nobody can tell who took it, how far it got, or why it was sent back. This system borrows the Jira-style ticket concept and turns every piece of work into a ticket; every handoff goes through a state transition on the ticket, and the transition itself is the record.
 
-### 五項原則
+### Five Principles
 
-- **各守其分。**每個 Agent 與每個角色都有明確職責，只接取與自己工作相關、且處於自己負責狀態的工單；不屬於自己領域的單不碰、不代切。
-- **狀態即交接。**工作往下走的唯一方式是切換工單狀態。狀態一變，負責人隨之而變，佇列也隨之而變，不另設私下交接管道。
-- **每次轉換可回溯。**每一次狀態轉換都寫入稽核紀錄：誰、何時、從哪個狀態、切到哪個狀態、為什麼。整條歷史隨時可完整重播。
-- **只補缺、不重做。**Agent 拉取資料與處理工單採增量：已有資料不重複處理，只補缺少的部分，除非使用者明確要求強制更新。
-- **退回有路、取消有終點。**看不懂、審不過、測不過、部署失敗，都有定義好的退回路徑；需求作廢或重複開單時，以「已取消」收尾，不讓工單懸空。
+- **Stay in your lane.** Every agent and every role has a clear responsibility: only pick up tickets in your own area and in a state you own. Don't touch tickets outside your area, and don't switch states on someone else's behalf.
+- **The state is the handoff.** The only way work moves forward is by switching the ticket's state. When the state changes, the owner changes with it, and so does the queue. There is no side channel for handoffs.
+- **Every transition is traceable.** Every state transition is written to the audit log: who, when, from which state, to which state, and why. The full history can be replayed at any time.
+- **Fill gaps, don't redo.** Agents pull data and process tickets incrementally: data already held is not processed again, only the missing parts are filled in, unless the user explicitly asks for a forced refresh.
+- **Returns have a path, cancellations have an end.** Not understanding, failing review, failing tests, failing deployment — each has a defined return path. When a requirement is void or duplicated, close it with "Cancelled" so no ticket hangs in limbo.
 
-## 2. 系統定位與工單來源
+## 2. System Positioning and Ticket Sources
 
-本系統的主線是 Project 的開發流程，不是值班系統。值班只是工單來源之一，與 Project 需求共用同一條開發鏈、同一套狀態與權限規則。
+The main line of this system is the Project development flow, not an on-call system. On-call is just one ticket source, sharing the same development chain, states, and permission rules as Project requirements.
 
-| 來源 | 進入方式 | 後續路徑 |
+| Source | How it enters | What follows |
 | --- | --- | --- |
-| **Project（主來源）** | PM 建立需求工單，內容包含目標、範圍與驗收條件 | 進入完整開發鏈：拆解 → 開發 → Review → 測試 → 部署 → 交付 |
-| **值班 On-Call** | 告警觸發或值班人員開立工單，附告警內容與初步證據 | 同樣進入開發鏈；若只需處置不需開發，仍以工單狀態記錄處置過程（細節見第 10 章未決事項） |
-| **其他來源（預留）** | 未來新增來源時，只需定義「如何開單」與「初始狀態」 | 不另建流程，一律匯入同一條開發鏈 |
+| **Project (main source)** | PM creates a requirement ticket, with goal, scope, and acceptance criteria | Enters the full development chain: decompose → develop → review → test → deploy → deliver |
+| **On-call** | An alert triggers, or on-call staff open a ticket, with the alert content and initial evidence | Same development chain; if it only needs handling and no development, the handling is still recorded through ticket states (see the open items in Ch. 10) |
+| **Other sources (reserved)** | When a new source is added, only define "how to open a ticket" and "the initial state" | No separate flow; everything merges into the same development chain |
 
-> **定位結論：**來源只決定工單怎麼出生，不決定工單怎麼流轉。流轉規則只有一套，就是第 5 章的狀態機與第 6 章的權限矩陣。
+> **Positioning conclusion:** the source only decides how a ticket is born, not how it flows. There is only one set of flow rules: the state machine in Ch. 5 and the permission matrix in Ch. 6.
 
-## 3. 已鎖定決定總覽
+## 3. Locked Decisions Overview
 
-以下三項已於 2026 年 11 月 11 日逐項確認鎖定，第四項（帳號與認證）與第五項（Agent 接入）同日鎖定並實作，是本文件的地基。後續章節是這五項決定的展開與實作定義；若實作中需要改動任一項，應回到本章修訂版本，而不是在程式裡悄悄偏離。
+The first three items below were confirmed and locked one by one on 2026-11-11; the fourth (accounts and authentication) and fifth (agent access) were locked and implemented the same day. They are the foundation of this document. Later chapters expand and define the implementation of these five decisions; if implementation needs to change any of them, come back to this chapter and revise the version instead of quietly drifting in code.
 
-| 決定 | 內容 | 展開章節 |
+| Decision | Content | Expanded in |
 | --- | --- | --- |
-| 開發鏈狀態 | 需求 → 拆解（待澄清來回）→ 開發（待開發 → 開發中）→ Review（待 Review → Review 中）→ 測試（待測試 → 測試中，驗收標準不清楚 → 待驗收澄清，PM 補充後回測試中）→ 部署（待部署 → 部署中）→ 已交付；另設已取消為終點。每個階段拆成「待接取 → 進行中」。 | 第 5 章 |
-| 誰能切狀態 | 七個角色各認自己的轉換（詳見權限矩陣）。Reviewer、Tester、Deployer 可由工程師兼任，但不能審自己的 code；待澄清由 PM 補充後切回拆解中。 | 第 4、6 章 |
-| 工單存放 | PostgreSQL 獨立資料庫：與 WebTracker 的資料庫分開，部署在同一台 PostgreSQL 上另開一個 database。不採用 Jira，也不寄存在 WebTracker 資料庫內。 | 第 8 章 |
-| 帳號與認證 | 一個帳號持有一個或多個角色（含管理者角色）；密碼以 scrypt 加每人隨機鹽雜湊儲存；登入發 7 天有效的 Bearer 會話；首次啟用時由第一位管理者自行建帳號，建好後設定流程永久關閉；管理者可管理帳號與查看全系統概覽，但不能繞過第 6 章的流程角色檢查。 | 第 11 章 |
-| Agent 接入 | Agent 以長期 API 金鑰登入（`rl_…`，`X-API-Key` 標頭），繼承帳號角色；接單佇列與交接必填先在拆解與開發兩段試行，交接是否足夠由下一手判斷。 | 第 12 章 |
+| Development chain states | Requirement → Decomposition (clarification round-trips) → Development (pending dev → in dev) → Review (pending review → in review) → Testing (pending test → in test; unclear acceptance criteria → needs acceptance clarification, back to in test after the PM adds detail) → Deployment (pending deploy → deploying) → Delivered; Cancelled as a terminal state. Each stage splits into "waiting for pickup → in progress". | Ch. 5 |
+| Who may switch states | Seven roles each take their own transitions (see the permission matrix). Reviewer, Tester, and Deployer may also be held by an engineer, but nobody reviews their own code; clarification returns to decomposing after the PM adds detail. | Ch. 4, 6 |
+| Ticket storage | Independent PostgreSQL database: separate from WebTracker's database, on the same PostgreSQL server in another database. Not Jira, and not parked inside the WebTracker database. | Ch. 8 |
+| Accounts and authentication | One account holds one or more roles (including the admin role); passwords are hashed with scrypt plus a per-person random salt; login issues a Bearer session valid for 7 days; on first activation the first admin creates their own account, after which the setup flow closes permanently; admins can manage accounts and view the system overview, but cannot bypass the flow role checks in Ch. 6. | Ch. 11 |
+| Agent access | Agents log in with long-lived API keys (`rl_…`, `X-API-Key` header) and inherit the account's roles; the pickup queue and required handoff notes are trialled first on the decomposition and development stages, and whether the handoff is sufficient is judged by the next person to take the ticket. | Ch. 12 |
 
 ---
 
-## 4. 角色與職責
+## 4. Roles and Responsibilities
 
-角色是權限的單位。人與 Agent 都以角色身分操作工單；同一個人或 Agent 可以擁有多個角色，但受第 6 章的兼任限制約束。角色附著在帳號上（第 11 章）：一個帳號持有一個或多個角色，轉換時系統檢查該帳號是否持有該轉換要求的角色。
+A role is the unit of permission. People and agents both operate on tickets as roles; the same person or agent can hold multiple roles, subject to the concurrency limits in Ch. 6. Roles attach to accounts (Ch. 11): one account holds one or more roles, and when a transition is made the system checks whether the account holds the role that transition requires.
 
-| 角色 | 職責 | 主要佇列（只看這些狀態） |
+| Role | Responsibilities | Main queues (only these states) |
 | --- | --- | --- |
-| **PM** | 建立需求、補充澄清、決定取消；在交付前掌握需求的最終去留 | 待澄清、自己開立的全部工單 |
-| **Leader** | 把需求拆解為可執行的開發工作；不理解時退回待澄清；拆解完成後放行開發 | 需求、拆解中 |
-| **工程師** | 接取開發工作並實作；完成後送 Review；開發單看不懂時可退回待澄清 | 待開發、開發中（自己負責的） |
-| **Reviewer** | 審查程式變更，通過送測試，不過退回開發 | 待 Review、Review 中 |
-| **Tester** | 執行測試，通過送部署，不過退回開發；驗收標準不清楚發回 PM 澄清 | 待測試、測試中、待驗收澄清 |
-| **Deployer** | 執行部署，成功即交付，失敗退回測試 | 待部署、部署中 |
+| **PM** | Create requirements, add clarifications, decide cancellations; hold the final say on a requirement before delivery | Needs clarification, all tickets they opened |
+| **Leader** | Decompose requirements into executable development work; send back to needs clarification when something is unclear; release to development once decomposition is done | Requirement, decomposing |
+| **Engineer** | Take development work and implement it; send to review when done; send back to needs clarification when a development ticket is unclear | Pending dev, in dev (their own) |
+| **Reviewer** | Review code changes, send to testing on pass, send back to development on fail | Pending review, in review |
+| **Tester** | Run tests, send to deployment on pass, send back to development on fail; send back to the PM for clarification when the acceptance criteria are unclear | Pending test, in test, needs acceptance clarification |
+| **Deployer** | Deploy; deliver on success, send back to testing on failure | Pending deploy, deploying |
 
-> **兼任規則（已鎖定）：**Reviewer、Tester、Deployer 可由工程師兼任，但任何人或 Agent 都不能審查、測試或部署自己開發的工單。此規則由系統在轉換時強制檢查，不能靠自律。
+> **Concurrency rule (locked):** Reviewer, Tester, and Deployer may be held by an engineer, but no person or agent may review, test, or deploy a ticket they developed themselves. The system enforces this at transition time; it does not rely on self-discipline.
 
-## 5. 開發鏈狀態機
+## 5. Development Chain State Machine
 
-開發鏈是一條單向主幹加三條退回路徑。每個執行階段都拆成「待接取」與「進行中」兩個狀態，讓佇列的接單點明確：工單停在待接取狀態，就是在等對應角色來接；進入進行中，就表示已有人或 Agent 認領。
+The development chain is one forward trunk plus three return paths. Every working stage splits into "waiting for pickup" and "in progress" states, so the queue's pickup points are explicit: a ticket sitting in a waiting-for-pickup state is waiting for the matching role to take it; entering in-progress means someone or some agent has claimed it.
 
 ```
-需求 → 拆解中 ⇄ 待澄清 → 待開發 → 開發中 → 待 Review → Review 中
-  → 待測試 → 測試中 ⇄ 待驗收澄清 → 待部署 → 部署中 → 已交付
+requirement → decomposing ⇄ needs_clarification → pending_dev → in_dev → pending_review → in_review
+  → pending_test → in_test ⇄ needs_acceptance_clarification → pending_deploy → deploying → delivered
 ```
 
-退回路徑：Review 不過 → 回開發中；測試不過 → 回開發中；測試中驗收標準不清楚 → 待驗收澄清，PM 補充後回測試中；部署失敗 → 回測試中；拆解或開發看不懂 → 待澄清。任一非終點狀態，PM 可切至已取消。已交付與已取消為終點，不再轉出。
+Return paths: failed review → back to in dev; failed testing → back to in dev; unclear acceptance criteria in testing → needs acceptance clarification, back to in test after the PM adds detail; failed deployment → back to in test; decomposition or development unclear → needs clarification. From any non-terminal state, the PM may switch to cancelled. Delivered and cancelled are terminal; nothing transitions out of them.
 
-> **自訂 Workflow（第 14 章）：**各狀態的負責角色不一定是上表寫死的角色——專案的 active workflow 可以改寫每個狀態的負責角色（例如把待開發改成由 Tester 接取）。狀態機本身不變，只換「誰能切」；轉換角色改走 active workflow，cancel 維持 PM-only。
+> **Custom workflows (Ch. 14):** the responsible role for each state is not necessarily the one in the table above — a project's active workflow may rewrite the responsible role for each state (for example, making pending dev picked up by the Tester). The state machine itself does not change, only "who may switch it"; transition roles follow the active workflow, and cancel stays PM-only.
 
-| 狀態 | 代碼 | 含義與進入條件 |
+| State | Code | Meaning and entry condition |
 | --- | --- | --- |
-| 需求 | `requirement` | PM 已開立，等待 Leader 開始拆解 |
-| 拆解中 | `decomposing` | Leader 正在把需求拆成可執行的開發工作 |
-| 待澄清 | `needs_clarification` | 需求或開發單資訊不足，等待 PM 補充；補充後回拆解中 |
-| 待開發 | `pending_dev` | 拆解完成，等待工程師接取 |
-| 開發中 | `in_dev` | 工程師已接取，正在實作 |
-| 待 Review | `pending_review` | 開發完成，等待 Reviewer 接取 |
-| Review 中 | `in_review` | Reviewer 正在審查 |
-| 待測試 | `pending_test` | Review 通過，等待 Tester 接取 |
-| 測試中 | `in_test` | Tester 正在測試 |
-| 待驗收澄清 | `needs_acceptance_clarification` | 測試中驗收標準不清楚，等待 PM 補充；補充後回測試中，發回給原 Tester |
-| 待部署 | `pending_deploy` | 測試通過，等待 Deployer 接取 |
-| 部署中 | `deploying` | Deployer 正在部署 |
-| 已交付 | `delivered` | 終點：部署成功，工作交付完成 |
-| 已取消 | `cancelled` | 終點：需求作廢或重複開單，由 PM 切入 |
+| Requirement | `requirement` | PM has opened it; waiting for the Leader to start decomposing |
+| Decomposing | `decomposing` | Leader is breaking the requirement into executable development work |
+| Needs clarification | `needs_clarification` | Requirement or development ticket lacks information; waiting for the PM to add detail; returns to decomposing after that |
+| Pending dev | `pending_dev` | Decomposition done; waiting for an engineer to pick it up |
+| In dev | `in_dev` | Engineer has picked it up and is implementing |
+| Pending review | `pending_review` | Development done; waiting for a Reviewer to pick it up |
+| In review | `in_review` | Reviewer is reviewing |
+| Pending test | `pending_test` | Review passed; waiting for a Tester to pick it up |
+| In test | `in_test` | Tester is testing |
+| Needs acceptance clarification | `needs_acceptance_clarification` | Acceptance criteria unclear during testing; waiting for the PM to add detail; returns to in test, to the original Tester |
+| Pending deploy | `pending_deploy` | Testing passed; waiting for a Deployer to pick it up |
+| Deploying | `deploying` | Deployer is deploying |
+| Delivered | `delivered` | Terminal: deployment succeeded, work delivered |
+| Cancelled | `cancelled` | Terminal: requirement void or a duplicate ticket, switched in by the PM |
 
-## 6. 狀態轉換權限
+## 6. State Transition Permissions
 
-下表是完整的合法轉換清單。表上沒有的轉換一律禁止：系統收到未列出的轉換請求時直接拒絕，不寫入狀態，但要把這次被拒的嘗試記入稽核（見第 7 章）。每次轉換都必須附理由或產出說明，退回類轉換尤其不可省略。
+The table below is the complete list of legal transitions. Any transition not in the table is forbidden: when the system receives an unlisted transition request it rejects it outright, writes no state, but records the rejected attempt in the audit log (see Ch. 7). Every transition must carry a reason or a work product; return-type transitions especially must not omit it.
 
-| 執行角色 | 從 → 到 | 條件與必附內容 |
+| Acting role | From → To | Conditions and required content |
 | --- | --- | --- |
-| PM | （開立）→ 需求 | 附目標、範圍、驗收條件 |
-| PM | 待澄清 → 拆解中 | 補充澄清內容後切回 |
-| PM | 任一非終點狀態 → 已取消 | 限交付前；附取消原因（作廢或重複） |
-| Leader | 需求 → 拆解中 | 開始拆解即切入 |
-| Leader | 拆解中 → 待澄清 | 附不理解的具體問題 |
-| Leader | 拆解中 → 待開發 | 拆解完成；附拆解出的開發工作清單 |
-| 工程師 | 待開發 → 開發中 | 接取即切入，工單記錄負責人 |
-| 工程師 | 開發中 → 待 Review | 附變更說明與自測結果 |
-| 工程師 | 開發中 → 待澄清 | 開發單看不懂時使用；附疑問點 |
-| Reviewer | 待 Review → Review 中 | 接取即切入；不得為該單的開發者 |
-| Reviewer | Review 中 → 待測試 | 審查通過 |
-| Reviewer | Review 中 → 開發中 | 審查不過；附退回理由與待改事項 |
-| Tester | 待測試 → 測試中 | 接取即切入；不得為該單的開發者 |
-| Tester | 測試中 → 待部署 | 測試通過；附測試結果 |
-| Tester | 測試中 → 開發中 | 測試不過；附失敗項目與重現方式 |
-| Tester | 測試中 → 待驗收澄清 | 驗收標準不清楚；附具體疑問，理由必填 |
-| PM | 待驗收澄清 → 測試中 | 補充驗收標準，發回給原 Tester；理由必填 |
-| Deployer | 待部署 → 部署中 | 接取即切入；不得為該單的開發者 |
-| Deployer | 部署中 → 已交付 | 部署成功；附部署版本與驗證結果 |
-| Deployer | 部署中 → 測試中 | 部署失敗；附失敗原因，退回測試重驗 |
+| PM | (create) → Requirement | Attach goal, scope, acceptance criteria |
+| PM | Needs clarification → Decomposing | Switch back after adding clarification |
+| PM | Any non-terminal state → Cancelled | Before delivery only; attach the cancellation reason (void or duplicate) |
+| Leader | Requirement → Decomposing | Switch in when decomposition starts |
+| Leader | Decomposing → Needs clarification | Attach the specific questions |
+| Leader | Decomposing → Pending dev | Decomposition done; attach the decomposed development work list |
+| Engineer | Pending dev → In dev | Switch in on pickup; the ticket records its owner |
+| Engineer | In dev → Pending review | Attach change notes and self-test results |
+| Engineer | In dev → Needs clarification | When the development ticket is unclear; attach the points in question |
+| Reviewer | Pending review → In review | Switch in on pickup; must not be that ticket's developer |
+| Reviewer | In review → Pending test | Review passed |
+| Reviewer | In review → In dev | Review failed; attach the return reason and items to change |
+| Tester | Pending test → In test | Switch in on pickup; must not be that ticket's developer |
+| Tester | In test → Pending deploy | Testing passed; attach test results |
+| Tester | In test → In dev | Testing failed; attach the failed items and how to reproduce them |
+| Tester | In test → Needs acceptance clarification | Acceptance criteria unclear; attach the specific questions, reason required |
+| PM | Needs acceptance clarification → In test | Add acceptance criteria, send back to the original Tester; reason required |
+| Deployer | Pending deploy → Deploying | Switch in on pickup; must not be that ticket's developer |
+| Deployer | Deploying → Delivered | Deployment succeeded; attach deployment version and verification results |
+| Deployer | Deploying → In test | Deployment failed; attach the failure reason, back to testing for re-verification |
 
-> **強制檢查：**系統在執行每一筆轉換前，依序檢查四件事——專案範圍（已指派的帳號只能碰自己專案的工單，見第 12 章）、目前狀態是否允許這條轉換、執行者角色是否在上表內、是否違反「不得處理自己開發的工單」。任一項不過，轉換不成立。
+> **Enforced checks:** before executing each transition the system checks four things in order — project scope (an assigned account may only touch tickets in its own project, see Ch. 12), whether the current state allows this transition, whether the actor's role is in the table above, and whether it violates "must not handle a ticket you developed yourself". If any check fails, the transition does not happen.
 
-> **自訂 Workflow（第 14 章）：**「執行者角色是否在上表內」這一項改走專案的 active workflow：轉換要求的角色是 active workflow 為該狀態指定的角色，不是上表寫死的角色；沒有 active workflow 時退回預設 workflow，再沒有則退回內建對照（與上表一致）。Cancel 維持 PM-only，不接受 workflow 改寫。
+> **Custom workflows (Ch. 14):** the check "is the actor's role in the table above" follows the project's active workflow instead: the role a transition requires is the role the active workflow assigns to that state, not the role hard-coded in the table above; with no active workflow it falls back to the default workflow, and then to the built-in mapping (which matches the table above). Cancel stays PM-only and cannot be rewritten by a workflow.
 
 ---
 
-## 7. 回溯與稽核
+## 7. Traceability and Audit
 
-回溯不是附加功能，而是本系統存在的理由之一。工單的目前狀態只是最新一筆轉換的結果；真正的歷史在轉換紀錄裡，必須完整、依序、不可竄改。
+Traceability is not an add-on; it is one of the reasons this system exists. A ticket's current state is only the result of the latest transition; the real history lives in the transition records, which must be complete, ordered, and tamper-proof.
 
-### 每一筆轉換紀錄包含
+### What each transition record contains
 
-- **誰：**執行者識別（人員或 Agent 的 ID）與其當時使用的角色。
-- **何時：**伺服器時間戳記，寫入後不得修改。
-- **從何到何：**原狀態與新狀態的代碼各記一份，不依賴事後推算。
-- **為什麼：**理由或產出說明。退回、取消、待澄清三類轉換必填，空白不得切換。交接說明（`handoff`）另記一欄：試行階段的兩段交接（拆解 → 待開發、開發中 → 待 Review）必填，其餘轉換可附可不附；見第 12 章。
-- **附帶產出：**該步的交付物參照，例如拆解清單、變更說明、測試結果、部署版本。
+- **Who:** the actor's identity (person or agent ID) and the role they used at the time.
+- **When:** the server timestamp, unchangeable once written.
+- **From where to where:** a copy of the original state code and a copy of the new state code, not derived afterwards.
+- **Why:** a reason or work product note. Required for return, cancellation, and needs-clarification transitions; a blank reason must not switch. The handoff note (`handoff`) is a separate column: required for the two trial handoffs (decomposing → pending dev, in dev → pending review) during the trial phase, optional for other transitions; see Ch. 12.
+- **Attached output:** a reference to the step's deliverable, for example the decomposition list, change notes, test results, or deployment version.
 
-### 稽核規則
+### Audit rules
 
-- 轉換紀錄只可新增，不可修改或刪除；狀態欄位與紀錄在同一個資料庫交易內寫入，避免狀態變了卻沒有紀錄。
-- 被拒絕的轉換嘗試也要留痕（標記為 rejected 並記原因），讓權限問題事後查得到。
-- 任一工單都能以轉換紀錄重播完整生命週期：開立、每一次前進、每一次退回、最終交付或取消。
-- 此設計與 WebTracker 既有的 agent_audit_log 概念一致，但工單稽核存放在工單自己的獨立資料庫內，不與 WebTracker 共用表格。
+- Transition records can only be added, never modified or deleted; the status field and the record are written in the same database transaction, so the state can never change without a record.
+- Rejected transition attempts also leave a trace (marked rejected with the reason), so permission problems can be investigated afterwards.
+- Any ticket can replay its full lifecycle from its transition records: opened, every step forward, every return, final delivery or cancellation.
+- This matches the `agent_audit_log` concept WebTracker already has, but ticket audit records live in the ticket system's own independent database, not in shared tables with WebTracker.
 
-## 8. 資料模型與儲存
+## 8. Data Model and Storage
 
-工單存放於 PostgreSQL 獨立資料庫：與 WebTracker 的資料庫分開，在同一台 PostgreSQL 上另開一個 database。好處是權限、備份與演進各自獨立，工單系統故障或改版不波及 WebTracker，反之亦然。
+Tickets live in an independent PostgreSQL database: separate from WebTracker's database, on the same PostgreSQL server in another database. The benefit is that permissions, backups, and evolution are independent — a ticket system failure or redesign does not affect WebTracker, and vice versa.
 
-### 核心表格（綱要）
+### Core tables (schema outline)
 
 ```
 tickets
-  id            UUID / 流水主鍵
-  title         需求或工作標題
-  source        project | oncall（未來可擴充）
-  status        目前狀態代碼（見附錄 A）
-  creator_id    開立者（PM 或來源系統）
-  assignee_id   目前負責人（接取後寫入）
-  developer_id  實際開發者（供兼任檢查使用）
-  description   目標、範圍、驗收條件
-  project_id    所屬專案；可空，未分類工單為空（專案視野）
+  id            UUID / sequential primary key
+  title         Requirement or work title
+  source        project | oncall (extensible later)
+  status        Current state code (see Appendix A)
+  creator_id    Opened by (PM or source system)
+  assignee_id   Current owner (written on pickup)
+  developer_id  Actual developer (used by the concurrency check)
+  description   Goal, scope, acceptance criteria
+  project_id    Owning project; nullable, uncategorized tickets are null (project scoping)
   created_at / updated_at
 
 ticket_transitions
-  id            主鍵
-  ticket_id     對應工單
-  actor_id      執行者
-  actor_role    執行時角色
-  from_status   原狀態（開立時為空）
-  to_status     新狀態
-  reason        理由或產出說明
-  handoff       交接說明（第 12 章：試行兩段交接必填，其餘可附）
-  artifacts     附帶產出參照（JSON）
+  id            Primary key
+  ticket_id     The ticket
+  actor_id      Actor
+  actor_role    Role at execution time
+  from_status   Original state (empty on creation)
+  to_status     New state
+  reason        Reason or work product note
+  handoff       Handoff note (Ch. 12: required for the two trial handoffs, optional otherwise)
+  artifacts     Attached output references (JSON)
   result        applied | rejected
-  created_at    伺服器時間戳記（不可改）
+  created_at    Server timestamp (unchangeable)
 ```
 
-PM 監控另有一張提醒狀態表（第 13 章）：
+PM monitoring has one more status table (Ch. 13):
 
 ```
 monitor_reminders
-  ticket_id           對應工單（主鍵，刪工單時連帶刪除）
-  last_transition_id  目前卡住回合的最新 applied 轉換 id
-  reminder_count      本回合已提醒次數
-  last_reminded_at    上次提醒時間（未提醒為空）
-  escalated_at        本回合升級時間（未升級為空）
+  ticket_id           The ticket (primary key, deleted with the ticket)
+  last_transition_id  Latest applied transition id of the current stalled episode
+  reminder_count      Reminders sent this episode
+  last_reminded_at    Last reminder time (empty if never reminded)
+  escalated_at        Escalation time this episode (empty if not escalated)
   updated_at
 ```
 
-自訂 Workflow 另有一張表（第 14 章）：
+Custom workflows have one more table (Ch. 14):
 
 ```
 workflows
-  id            UUID / 主鍵
-  project_id    所屬專案；可空，空即全域預設 workflow（只有一筆預設）
-  name          workflow 名稱；同一專案內唯一
-  roles         JSONB：14 個狀態各一筆 {role, responsibilities}
-  is_default    是否為全域預設 workflow（唯讀）
-  is_active     是否為該專案目前生效的 workflow（每專案最多一筆）
-  created_by    建立者帳號 ID
+  id            UUID / primary key
+  project_id    Owning project; nullable, null means the global default workflow (only one default)
+  name          Workflow name; unique within a project
+  roles         JSONB: one {role, responsibilities} entry per each of the 14 states
+  is_default    Whether it is the global default workflow (read-only)
+  is_active     Whether it is the project's currently active workflow (at most one per project)
+  created_by    Creating account ID
   created_at / updated_at
 ```
 
-文件收錄另有兩張表（第 17 章）：
+Document filing has two more tables (Ch. 17):
 
 ```
 document_categories
-  id            UUID / 主鍵
-  name          類別名稱，唯一（Prototype、Undefined 為預設）
-  created_by    建立者帳號 ID
+  id            UUID / primary key
+  name          Category name, unique (Prototype, Undefined are the defaults)
+  created_by    Creating account ID
   created_at
 
 documents
-  id            UUID / 主鍵
-  project_id    所屬專案；可空，未分類文件為空（專案視野）
-  category_id   所屬類別（必填）
-  title         文件標題
-  content       文件內容（Markdown 文字）
-  source        文件來源（v1 只有 manual；未來自動收錄以其來源值標記）
-  created_by    建立者帳號 ID
+  id            UUID / primary key
+  project_id    Owning project; nullable, uncategorized documents are null (project scoping)
+  category_id   Owning category (required)
+  title         Document title
+  content       Document content (Markdown text)
+  source        Document source (v1 only manual; future auto-filing marks its own source value)
+  created_by    Creating account ID
   created_at / updated_at
 ```
 
-上表為綱要而非最終 DDL；欄位型別、索引與拆解子單的關聯方式（一個需求拆成多張開發單時，父子工單如何連結）在實作第一期定案，見第 10 章。
+The tables above are an outline, not the final DDL; column types, indexes, and how decomposition child tickets link to their parent (when one requirement splits into several development tickets) were settled in the first implementation phase, see Ch. 10.
 
-帳號與會話另有兩張表（第 11 章）：
+Accounts and sessions have two more tables (Ch. 11):
 
 ```
 users
-  id            UUID / 主鍵
-  username      帳號名稱，大小寫不區分且唯一
-  password_hash scrypt 雜湊（格式 scrypt$鹽$雜湊），不存明文
-  display_name  顯示名稱
-  roles         角色陣列：pm / leader / engineer / reviewer / tester / deployer / ui_ux / guest / admin 的子集
-  project_id    指派的專案（Agent 指派，第 11–12 章）：可空，未指派即看全部專案；刪專案時清空
-  is_active     停用後無法登入，既有會話立即失效
+  id            UUID / primary key
+  username      Account name, case-insensitive and unique
+  password_hash scrypt hash (format scrypt$salt$hash), never plaintext
+  display_name  Display name
+  roles         Role array: a subset of pm / leader / engineer / reviewer / tester / deployer / ui_ux / guest / admin
+  project_id    Assigned project (agent assignment, Ch. 11–12): nullable, unassigned means all projects; cleared when the project is deleted
+  is_active     A deactivated account cannot log in; existing sessions become invalid immediately
   created_at / updated_at
 
 projects
-  id            UUID / 主鍵
-  name          專案名稱，唯一
-  description   專案說明
-  created_by    建立者帳號 ID
+  id            UUID / primary key
+  name          Project name, unique
+  description   Project description
+  created_by    Creating account ID
   created_at / updated_at
 
 sessions
-  token         Bearer 權杖（256 位元隨機值），主鍵
-  user_id       對應帳號，刪帳號時連帶刪除
-  expires_at    到期時間（登入起 7 天）
+  token         Bearer token (256-bit random value), primary key
+  user_id       The account, deleted with the account
+  expires_at    Expiry (7 days from login)
   created_at
 
-API 金鑰另有一張表（第 12 章）：
+API keys have one more table (Ch. 12):
 
 ```
 api_keys
-  id            UUID / 主鍵
-  user_id       對應帳號，刪帳號時連帶刪除
-  name          金鑰名稱（管理者自填，方便識別）
-  key_hash      金鑰的 scrypt 雜湊，只存雜湊、不存明文
-  key_prefix    金鑰前綴（rl_ 加前 4 碼），供列表識別與查詢
+  id            UUID / primary key
+  user_id       The account, deleted with the account
+  name          Key name (filled in by the admin, for identification)
+  key_hash      Scrypt hash of the key; only the hash is stored, never plaintext
+  key_prefix    Key prefix (rl_ plus the first 4 characters), for listing and lookup
   created_at
-  last_used_at  最近一次使用時間（資訊用）
-  revoked_at    撤銷時間；有值即失效
+  last_used_at  Last used time (informational)
+  revoked_at    Revocation time; a value means invalid
 ```
 
-### 隔離與存取
+### Isolation and access
 
-- 使用獨立的資料庫帳號與連線字串，不與 WebTracker 共用帳號；應用層只能透過工單系統自己的服務存取。
-- 備份與還原獨立排程；還原測試時不得覆寫 WebTracker 資料庫。
-- 未來若需在 WebTracker 介面顯示工單摘要，應透過 API 讀取，不直接跨資料庫連表查詢。
+- A separate database account and connection string, not shared with WebTracker; the application layer only accesses data through the ticket system's own services.
+- Backups and restores are scheduled independently; a restore test must not overwrite the WebTracker database.
+- If WebTracker's UI ever needs to show a ticket summary, read it through the API; do not join tables across databases directly.
 
-## 9. Agent 接單與交接規則
+## 9. Agent Pickup and Handoff Rules
 
-### 接單：只拉自己的佇列
+### Pickup: only pull your own queue
 
-- 每個 Agent 以角色身分訂閱佇列：佇列的定義就是「狀態屬於我負責的待接取狀態」的工單集合。例如工程師 Agent 只看 `pending_dev`，Reviewer Agent 只看 `pending_review`。
-- 接取是原子操作：切入進行中狀態的同時寫入負責人，避免兩個人或兩個 Agent 同時接走同一張單。
-- 增量處理：Agent 再次掃描佇列時，已處理、已在自己手上或已轉出的工單不重複處理，只補新進與缺少的部分；除非使用者明確要求，否則不做全量重抓、重做。
-- 不屬於自己狀態的工單，即使看見了也不代為處理、不代切狀態；需要別人處理時，正確動作是完成自己這一步並正確交接。
+- Each agent subscribes to queues by role: a queue is defined as "tickets in a waiting-for-pickup state I own". For example, an engineer agent only looks at `pending_dev`, a Reviewer agent only at `pending_review`.
+- Pickup is an atomic operation: switching into the in-progress state and writing the owner happen together, so two people or two agents cannot pick up the same ticket at once.
+- Incremental processing: when an agent scans the queue again, tickets already handled, already in its hands, or already moved on are not processed again — only newly arrived and missing ones are filled in. Unless the user explicitly asks, there is no full re-pull or redo.
+- A ticket in a state that is not yours is not yours to handle even if you can see it: don't switch its state on someone else's behalf. When someone else needs to handle it, the correct move is to finish your own step and hand it off properly.
 
-### 交接：狀態加證據，缺一不可
+### Handoff: state plus evidence, both required
 
-- 交接 = 一次合法的狀態轉換 + 第 6 章該轉換要求的必附內容。必附內容缺失時，轉換應被系統擋下，而不是先切再補。
-- 往前交接要附產出：拆解附工作清單、開發附變更說明、測試附結果、部署附版本與驗證。
-- 往回交接要附理由：退回開發要寫明待改事項，退回待澄清要寫明具體疑問，部署失敗要寫明失敗原因。下一手的人不應該需要猜上一手為什麼退回來。
-- 交接完成後，原負責人的工作即結束；工單後續的進展由新狀態的負責人承擔，原負責人可從轉換紀錄追蹤，但不介入。
+- A handoff = one legal state transition + the required content for that transition in Ch. 6. When required content is missing, the system must block the transition instead of switching first and filling it in later.
+- Forward handoffs carry output: decomposition carries the work list, development carries change notes, testing carries results, deployment carries the version and verification.
+- Return handoffs carry reasons: a return to development states the items to change, a return to needs clarification states the specific questions, a failed deployment states the failure reason. The next person should not have to guess why the previous person sent it back.
+- Once a handoff is done, the previous owner's work is finished; the ticket's further progress belongs to the owner of the new state. The previous owner can follow it through the transition records, but does not intervene.
 
-> **一句話版本：**Agent 只認狀態、不認人。看到自己的狀態就接，做完就附證據切給下一手，切不過去就代表缺了東西，先補齊再切。
-
----
-
-## 10. 實作分期與未決事項
-
-### 建議分期（建議，尚未鎖定）
-
-1. **第一期 · 地基：**建立獨立資料庫、工單與轉換紀錄表格、狀態機與權限的強制檢查、工單歷史查詢。先讓人能開單、切狀態、查回溯。
-2. **第二期 · Agent 接入（已鎖定，2026 年 11 月 11 日）：**各角色 Agent 依佇列接單與交接，先從拆解與開發兩段試行，驗證交接內容是否足夠下一手使用。實作見第 12 章。
-3. **第三期 · 來源擴充：**接上值班告警來源，並依使用情況決定是否需要通知、看板與統計。
-
-### 未決事項（待拍板）
-
-- 拆解的父子關係：一個需求拆成多張開發單時，用父工單加子工單，還是同一張單內的工作清單？影響第 8 章資料模型定案。
-- 工單的優先級與分級欄位是否需要（例如嚴重度），以及是否影響接單順序。
-- 值班來源的工單若只需處置、不需開發，是否走完整開發鏈，還是允許在特定狀態直接交付。
-- 操作介面形式：先以 API 加簡單列表頁面，還是一開始就做完整的工單看板。
-- 通知方式：狀態轉換後是否主動通知下一手負責人，透過哪個頻道。—— PM 監控（第 13 章）已回答其中一半：卡住偵測與提醒狀態由 server 提供，發送由 PM 值班 Agent 負責；其他狀態轉換的主動通知仍待定。
-- 文件自動收錄：目前平台不產生任何檔案，Document 第一版只收手動歸檔的文件。未來若「產生規格書」那一步真的產出規格書檔案，由該功能以 `source='spec_generation'` 歸檔進 Document，還是維持手動歸檔，待拍板。
+> **One-line version:** agents recognize states, not people. See a state of yours, take it; when done, switch it to the next person with evidence; if it won't switch, something is missing — fill it in first, then switch.
 
 ---
 
-## 11. 帳號、認證與管理
+## 10. Implementation Phases and Open Items
 
-> 本章已鎖定（2026 年 11 月 11 日），與第 3 章第四項決定一致。
+### Suggested phases (suggested, not locked)
 
-第一期上線時請求由呼叫方自行申報身分，伺服器只驗權限矩陣；本章把「誰在操作」改為登入後的真實身分。身分不再由客戶端說了算：每一次開單與轉換的執行者，都是登入會話對應的帳號。
+1. **Phase 1 · Foundation:** independent database, ticket and transition record tables, enforced state machine and permission checks, ticket history lookup. First let people open tickets, switch states, and check traceability.
+2. **Phase 2 · Agent access (locked, 2026-11-11):** role agents pick up tickets from queues and hand off, trialled first on the decomposition and development stages, verifying whether the handoff content is enough for the next person to use. Implementation in Ch. 12.
+3. **Phase 3 · Source expansion:** connect the on-call alert source, and decide from usage whether notifications, boards, and statistics are needed.
 
-### 帳號與角色
+### Open items (awaiting a decision)
 
-- 一個帳號有一組使用者名稱（大小寫不區分、唯一）、顯示名稱、密碼，以及一個或多個角色。
-- 角色共九種：七個流程角色（PM、Leader、工程師、Reviewer、Tester、Deployer、UI&UX）加兩個帳號角色：`guest`（唯讀，具備 PM 的視野、不能做任何寫入）與管理者（`admin`）。這兩個都不是流程角色，不能用來切工單狀態。
-- 一個帳號可同時持有多個角色，例如工程師兼 Reviewer。轉換時系統檢查帳號是否持有該轉換要求的角色；持有任一符合的角色即可，不需切換身分。
-- 帳號可停用：停用後無法登入，既有會話立即失效。
-- 資料庫層也鎖角色清單：`users.roles` 有 CHECK 約束 `users_roles_check`，只允許上述九種角色的子集。UI&UX 角色由 migration 014 補進 CHECK（工單 45e47047）——f5d2020 只改了 JS 常數，漏了 DB CHECK，導致建 ui_ux 帳號在 live DB 被擋；003 就地更新為完整八種清單，014 在既有資料庫上 DROP＋ADD（有 guard，見第 15 章 migration 011 的寫法）。Guest 角色由 migration 016 補進 CHECK（工單 5519e03c），003 再就地更新為完整九種清單。
-
-### 密碼
-
-- 密碼以 Node 內建 `crypto.scrypt` 加每人隨機鹽雜湊儲存，格式為 `scrypt$鹽$雜湊`；不引入雜湊函式庫，不存明文。
-- 密碼至少 8 個字元。登入失敗時，不論是帳號不存在、密碼錯誤或帳號已停用，一律回覆同一則通用錯誤，不透露是哪一種。
-
-### 會話
-
-- 登入成功發一枚不透明 Bearer 權杖（256 位元隨機值），效期 7 天；客戶端每次請求帶 `Authorization: Bearer <權杖>`。
-- 伺服器每次請求都檢查權杖是否存在、是否到期、對應帳號是否仍啟用；任一項不過即拒絕。
-- 登出即刪除該會話。管理者重設某帳號密碼時，該帳號的全部會話一併撤銷，等於全裝置登出。
-
-### 首次啟用：沒有預設帳號
-
-- 系統不內建任何帳號或密碼。`users` 表為空時，前端顯示設定畫面；第一位管理者自行建立帳號（使用者名稱、顯示名稱、密碼）。
-- 一旦存在任何帳號，設定流程永久關閉（再呼叫回 403）。第一位管理者同時持有 `admin` 與 `pm` 角色，建好後即可直接開單；角色之後可在管理介面調整。
-
-### 管理者
-
-- 持有 `admin` 角色的帳號可管理帳號（新增、改顯示名稱／角色／啟用狀態、重設密碼）與查看全系統概覽：帳號數量與清單（不含密碼雜湊）、各狀態工單數、轉換總數、最新 10 筆稽核紀錄、資料庫健康狀態。
-- 管理者不能把自己鎖在門外：系統拒絕停用最後一位啟用的管理者，也拒絕拿掉其管理者角色。
-- **管理者不繞過流程檢查。**要切工單狀態，管理者的帳號同樣必須持有該轉換要求的流程角色；`admin` 本身不能開單、不能審查、不能部署。管理者的權力是看得全、管帳號，不是跳過流程。
-
-### 專案指派（Agent 指派）
-
-- 管理者在管理介面可把一個帳號指派到一個專案（`users.project_id`，可空）；取消指派即恢復看全部專案。v1 一個帳號只指派一個專案，多專案指派不在範圍內。
-- 指派以帳號為單位：API 金鑰繼承所屬帳號的指派，不另外指派。
-- 公開的帳號資料含指派的專案（`project_id`，未指派為 null）。
-- 指派不影響帳號的角色與啟用狀態；未指派的帳號（含各值班帳號）維持現行行為。
-
-### 稽核裡的角色
-
-- 轉換紀錄的 `actor_role` 記的是該次轉換實際行使的角色，也就是狀態機裡該轉換要求的角色；不是客戶端申報的值，也不是帳號持有的全部角色。
-- 被拒的嘗試同樣留痕：有適用規則時記該規則的角色；沒有適用規則時，記該帳號持有的第一個流程角色；若帳號不持有任何流程角色，記 `pm`（稽核表要求必填六種流程角色之一，此為佔位值，原因欄會寫明拒絕理由）。
+- Decomposition parent/child links: when one requirement splits into several development tickets, use a parent ticket plus child tickets, or a work list inside one ticket? This affects the Ch. 8 data model.
+- Whether ticket priority and severity fields are needed (for example severity), and whether they affect pickup order.
+- For on-call tickets that only need handling and no development, whether they follow the full development chain or may be delivered directly from a specific state.
+- UI form: start with an API plus a simple list page, or build a full ticket board from the start.
+- Notifications: after a state transition, is the next owner actively notified, and through which channel? — PM monitoring (Ch. 13) has answered half of it: stall detection and reminder state are provided by the server, sending is the PM on-call agent's job; active notification for other state transitions is still undecided.
+- Automatic document filing: the platform currently produces no files, so Document v1 only files manually archived documents. If the "Generate spec" step ever really produces a spec file, whether that feature files it into Documents with `source='spec_generation'` or manual filing stays the rule — awaiting a decision.
 
 ---
 
-## 12. Agent 接入（第二期）
+## 11. Accounts, Authentication, and Administration
 
-> 本章已鎖定（2026 年 11 月 11 日），與第 10 章第二期一致：各角色 Agent 依佇列接單與交接，先從拆解與開發兩段試行，驗證交接內容是否足夠下一手使用。
+> This chapter is locked (2026-11-11), matching the fourth decision in Ch. 3.
 
-### API 金鑰
+At first launch, requests carried a self-declared identity from the caller and the server only checked the permission matrix; this chapter changes "who is operating" to the real identity after login. Identity is no longer whatever the client claims: the actor of every ticket creation and transition is the account behind the login session.
 
-- Agent 程序不走密碼登入：管理者在管理介面為某個帳號發一枚長期 API 金鑰，格式為 `rl_` 加 32 個隨機十六進位字元，呼叫時帶 `X-API-Key` 標頭。
-- 只存雜湊：金鑰以 scrypt 加隨機鹽雜湊儲存（與密碼同一格式），完整金鑰只在建立當下的回應裡出現一次，之後不再顯示、不記日誌、不存明文。列表只顯示名稱與前綴（`rl_` 加前 4 碼），供識別與查詢。
-- 金鑰繼承帳號角色：金鑰登入的使用者與密碼登入是同一個帳號，流程角色檢查、不得審自己的 code、稽核紀錄完全相同；伺服器分不出呼叫方用的是會話還是金鑰，也不需分。金鑰不能用管理端點，除非其帳號持有 `admin` 角色。
-- 撤銷即失效：管理者可隨時撤銷金鑰，撤銷後立即無法認證；停用帳號也使該帳號的全部金鑰失效。每次成功使用會更新金鑰的最近使用時間（資訊用，更新失敗不影響該次請求）。
+### Accounts and roles
 
-### 接單佇列
+- An account has a username (case-insensitive, unique), a display name, a password, and one or more roles.
+- Nine roles in total: seven flow roles (PM, Leader, Engineer, Reviewer, Tester, Deployer, UI&UX) plus two account roles: `guest` (read-only, with the PM's visibility, no writes at all) and admin (`admin`). Neither of the two is a flow role and neither can switch ticket states.
+- One account may hold multiple roles at once, for example engineer plus Reviewer. At transition time the system checks whether the account holds the role that transition requires; holding any matching role is enough, no identity switching needed.
+- Accounts can be deactivated: once deactivated, login is impossible and existing sessions become invalid immediately.
+- The database also locks the role list: `users.roles` has the CHECK constraint `users_roles_check`, allowing only subsets of the nine roles above. The UI&UX role was added to the CHECK by migration 014 (ticket 45e47047) — f5d2020 only changed the JS constant and missed the DB CHECK, so creating a ui_ux account was blocked on the live DB; 003 was updated in place to the full eight-role list, and 014 does DROP+ADD on existing databases (with a guard, see the migration 011 pattern in Ch. 15). The guest role was added to the CHECK by migration 016 (ticket 5519e03c), with 003 updated in place again to the full nine-role list.
 
-- `GET /api/queue` 只回呼叫方目前能接的單：依呼叫方持有的角色篩選，每筆附上下一步轉換（去向、角色、種類、是否需要理由與交接說明）。前端有「Claimable」分頁顯示這個佇列。
-- 「Claimable」分頁不多餘（2026 年 11 月 11 日，工單 6cac9d1f）：狀態分頁列出該狀態的全部工單（只受專案範圍限制，不論看的人持什麼角色、能不能接）；「Claimable」只列呼叫方依角色能接的單，多重角色的使用者一頁看到兩段待接單，且每筆附下一步轉換。試行範圍外的角色（Reviewer／Tester／Deployer）在此分頁永遠是空的，他們的待接單在各自的狀態分頁（待 Review／待測試／待部署）看。`GET /api/queue` 不得移除：Leader 與 Engineer 值班排程每 5 分鐘用它檢查佇列。
-- 試行範圍限拆解與開發兩段：`requirement` 等 Leader 接手拆解，`pending_dev` 等工程師接手開發。進行中的狀態（拆解中、開發中等）已有負責人，不在佇列裡。
-- 接取仍是原子操作：切入進行中狀態的同時寫入負責人（第 9 章），兩方無法同時接走同一張單。增量處理原則不變：Agent 再次掃描佇列時只補新進與缺少的部分，不重做已處理的單。
+### Passwords
 
-### 專案指派與範圍強制
+- Passwords are stored hashed with Node's built-in `crypto.scrypt` plus a per-person random salt, in the format `scrypt$salt$hash`; no hashing library is introduced, and no plaintext is stored.
+- Passwords are at least 8 characters. On login failure — account does not exist, wrong password, or deactivated account — the same generic error is always returned, without revealing which case it was.
 
-- 已指派的帳號，其接單佇列（`GET /api/queue`）與工單列表（`GET /api/tickets`）只回傳該專案的工單；傳入其他專案的篩選條件也無法擴大範圍。未分類工單不在已指派帳號的範圍內。
-- 已指派的帳號對其他專案工單的狀態轉換，伺服器端直接拒絕（403 `out_of_scope`），並如其他被拒嘗試一樣留稽核紀錄。範圍檢查在狀態、角色、不得審自己的 code 之前先執行（第 6 章）。
-- 工單詳情（`GET /api/tickets/:id`）與轉換歷程（`GET /api/tickets/:id/transitions`）用同一條範圍檢查（`stateMachine.checkProjectScope`，工單 8d030ed9 補上）：已指派帳號只能讀自己專案的工單，跨範圍讀取回 403 `out_of_scope` 並留稽核紀錄。被拒的讀取在稽核表記一筆 `rejected` 列，from_status 與 to_status 皆為工單當下狀態（讀取不指向新狀態），以此與被拒的轉換區分。
-- 強制執行在伺服器端，不只前端擋：前端的專案篩選只是顯示，真正的範圍由後端在佇列、列表、轉換、詳情、歷程五處強制。
-- 未指派的帳號行為不變：佇列與列表看全部專案，轉換、詳情、歷程不受範圍限制。
+### Sessions
 
-### 交接說明
+- A successful login issues one opaque Bearer token (256-bit random value), valid for 7 days; the client sends `Authorization: Bearer <token>` on every request.
+- On every request the server checks that the token exists, has not expired, and that the account is still active; if any check fails, the request is refused.
+- Logging out deletes the session. When an admin resets an account's password, all of that account's sessions are revoked together — the equivalent of logging out on all devices.
 
-- 兩段試行交接必填交接說明：拆解完成交給開發（拆解中 → 待開發）時附工作清單，開發完成送審（開發中 → 待 Review）時附變更說明與自測結果。交接說明空白或缺失時，轉換被系統擋下（400 `handoff_required`），而不是先切再補。
-- 其餘轉換的交接說明可附可不附；有附就一併記在轉換紀錄裡，工單歷史與工單詳情頁都看得到。
-- 交接夠不夠用，由下一手判斷：收到交接說明後若認為不足，不需要新狀態——直接用既有的待澄清機制把單打回，並寫明具體疑問。前端在最新交接說明旁邊就提示這條退回路徑。交接是否足夠，是第二期試行要驗證的事，不是系統預先判定。
-- 缺少必填內容（理由或交接說明）屬於驗證錯誤，回 400；角色不符、非法轉換、審自己的工作屬於授權錯誤，回 403。兩種被拒的嘗試都留稽核紀錄。
+### First activation: no default account
 
-### 試行範圍說明
+- The system ships with no accounts or passwords. When the `users` table is empty, the frontend shows the setup screen; the first admin creates their own account (username, display name, password).
+- Once any account exists, the setup flow closes permanently (further calls return 403). The first admin holds both `admin` and `pm` roles, so they can open tickets right away; roles can be adjusted later in the admin UI.
 
-- API 金鑰本身不限階段：金鑰認證與會話認證相同，不會因為某段不在試行範圍就擋下呼叫。試行的意思是：接單佇列與交接必填目前只覆蓋拆解與開發兩段，交接是否足夠也在這兩段驗證。其他階段照原有規則走，不另外設 Agent 專用限制。
+### Admins
 
-### PM 監控
+- An account holding the `admin` role can manage accounts (add, change display name / roles / active state, reset passwords) and view the system-wide overview: account count and list (without password hashes), ticket counts per state, total transition count, the latest 10 audit records, and database health.
+- An admin cannot lock themselves out: the system refuses to deactivate the last active admin, and refuses to remove their admin role.
+- **Admins do not bypass flow checks.** To switch a ticket's state, an admin's account must still hold the flow role that transition requires; `admin` by itself cannot open tickets, review, or deploy. An admin's power is seeing everything and managing accounts, not skipping the flow.
 
-- PM 每 15 分鐘輪詢 `GET /api/monitor/stalled` 看範圍內卡住的單（第 13 章）。三個監控端點皆須 PM 角色，並走同一條專案範圍檢查（`stateMachine.checkProjectScope`）；跨專案的提醒或升級紀錄回 403 `out_of_scope`。
+### Project assignment (agent assignment)
 
----
+- In the admin UI, an admin can assign an account to one project (`users.project_id`, nullable); removing the assignment restores visibility of all projects. v1 assigns an account to at most one project; multi-project assignment is out of scope.
+- Assignment is per account: API keys inherit their account's assignment, with no separate assignment.
+- Public account data includes the assigned project (`project_id`, null when unassigned).
+- Assignment does not affect the account's roles or active state; unassigned accounts (including all on-call accounts) keep their current behavior.
 
-## 13. PM 監控（防卡住）
+### Roles in the audit log
 
-> 本章實作於工單 c3f13041：PM 負責整個任務順利跑完、不被卡住，每 15 分鐘檢查一次、提醒成員。
-
-### 卡住的定義
-
-- 處於工作中狀態（`decomposing`、`in_dev`、`in_review`、`in_test`、`pending_deploy`）超過 30 分鐘沒有任何轉換，或處於 `needs_clarification` 超過 30 分鐘沒人回。
-- 時鐘是最新一筆 applied 轉換紀錄（`ticket_transitions` 的 `created_at`），不是 `tickets.updated_at`：把工單移專案也會更新 `updated_at`，被拒的嘗試也不會推進工單，兩者都不該重置時鐘。
-- 刻意未納入：`requirement`、`pending_dev`、`pending_review`、`pending_test`（等接取的佇列狀態）與 `needs_acceptance_clarification`。規格只列五個工作中狀態加待澄清；若 Leader 要把等接取的佇列也納入監控，改 `server/monitor.js` 的 `STALLED_STATES` 一行即可。
-
-### 分工：伺服器偵測、值班 Agent 發送
-
-- Relay server 沒有通往 Muse 聊天室的通道，所以「通知到角色聊天室」不可能由 server 直接做。分工如下：
-  - Server：偵測卡住、保存提醒狀態（`monitor_reminders` 表）、去重、判斷是否該升級，並提供 PM 輪詢的端點。
-  - PM 值班 Agent：每 15 分鐘呼叫 `GET /api/monitor/stalled`，對 `needs_reminder` 為真的單發提醒、呼叫 `POST .../reminded` 回報；對 `needs_escalation` 為真的單升級到主聊天室給 Dylan、呼叫 `POST .../escalated` 回報。
-- 15 分鐘的節奏由 PM 值班排程控制（repo 外），server 只提供「現在該提醒誰」的狀態；server 本身不跑定時任務（不新增依賴）。
-
-### 提醒狀態與去重
-
-- 每張單在 `monitor_reminders` 最多一列，以「卡住回合」（episode）區分：回合的 key 是最新一筆 applied 轉換的 id。工單一有新轉換，回合就換了，提醒次數從 0 重新算、升級狀態清空——轉換路徑不需掛鉤子，server 在讀取時比對 key 即可。
-- 每個 15 分鐘週期每張單最多一則提醒：`needs_reminder` 只在「從未提醒」或「上次提醒已滿 15 分鐘」時為真；提醒後 PM 呼叫 ack 端點寫入 `last_reminded_at`，15 分鐘內再查就不會重複 flagged。即使 PM 沒來得及 ack，下次輪詢仍只會發一則（一個週期一則）。
-- 升級：同一回合提醒滿 3 次（約 45 分鐘）仍卡住，`needs_escalation` 為真；PM 升級後呼叫 ack 端點寫入 `escalated_at`，同一回合只升級一次。升級後提醒照常每 15 分鐘繼續（單子還卡著），直到工單移動、回合結束。提醒滿 3 次後，下一次輪詢即 flag 升級；PM 也可在發完第 3 則提醒後立刻重查一次、同一週期內升級，兩種做法都符合「提醒 3 次後升級」。
-- `needs_clarification` 的負責角色是 PM：提醒的對象就是 PM 自己——輪詢的 PM Agent 看到後應直接補充澄清（本職工作），而不是再轉發一則訊息給自己。
-
-### 端點（皆須 PM 角色，皆走專案範圍檢查）
-
-- `GET /api/monitor/stalled`：範圍內全部卡住的單，每筆附 `stalled_since`、`stalled_minutes`、`reminder_count`、`last_reminded_at`、`escalated_at`、`needs_reminder`、`needs_escalation`、`notify_role`（負責角色）與 `next_actions`（該角色下一步合法轉換，即「解開需要什麼」）。
-- `POST /api/monitor/stalled/:id/reminded`：記錄已發提醒；同一回合次數 +1，新回合重置為 1。單子當下沒卡住回 400 `not_stalled`；非 PM 回 403 `wrong_role`；跨專案回 403 `out_of_scope`。
-- `POST /api/monitor/stalled/:id/escalated`：記錄已升級；同一回合只接受一次，未滿 3 次提醒或已升級過回 400 `not_due`。
-
-### 備註
-
-- migration 009 是 `monitor_reminders` 表。CHECK 約束補漏（第 14 個狀態 `needs_acceptance_clarification`）由 migration 011 處理（工單 16f227ff）：001／002 的三處 CHECK 清單補上第 14 個狀態，011 另以 DROP＋ADD 修正既有資料庫的約束。
-- 未驗證：migration SQL 與 upsert 語句未在 live PostgreSQL 上實際執行（本機無資料庫）；合併部署前應在 develop 預覽環境以真實工單跑一次完整週期（卡住 → 提醒 → 3 次 → 升級）。
+- A transition record's `actor_role` is the role actually exercised by that transition — the role the state machine requires for it — not a client-declared value, and not all the roles the account holds.
+- Rejected attempts leave a trace too: when a rule applies, record that rule's role; when no rule applies, record the account's first flow role; if the account holds no flow role, record `pm` (the audit table requires one of the six flow roles, so this is a placeholder; the reason column states the rejection reason).
 
 ---
 
-## 14. 自訂 Workflow
+## 12. Agent Access (Phase 2)
 
-> 本章實作於工單 3269ec1c：專案可以自訂每個狀態由哪個角色負責，取代內建的固定對照；預設 workflow 的行為與今天完全一致。
+> This chapter is locked (2026-11-11), matching Phase 2 in Ch. 10: role agents pick up tickets from queues and hand off, trialled first on the decomposition and development stages, verifying whether the handoff content is enough for the next person to use.
 
-### 動機
+### API keys
 
-第 5／6 章的狀態機與角色對照是寫死在程式裡的：待開發永遠等工程師、測試中永遠是 Tester。不同專案想換分工（例如某專案的待開發由 Tester 先接去寫測試計畫）時，過去只能改程式。自訂 Workflow 把「狀態 → 角色」這層對照搬進資料庫：每個專案可以有一套具名 workflow，工單的路由、接單佇列與卡住提醒都改走該專案生效的 workflow。
+- Agent programs do not log in with passwords: in the admin UI, an admin issues a long-lived API key for an account, in the format `rl_` plus 32 random hexadecimal characters, sent with the `X-API-Key` header.
+- Only the hash is stored: keys are stored hashed with scrypt plus a random salt (same format as passwords), and the full key appears only once, in the response at creation time — never shown again, never logged, never stored in plaintext. Listings only show the name and the prefix (`rl_` plus the first 4 characters), for identification and lookup.
+- Keys inherit the account's roles: key login and password login are the same account; flow role checks, the no-self-review rule, and audit records are exactly the same. The server cannot tell whether the caller used a session or a key, and does not need to. A key cannot use admin endpoints unless its account holds the `admin` role.
+- Revocation takes effect immediately: an admin can revoke a key at any time, and it cannot authenticate afterwards; deactivating an account also invalidates all of that account's keys. Each successful use updates the key's last-used time (informational; a failed update does not affect that request).
 
-### 資料模型
+### Pickup queues
 
-- `workflows` 表（綱要見第 8 章，DDL 為 migration 010）：`name`、每個狀態的 `{role, responsibilities}`（`roles` JSONB）、`is_default`／`is_active` 旗標。
-- `roles` 的形狀：14 個狀態缺一不可、多餘的 key 拒絕。非終態的 `role` 必須是 7 個 workflow 角色（pm／leader／engineer／reviewer／tester／deployer／ui_ux）之一，`responsibilities` 是非空字串；終態（`delivered`／`cancelled`）的 `role` 必須是 `null`，`responsibilities` 是字串。驗證函式為 `server/workflows.js` 的 `validateRolesMap`。
-- 名稱唯一：同一專案內（`project_id`，`name`）唯一，撞名回 409 `workflow_name_taken`（沿用 projects 的慣例，service 收到 23505 回 409）。
+- `GET /api/queue` only returns tickets the caller can currently pick up: filtered by the roles the caller holds, each entry carrying its next transition (destination, role, kind, whether a reason and handoff note are required). The frontend has a "Claimable" tab showing this queue.
+- The "Claimable" tab is not redundant (2026-11-11, ticket 6cac9d1f): the state tabs list all tickets in that state (limited only by project scope, regardless of who is looking or whether they can pick it up); "Claimable" only lists tickets the caller can pick up by role, so a multi-role user sees two stages of pickup tickets on one page, each with its next transition. Roles outside the trial scope (Reviewer / Tester / Deployer) always see an empty tab; their pickup tickets are on their own state tabs (pending review / pending test / pending deploy). `GET /api/queue` must not be removed: the Leader and Engineer on-call schedules check the queue with it every 5 minutes.
+- The trial scope covers only the decomposition and development stages: `requirement` waits for the Leader to take it for decomposition, `pending_dev` waits for an engineer to take it for development. In-progress states (decomposing, in dev, and so on) already have owners and are not in the queue.
+- Pickup is still an atomic operation: switching into the in-progress state and writing the owner happen together (Ch. 9), so two parties cannot pick up the same ticket. The incremental processing rule does not change: when an agent scans the queue again it only fills in newly arrived and missing items, and does not redo handled tickets.
 
-### 旗標語意
+### Project assignment and scope enforcement
 
-- `is_default`：全域預設 workflow 只有一筆（`project_id` NULL），是所有專案的 fallback。**唯讀**：更新、刪除、設為 active 都拒絕（400 `default_workflow_readonly`）。
-- `is_active`：每個專案最多一筆。設為 active 時，把同一專案其他 workflow 的 `is_active` 清掉（同一交易內完成）。切回預設＝把該專案的 active 全部清掉（`workflow_id` 傳 `null`）。
-- 刪除守則：預設 workflow 永遠不能刪；active workflow 在該專案沒有其他非預設 workflow 可替代時不能刪（400 `active_workflow_no_alternative`）；有其他非預設 workflow 時可刪，刪後該專案退回預設 workflow。非 active 的 workflow 可直接刪。
+- An assigned account's pickup queue (`GET /api/queue`) and ticket list (`GET /api/tickets`) only return tickets in that project; passing another project's filter cannot widen the scope. Uncategorized tickets are out of an assigned account's scope.
+- When an assigned account tries a state transition on another project's ticket, the server refuses directly (403 `out_of_scope`) and leaves an audit record like any other rejected attempt. The scope check runs before the state, role, and no-self-review checks (Ch. 6).
+- Ticket detail (`GET /api/tickets/:id`) and transition history (`GET /api/tickets/:id/transitions`) use the same scope check (`stateMachine.checkProjectScope`, added by ticket 8d030ed9): an assigned account may only read tickets in its own project; a cross-scope read returns 403 `out_of_scope` and leaves an audit record. A rejected read writes one `rejected` row in the audit table, with from_status and to_status both set to the ticket's current state (a read points at no new state), distinguishing it from a rejected transition.
+- Enforcement is server-side, not just frontend blocking: the frontend project filter is only a display; the real scope is enforced by the backend at five points: queue, list, transition, detail, and history.
+- Unassigned accounts behave as before: queues and lists see all projects, and transitions, detail, and history have no scope limits.
 
-### Seed 與預設 workflow
+### Handoff notes
 
-- migration 010 用 `INSERT ... SELECT ... WHERE NOT EXISTS (SELECT 1 FROM workflows WHERE is_default)` 寫入一筆名為 `Default` 的預設 workflow，內容等於目前內建流程，確保既有行為完全不變。
-- 預設 workflow 的角色對照從 `server/stateMachine.js` 的 `TRANSITIONS` 推導（每個狀態取第一條 `from` 為該狀態的規則之 role）：requirement→leader，decomposing→leader，needs_clarification→pm，pending_dev→engineer，in_dev→engineer，pending_review→reviewer，in_review→reviewer，pending_test→tester，in_test→tester，needs_acceptance_clarification→pm，pending_deploy→deployer，deploying→deployer，delivered／cancelled→null。
-- **responsibilities 文字是我補寫的**：現有文件與程式沒有現成寫法，預設 workflow 每個狀態的職責句是我為本單新寫的（見 `server/workflows.js` 的 `DEFAULT_RESPONSIBILITIES`），不是從既有文件抄來的。
-- Seed 的 JSON 與 `server/workflows.js` 的 `DEFAULT_WORKFLOW_ROLES` 完全一致：以程式產生（node 讀 workflows.js 印出 JSON 再寫進 SQL），不要手抄兩份。
+- Handoff notes are required for the two trial handoffs: when decomposition hands off to development (decomposing → pending dev), attach the work list; when development sends for review (in dev → pending review), attach change notes and self-test results. When the handoff note is blank or missing, the transition is blocked by the system (400 `handoff_required`), not switched first and filled in later.
+- Other transitions may carry a handoff note or not; when attached it is recorded in the transition record, visible in both the ticket history and the ticket detail page.
+- Whether the handoff is sufficient is judged by the next person: after receiving the handoff note, if they find it insufficient, no new state is needed — send the ticket straight back with the existing needs-clarification mechanism and state the specific questions. The frontend points out this return path next to the latest handoff note. Whether the handoff is sufficient is what the Phase 2 trial verifies; it is not pre-judged by the system.
+- Missing required content (a reason or a handoff note) is a validation error, returning 400; a mismatched role, an illegal transition, or reviewing your own work is an authorization error, returning 403. Both kinds of rejected attempts leave audit records.
 
-### 角色解析：三層 fallback
+### Trial scope notes
 
-`workflows.getRoleMap(db, projectId)` 回傳該專案生效的 roles map：
+- API keys themselves are not stage-limited: key authentication is the same as session authentication, and a call is not blocked just because a stage is outside the trial scope. "Trial" means the pickup queue and required handoff notes currently cover only the decomposition and development stages, and handoff sufficiency is verified on those two stages. Other stages follow the original rules, with no agent-specific limits added.
 
-1. 該專案的 active workflow；
-2. 否則 DB 裡 `is_default` 的預設 workflow；
-3. 否則程式內建 `DEFAULT_WORKFLOW_ROLES` 常數（從 TRANSITIONS 推導，見上）。
+### PM monitoring
 
-`projectId` 為 null（未分類工單）直接走預設。這個三層 fallback 保證既有行為不變，即使 seed 還沒跑過。兩條查詢寫成固定形式，方便測試 fake 處理：`SELECT * FROM workflows WHERE project_id = $1 AND is_active = true LIMIT 1`，以及 `SELECT * FROM workflows WHERE is_default = true LIMIT 1`。
+- The PM polls `GET /api/monitor/stalled` every 15 minutes for stalled tickets in scope (Ch. 13). All three monitoring endpoints require the PM role and go through the same project scope check (`stateMachine.checkProjectScope`); a reminder or escalation record across projects returns 403 `out_of_scope`.
 
-### 角色解析的三個整合點
+---
 
-- **轉換（`server/tickets.js` 的 `transitionTicket`）**：在交易內（用傳入的 client）先以 `getRoleMap(db, ticket.project_id)` 取角色 map，傳給 `validateTransition` 當 `roleOverrides`。`stateMachine.js` 的 `validateTransition` 與 `allowedTransitions` 各加一個可選參數 `roleOverrides`（狀態→角色的 map）：有 override 時，該條規則的 `from` 狀態之要求角色改為 override 的角色（僅當 override 是 7 個 workflow 角色之一）；回傳的 rule 其 role 亦改為 override 後的角色，稽核列才能正確記錄。Cancel 規則維持 PM-only，不接受 override。沒傳 `roleOverrides` 時行為與今天完全一致。
-- **接單佇列（`server/tickets.js` 的 `listClaimable`）**：不再用寫死的 CLAIMABLE 常數。先取 requirement／pending_dev 兩種等待狀態的工單，再按每張單所屬專案的 role map 決定該狀態的負責角色（同一專案的 map 快取起來，只查一次），只有呼叫者持有該角色時才列入；`next_transition` 從 TRANSITIONS 找該 from 狀態的唯一出路規則（requirement→decomposing，pending_dev→in_dev），但 role 欄位填 workflow 的角色。預設 workflow 下結果與今天完全相同。
-- **PM 監控（`server/monitor.js` 的 `listStalled`）**：每張卡住工單的 `notify_role` 與 `next_actions` 改按該單所屬專案的 role map 解析（同一專案快取一次）；`next_actions` 呼叫 `allowedTransitions` 時把該單的 role map 當 `roleOverrides` 傳入。原本的 `responsibleRole(status)`（內建推導）保留並 export，當 fallback 與既有測試用。
+## 13. PM Monitoring (Stall Prevention)
 
-### 端點
+> This chapter implements ticket c3f13041: the PM owns keeping the whole task running smoothly and not getting stuck, checking once every 15 minutes and reminding members.
 
-| 方法 | 端點 | 說明 |
+### What counts as stalled
+
+- In a working state (`decomposing`, `in_dev`, `in_review`, `in_test`, `pending_deploy`) for over 30 minutes with no transition at all, or in `needs_clarification` for over 30 minutes with no reply.
+- The clock is the latest applied transition record (`ticket_transitions`.`created_at`), not `tickets.updated_at`: moving a ticket to another project also updates `updated_at`, and rejected attempts do not move the ticket — neither should reset the clock.
+- Deliberately excluded: `requirement`, `pending_dev`, `pending_review`, `pending_test` (queue states waiting for pickup) and `needs_acceptance_clarification`. The spec lists only the five working states plus needs clarification; if the Leader wants waiting-for-pickup queues monitored too, change one line in `server/monitor.js` (`STALLED_STATES`).
+
+### Division of labor: the server detects, the on-call agent sends
+
+- The Relay server has no channel into Muse chat rooms, so "notify the role chat room" cannot be done by the server directly. The division is:
+  - Server: detect stalls, save reminder state (the `monitor_reminders` table), de-duplicate, decide whether to escalate, and provide polling endpoints for the PM.
+  - PM on-call agent: call `GET /api/monitor/stalled` every 15 minutes, send reminders for tickets where `needs_reminder` is true and call `POST .../reminded` to report back; escalate tickets where `needs_escalation` is true to the main chat room for Dylan and call `POST .../escalated` to report back.
+- The 15-minute rhythm is controlled by the PM on-call schedule (outside the repo); the server only provides "who needs reminding now" state. The server itself runs no scheduled tasks (no new dependencies).
+
+### Reminder state and de-duplication
+
+- Each ticket has at most one row in `monitor_reminders`, distinguished by "stalled episode": the episode key is the latest applied transition's id. As soon as a ticket has a new transition, the episode changes, the reminder count restarts from 0, and the escalation state clears — no hook on the transition path is needed; the server just compares the key on read.
+- At most one reminder per ticket per 15-minute cycle: `needs_reminder` is only true when "never reminded" or "the last reminder was at least 15 minutes ago". After reminding, the PM calls the ack endpoint, which writes `last_reminded_at`; checking again within 15 minutes will not flag it again. Even if the PM does not ack in time, the next poll still sends only one reminder (one per cycle).
+- Escalation: when the same episode has been reminded 3 times (about 45 minutes) and is still stalled, `needs_escalation` becomes true. After the PM escalates, they call the ack endpoint, which writes `escalated_at`; each episode escalates at most once. Reminders continue every 15 minutes after escalation (the ticket is still stuck) until the ticket moves and the episode ends. After the 3rd reminder, the next poll flags escalation right away; the PM may also re-check immediately after sending the 3rd reminder and escalate within the same cycle. Both approaches satisfy "escalate after 3 reminders".
+- The responsible role for `needs_clarification` is the PM: the reminder's target is the PM themselves — the polling PM agent should add the clarification directly (their own job) instead of forwarding a message to themselves.
+
+### Endpoints (all require the PM role, all go through the project scope check)
+
+- `GET /api/monitor/stalled`: all stalled tickets in scope, each with `stalled_since`, `stalled_minutes`, `reminder_count`, `last_reminded_at`, `escalated_at`, `needs_reminder`, `needs_escalation`, `notify_role` (the responsible role), and `next_actions` (that role's next legal transitions — "what it takes to unstick it").
+- `POST /api/monitor/stalled/:id/reminded`: records a sent reminder; the count for the same episode goes up by 1, and a new episode resets it to 1. A ticket that is not currently stalled returns 400 `not_stalled`; a non-PM returns 403 `wrong_role`; cross-project returns 403 `out_of_scope`.
+- `POST /api/monitor/stalled/:id/escalated`: records an escalation; each episode accepts it once — before 3 reminders, or after an escalation, returns 400 `not_due`.
+
+### Notes
+
+- Migration 009 is the `monitor_reminders` table. The CHECK constraint gap (the 14th state `needs_acceptance_clarification`) is handled by migration 011 (ticket 16f227ff): the three CHECK lists in 001/002 gain the 14th state, and 011 fixes existing databases with DROP+ADD.
+- Not verified: the migration SQL and upsert statements have not actually run on a live PostgreSQL instance (no database on this machine); before merging and deploying, run one full cycle on a develop preview environment with real tickets (stalled → reminder → 3 times → escalation).
+
+---
+
+## 14. Custom Workflows
+
+> This chapter implements ticket 3269ec1c: a project can customize which role owns each state, replacing the hard-coded built-in mapping; the default workflow behaves exactly as it does today.
+
+### Motivation
+
+The Ch. 5/6 state machine and role mapping are hard-coded in the program: pending dev always waits for the engineer, in test is always the Tester. When a different project wants different staffing (for example, a project's pending dev is first picked up by the Tester to write the test plan), the only option used to be changing the code. Custom workflows move the "state → role" mapping into the database: each project can have a named workflow, and ticket routing, pickup queues, and stall reminders all follow the project's active workflow.
+
+### Data model
+
+- The `workflows` table (outline in Ch. 8, DDL in migration 010): `name`, one `{role, responsibilities}` per state (`roles` JSONB), `is_default` / `is_active` flags.
+- The shape of `roles`: all 14 states are required, extra keys are rejected. For a non-terminal state, `role` must be one of the 7 workflow roles (pm / leader / engineer / reviewer / tester / deployer / ui_ux), and `responsibilities` must be a non-empty string; for a terminal state (`delivered` / `cancelled`), `role` must be `null` and `responsibilities` a string. The validator is `validateRolesMap` in `server/workflows.js`.
+- Name uniqueness: (`project_id`, `name`) is unique within a project; a collision returns 409 `workflow_name_taken` (following the projects convention: the service turns 23505 into 409).
+
+### Flag semantics
+
+- `is_default`: there is only one global default workflow (`project_id` NULL), the fallback for all projects. **Read-only**: update, delete, and set-active are all refused (400 `default_workflow_readonly`).
+- `is_active`: at most one per project. Setting one active clears `is_active` on the other workflows in the same project (in the same transaction). Switching back to the default = clearing the project's active workflows entirely (pass `workflow_id` as `null`).
+- Deletion rules: the default workflow can never be deleted; an active workflow cannot be deleted when the project has no other non-default workflow to fall back to (400 `active_workflow_no_alternative`); when another non-default workflow exists it can be deleted, and the project falls back to the default workflow afterwards. A non-active workflow can be deleted directly.
+
+### Seed and default workflow
+
+- Migration 010 writes one default workflow named `Default` with `INSERT ... SELECT ... WHERE NOT EXISTS (SELECT 1 FROM workflows WHERE is_default)`, its content equal to the current built-in flow, so existing behavior is completely unchanged.
+- The default workflow's role mapping is derived from the `TRANSITIONS` in `server/stateMachine.js` (each state takes the role of the first rule whose `from` is that state): requirement→leader, decomposing→leader, needs_clarification→pm, pending_dev→engineer, in_dev→engineer, pending_review→reviewer, in_review→reviewer, pending_test→tester, in_test→tester, needs_acceptance_clarification→pm, pending_deploy→deployer, deploying→deployer, delivered / cancelled→null.
+- **The responsibilities text is mine**: no existing document or program had ready-made wording, so I wrote the responsibility sentence for each state of the default workflow fresh for this ticket (see `DEFAULT_RESPONSIBILITIES` in `server/workflows.js`); it was not copied from an existing document.
+- The seed JSON and `DEFAULT_WORKFLOW_ROLES` in `server/workflows.js` are exactly the same: generate it from the program (node reads workflows.js and prints the JSON, then write it into the SQL) — never hand-copy two copies.
+
+### Role resolution: three-layer fallback
+
+`workflows.getRoleMap(db, projectId)` returns the roles map in effect for that project:
+
+1. The project's active workflow;
+2. Otherwise the `is_default` workflow in the DB;
+3. Otherwise the built-in `DEFAULT_WORKFLOW_ROLES` constant in the program (derived from TRANSITIONS, see above).
+
+A null `projectId` (uncategorized tickets) goes straight to the default. This three-layer fallback guarantees unchanged existing behavior even before the seed has run. Both queries are written in fixed form so the test fake can handle them: `SELECT * FROM workflows WHERE project_id = $1 AND is_active = true LIMIT 1`, and `SELECT * FROM workflows WHERE is_default = true LIMIT 1`.
+
+### Three integration points for role resolution
+
+- **Transitions (`transitionTicket` in `server/tickets.js`)**: inside the transaction (using the passed-in client), first fetch the role map with `getRoleMap(db, ticket.project_id)` and pass it to `validateTransition` as `roleOverrides`. `validateTransition` and `allowedTransitions` in `stateMachine.js` each take an optional `roleOverrides` parameter (a state→role map): when an override exists, the required role for that rule's `from` state becomes the override's role (only when the override is one of the 7 workflow roles); the returned rule's role also becomes the overridden role, so the audit row records it correctly. The cancel rule stays PM-only and takes no override. Without `roleOverrides` the behavior is exactly as today.
+- **Pickup queue (`listClaimable` in `server/tickets.js`)**: no longer uses the hard-coded CLAIMABLE constant. First fetch tickets in the two waiting states, requirement and pending_dev, then decide each ticket's responsible role from its own project's role map (cached once per project); a ticket is only listed when the caller holds that role. `next_transition` takes the single exit rule for that `from` state from TRANSITIONS (requirement→decomposing, pending_dev→in_dev), but the role field is filled with the workflow's role. Under the default workflow the result is exactly the same as today.
+- **PM monitoring (`listStalled` in `server/monitor.js`)**: each stalled ticket's `notify_role` and `next_actions` are resolved from that ticket's own project role map (cached once per project); `next_actions` passes the ticket's role map to `allowedTransitions` as `roleOverrides`. The original `responsibleRole(status)` (built-in derivation) is kept and exported, as the fallback and for existing tests.
+
+### Endpoints
+
+| Method | Endpoint | Notes |
 | --- | --- | --- |
-| `GET` | `/api/workflows?project_id=` | 列表；已指派帳號只能看到自己專案的 workflow＋全域預設，跨專案回 403 `out_of_scope` |
-| `GET` | `/api/workflows/:id` | 單筆；同上範圍檢查（`project_id` 為 null 的 workflow 視為全域、所有人可見） |
-| `POST` | `/api/workflows` | 建立（僅 Admin；name 必填、未知專案 400、重名 409、roles 驗證 400） |
-| `PATCH` | `/api/workflows/:id` | 更新 name／roles（僅 Admin；預設唯讀） |
-| `DELETE` | `/api/workflows/:id` | 刪除（僅 Admin；見刪除守則） |
-| `GET` | `/api/projects/:id/active-workflow` | 回傳 `{workflow, is_default}`：有 active 就回 active，否則回預設 workflow 並標 `is_default: true` |
-| `POST` | `/api/projects/:id/active-workflow` | body `{workflow_id: string \| null}`，null＝切回預設（僅 Admin） |
+| `GET` | `/api/workflows?project_id=` | List; an assigned account only sees its own project's workflows plus the global default; cross-project returns 403 `out_of_scope` |
+| `GET` | `/api/workflows/:id` | One workflow; same scope check (a workflow with `project_id` null is global and visible to everyone) |
+| `POST` | `/api/workflows` | Create (Admin only; name required, unknown project 400, duplicate name 409, roles validation 400) |
+| `PATCH` | `/api/workflows/:id` | Update name / roles (Admin only; default is read-only) |
+| `DELETE` | `/api/workflows/:id` | Delete (Admin only; see deletion rules) |
+| `GET` | `/api/projects/:id/active-workflow` | Returns `{workflow, is_default}`: the active workflow when there is one, otherwise the default workflow marked `is_default: true` |
+| `POST` | `/api/projects/:id/active-workflow` | Body `{workflow_id: string \| null}`, null = switch back to default (Admin only) |
 
-### 前端
+### Frontend
 
-- Admin → Workflows 分頁（只對 Admin 顯示），點開時載入該專案的 workflows 與 active workflow。異動（建立／更新／刪除／設為啟用）僅 Admin 可做；PM 可讀 workflow（開單選 workflow 仍需讀），不可寫。
-- Workflow 管理畫面（`src/WorkflowsPanel.tsx`，版式沿用 ProjectsPanel 的 card＋table＋form 風格）：專案篩選、workflow 列表（name、Default／Active 徽章、各狀態角色摘要）、建立表單（name＋14 個狀態各一列：角色下拉＋職責文字欄；新建時預設值從預設 workflow 的 roles 帶入）、編輯表單（同樣結構）、設為 active 按鈕、切回預設按鈕、刪除按鈕；後端錯誤訊息顯示在畫面上。角色下拉選項用 7 個 workflow 角色（不要含 admin），label 沿用 `helpers.ts` 的 `ROLE_LABELS`。
-- 狀態與轉換本身的編輯（狀態機編輯器）見第 15 章：本章的表單結構已擴充為 States／Transitions／Roles 三段。
+- Admin → Workflows tab (only shown to Admins), loading the project's workflows and active workflow when opened. Changes (create / update / delete / set active) are Admin only; the PM can read workflows (opening a ticket still needs to read them) but cannot write.
+- The workflow admin screen (`src/WorkflowsPanel.tsx`, layout follows the card+table+form style of ProjectsPanel): project filter, workflow list (name, Default / Active badges, per-state role summary), create form (name + one row per each of the 14 states: role dropdown + responsibilities text field; a new workflow's initial values come from the default workflow's roles), edit form (same structure), set-active button, switch-back-to-default button, delete button; backend error messages show on the screen. Role dropdown options use the 7 workflow roles (not admin), with labels from `ROLE_LABELS` in `helpers.ts`.
+- Editing the states and transitions themselves (the state machine editor) is Ch. 15: this chapter's form structure has been extended into three sections, States / Transitions / Roles.
 
-### 備註
+### Notes
 
-- 未驗證：migration 010 的 SQL 未在 live PostgreSQL 上實際執行（本機無資料庫）；合併部署前應在 develop 預覽環境確認預設 workflow 正常寫入，且既有工單的轉換、佇列與監控行為不變。
-- live DB CHECK 約束漏第 14 個狀態的問題由 migration 011 處理（工單 16f227ff，本單不碰）。
+- Not verified: the migration 010 SQL has not actually run on a live PostgreSQL instance (no database on this machine); before merging and deploying, confirm on a develop preview environment that the default workflow is written correctly and that existing tickets' transitions, queues, and monitoring behave unchanged.
+- The live DB CHECK constraint missing the 14th state is handled by migration 011 (ticket 16f227ff, not this ticket's concern).
 
 ---
 
-## 15. 自訂 Workflow：狀態機編輯器
+## 15. Custom Workflows: State Machine Editor
 
-> 本章實作於工單 baebf8b7：Workflow 不再只是角色對照表，狀態與轉換本身也可以自訂；開單時選擇套用的 workflow，預設為現有 14 狀態開發流程。
+> This chapter implements ticket baebf8b7: a workflow is no longer just a role mapping — the states and transitions themselves can be customized; choose the workflow when opening a ticket, defaulting to the current 14-state development flow.
 
-### 動機
+### Motivation
 
-第 14 章的 Workflow 只能改「某個狀態由哪個角色負責」：14 個狀態寫死在 `stateMachine.js`，不能加狀態、不能改名、不能改順序，短流程設不出來。Dylan 要的三條流程都不是開發流程：
+A Ch. 14 workflow can only change "which role owns a state": the 14 states are hard-coded in `stateMachine.js` — no adding states, no renaming, no reordering, and short flows cannot be built. None of the three flows Dylan wants is a development flow:
 
-1. 使用者需求 → 功能規劃 → 使用者確認 → 產生規格書 → 交付
-2. 使用者需求 → 功能規劃 → 產生規格書 → 交付
-3. 系統事件 → 建立報案 → 結束
+1. User requirement → Feature planning → User confirmation → Generate spec → Delivered
+2. User requirement → Feature planning → Generate spec → Delivered
+3. System event → Create incident → Closed
 
-本章把狀態機變成資料：每個 workflow 自帶 states 與 transitions，編輯器讓 Dylan 以後自己加流程；三條流程是第一批驗收範例，不是寫死的模板（fixture 只存在 `server/workflowExamples.js` 供測試與編輯器參考，不做 migration seed）。
+This chapter turns the state machine into data: each workflow carries its own states and transitions, and the editor lets Dylan add flows himself later. The three flows are the first acceptance examples, not hard-coded templates (the fixtures only live in `server/workflowExamples.js` for tests and editor reference, never as a migration seed).
 
-### 核心決定：每張工單跟隨一個 workflow definition
+### Core decision: each ticket follows one workflow definition
 
-- 一張工單在開立時選定一個 workflow，之後不再變更（`tickets.workflow_id`，`ON DELETE SET NULL`）。
-- 沒有 `workflow_id` 的工單走內建 14 狀態流程（第 5 章）；內建流程只是預設 definition，不是特殊程式路徑——狀態機函式改為 definition-driven（`validateTransitionFor`／`allowedTransitionsFor`／`legalTransitionsFor`／`isTerminalFor`／`startStateFor`），舊函式（`validateTransition` 等）改為對內建 definition 的包裝，行為不變。
-- Definition 解析優先順序（`workflows.definitionForTicket`）：工單的 `workflow_id` → 該 workflow 的 states／transitions／roles；無 workflow → 內建 definition。工單指到不存在的 workflow 列時回 `missing: true`，呼叫方視為內部錯誤（500），**不靜默 fallback 到內建流程**——fallback 會把工單留在未知狀態。刪除守則（有工單的 workflow 不可刪）與外鍵使這種情況實務上到不了。
-- 專案 active workflow 的 role map（第 14 章三層 fallback）**只適用於內建流程的工單**。自訂流程工單的角色一律來自它自己的 workflow 的 roles map。理由：active workflow 是「某專案的開發流程用哪套角色對照」，而自訂流程工單根本不在開發流程裡，用專案的對照去覆蓋它自己的對照是錯的。
+- A ticket picks a workflow when it is opened and never changes it afterwards (`tickets.workflow_id`, `ON DELETE SET NULL`).
+- A ticket with no `workflow_id` follows the built-in 14-state flow (Ch. 5); the built-in flow is just the default definition, not a special code path — the state machine functions became definition-driven (`validateTransitionFor` / `allowedTransitionsFor` / `legalTransitionsFor` / `isTerminalFor` / `startStateFor`), and the old functions (`validateTransition` and friends) are now wrappers around the built-in definition, behavior unchanged.
+- Definition resolution order (`workflows.definitionForTicket`): the ticket's `workflow_id` → that workflow's states / transitions / roles; no workflow → the built-in definition. When a ticket points at a workflow row that does not exist, return `missing: true` and the caller treats it as an internal error (500) — **do not silently fall back to the built-in flow**, because a fallback would leave the ticket in an unknown state. The deletion rule (a workflow with tickets cannot be deleted) and the foreign key make this unreachable in practice.
+- A project's active workflow role map (the Ch. 14 three-layer fallback) **only applies to built-in flow tickets**. A custom-flow ticket's roles always come from its own workflow's roles map. Reason: the active workflow is "which role mapping this project's development flow uses", and a custom-flow ticket is not in the development flow at all — covering its own mapping with the project's mapping would be wrong.
 
-### 資料模型
+### Data model
 
-- `workflows` 表新增 `states` JSONB 與 `transitions` JSONB（migration 013）。state：`{code, label, sort_order, is_start, is_terminal}`；transition：`{from, to, role, requiresReason, requiresHandoff, kind, selfCheck}`。欄位格式與既有 `TRANSITIONS` 常數一致：transition 用 camelCase（`requiresReason`／`requiresHandoff`／`selfCheck`），state 用 snake_case（`sort_order`／`is_start`／`is_terminal`）。
-- `tickets` 表新增 `workflow_id UUID REFERENCES workflows(id) ON DELETE SET NULL`＋索引 `idx_tickets_workflow`（migration 013）。預設 workflow 列的 states／transitions 由 node 從 `stateMachine.js` 產生（14 states、18 條非 create 轉換）填入，僅當 states 為空時才填。
-- **DB 狀態 CHECK 移除（migration 012）**：`tickets_status_check`、`ticket_transitions_from_status_check`、`ticket_transitions_to_status_check` 三處 DROP（皆 `IF EXISTS`，不重加）。狀態合法性改由應用層按工單的 workflow 驗證；資料庫層再也寫不出所有 workflow 的狀態清單。migration 001／002 就地更新（移除狀態 CHECK，保留 source／actor_role／result CHECK，並在檔頭註明 012 移除）。migration 011 另加一道 guard（DO block）：只有當全部已存狀態都在 14 個內建狀態內時才重加 CHECK——因為伺服器每次啟動都會重跑全部 migration，012 上線後若已有自訂狀態的工單，無條件重加會在每次啟動都失敗、並卡住 012／013 之後的 migration。011 本身的目的不受影響：它首次套用時所有已存狀態都是內建狀態，guard 一定通過。
+- The `workflows` table gains `states` JSONB and `transitions` JSONB (migration 013). State: `{code, label, sort_order, is_start, is_terminal}`; transition: `{from, to, role, requiresReason, requiresHandoff, kind, selfCheck}`. The field formats match the existing `TRANSITIONS` constant: transitions use camelCase (`requiresReason` / `requiresHandoff` / `selfCheck`), states use snake_case (`sort_order` / `is_start` / `is_terminal`).
+- The `tickets` table gains `workflow_id UUID REFERENCES workflows(id) ON DELETE SET NULL` plus the index `idx_tickets_workflow` (migration 013). The default workflow row's states / transitions are generated by node from `stateMachine.js` (14 states, 18 non-create transitions) and filled in only when states is empty.
+- **DB state CHECK removal (migration 012)**: the three constraints `tickets_status_check`, `ticket_transitions_from_status_check`, and `ticket_transitions_to_status_check` are all DROPPED (all `IF EXISTS`, not re-added). State legality is now validated by the application layer against the ticket's workflow; the database layer can no longer spell out every workflow's state list. Migrations 001/002 were updated in place (state CHECKs removed, source / actor_role / result CHECKs kept, with a note in the file header that 012 removed them). Migration 011 adds a guard (DO block): the CHECK is only re-added when all stored states are within the 14 built-in states — because the server re-runs all migrations on every startup, an unconditional re-add after 012 ships would fail on every startup once a custom-state ticket exists, and block migrations 012/013 and later. Migration 011's own purpose is unaffected: when it first applies, all stored states are built-in states, so the guard always passes.
 
-### 驗證規則（`workflows.validateWorkflowDefinition`）
+### Validation rules (`workflows.validateWorkflowDefinition`)
 
-states：非空、code 為小寫 snake_case 且唯一、label 非空、恰一個起點、至少一個終態；列出的 `cancelled` 必須是終態。transitions：from／to 須為既有狀態、from ≠ to、kind 為 `forward`／`backward`／`pickup`／`clarify`／`return` 之一、requiresReason／requiresHandoff 為布林、backward／return 必須 requiresReason、role 須為 7 個 workflow 角色之一、無重複 (from, to)。roles：覆蓋恰好該 workflow 的 states（`validateRolesMap` 泛化為接受 states 參數，預設內建 14 狀態；roles 失敗沿用舊錯誤碼 `invalid_roles`，結構失敗為 `invalid_workflow`）。結構：每個非終態至少一條出路；從起點可達所有狀態（列出的 `cancelled` 視為可達）。
+States: non-empty; code is lowercase snake_case and unique; label is non-empty; exactly one start; at least one terminal; a listed `cancelled` must be terminal. Transitions: from/to must be existing states; from ≠ to; kind is one of `forward` / `backward` / `pickup` / `clarify` / `return`; requiresReason / requiresHandoff are booleans; backward / return must require a reason; role must be one of the 7 workflow roles; no duplicate (from, to). Roles: cover exactly this workflow's states (`validateRolesMap` generalized to take a states parameter, defaulting to the built-in 14 states; role failures keep the old error code `invalid_roles`, structure failures are `invalid_workflow`). Structure: every non-terminal state has at least one exit; all states are reachable from the start (a listed `cancelled` counts as reachable).
 
-### 隱式規則：create 與 cancel 不存入 workflow
+### Implicit rules: create and cancel are not stored in the workflow
 
-- **create**：NULL → 起點，PM 開立。開單 API 的稽核列 `to_status` 為該 workflow 的起點。
-- **cancel**：PM、任一非終態 → `cancelled`、需理由。適用於所有 workflow，永遠不列入 workflow 的 transitions。
-- **`cancelled` 是通用取消目標**：即使未列入該 workflow 的 states 也視為終態；列出的 `cancelled` 必須是終態。狀態機對它永遠回終態；轉換驗證允許 `to_status='cancelled'` 即使不在 states 裡。
+- **create**: NULL → start state, opened by the PM. The ticket creation API's audit row has `to_status` set to that workflow's start state.
+- **cancel**: PM, any non-terminal state → `cancelled`, reason required. Applies to all workflows, never listed in the workflow's transitions.
+- **`cancelled` is the universal cancel target**: even when not listed in the workflow's states it counts as terminal; a listed `cancelled` must be terminal. The state machine always answers terminal for it; transition validation allows `to_status='cancelled'` even when it is not in states.
 
-### 角色：transition 的 role 與 roles map 的關係
+### Roles: the relationship between a transition's role and the roles map
 
-- 一個狀態只有一個負責角色（第 14 章的模型不變）：transition 的 role 是「該流程設計時的角色」，roles map 是「該 workflow 指派的角色」。驗證時 roles map 覆蓋 transition 的 role（第 14 章的 override 機制，現在也套用於自訂流程）。
-- 因此**只改 roles map 不必改 transition 表**：把某狀態的角色換掉是合法的 roles-only 更新，transition 表不用跟著改。存檔時伺服器以 roles map 重推每個 transition 的 role（`normalizeDefinition`），讓儲存的列保持一致；但執行期永遠以 roles map 為準。
-- 角色／職責定義放在 Admin／User 上，並註明針對哪個 workflow（需求 3 的解讀）：用戶角色仍是全域的；per-workflow 的差異由各 workflow 自己的 state→role 對照決定——同一人在 workflow A 當 leader 負責某狀態、在 workflow B 當 engineer 負責另一狀態。實作：(a) workflow 編輯器按 workflow 定義 state→role＋responsibilities（標明所屬 workflow）；(b) Admin Users 頁新增衍生顯示：每位用戶在各 workflow 負責的狀態（以其全域角色對照各 workflow 的 role map），標明 workflow 名稱。備選方案（另建 `workflow_user_roles` 表、按 workflow 授權角色）已考慮未採用：它與現有「帳號持有全域多角色」模型衝突，且需求的核心是「同一人在不同 workflow 負責不同狀態」，roles map 已能表達。
+- One state has exactly one responsible role (the Ch. 14 model is unchanged): a transition's role is "the role at design time for that flow", and the roles map is "the roles this workflow assigns". At validation time the roles map overrides the transition's role (the Ch. 14 override mechanism, now also applied to custom flows).
+- So **changing only the roles map does not require changing the transition table**: swapping a state's role is a legal roles-only update, and the transition table does not need to follow. On save, the server re-derives each transition's role from the roles map (`normalizeDefinition`), keeping the stored rows consistent; but at execution time the roles map is always authoritative.
+- Role / responsibility definitions live on Admin / User, noting which workflow they target (reading requirement 3): user roles are still global; per-workflow differences are decided by each workflow's own state→role mapping — the same person is a leader for one state in workflow A and an engineer for another state in workflow B. Implementation: (a) the workflow editor defines state→role + responsibilities per workflow (marked with the owning workflow); (b) the Admin Users page adds a derived display: the states each user owns in each workflow (matching their global roles against each workflow's role map), marked with the workflow name. The alternative (a separate `workflow_user_roles` table, authorizing roles per workflow) was considered and not adopted: it conflicts with the existing "an account holds global roles" model, and the core of the requirement is "the same person owns different states in different workflows", which the roles map already expresses.
 
-### 轉換驗證、佇列、監控、擁有權
+### Transition validation, queue, monitoring, ownership
 
-- **轉換（`transitionTicket`）**：以工單的 definition 驗證；自訂流程工單的 roleOverrides 是該 workflow 自己的 roles map，內建流程工單維持專案 active workflow 的 role map。退回（`kind=backward`／`return`）需理由，由狀態機的 requiresReason 強制。
-- **佇列（`listClaimable`）**：內建流程維持試行範圍（僅 requirement／pending_dev，角色走專案 role map）；自訂流程改為「目前狀態有 kind=`pickup` 的轉換，且呼叫者持有該狀態的有效角色（roles map 優先）」才可認領。等待接取的狀態就是有 pickup 出路的狀態——定義本身說明了哪裡是佇列。
-- **監控 stalled（`listStalled`／`isStalledState`）**：內建流程維持第 13 章的 `STALLED_STATES` 清單（`pending_deploy` 列入是既定例外：部署是最後一步，不試圖用 transition kind 推導）；自訂流程用通用規則：**非終態、且不是等接取佇列狀態（無出路 pickup 轉換），超過 30 分鐘無轉換**。理由：等接取的票不是卡住，是在等有人領；其餘進行中的狀態超過 30 分鐘沒動靜就是卡住，與第 13 章的 30 分鐘門檻一致。`notify_role` 與 `next_actions` 按工單自己的 workflow 解析（自訂：roles map 或第一條出路轉換的角色；內建：專案 role map＋`responsibleRole` fallback）。實作上候選集不能再用狀態預篩，改為讀取範圍內全部工單再以 JS 依 definition 篩選（每 workflow／專案的 definition 與 role map 各快取一次）。
-- **擁有權（自訂流程，`nextOwnershipForCustom`）**：pickup／cancel 由執行者認領，其餘移交清空 assignee、等下一角色接取；`developer_id` 不動，自訂流程無 self-check（self-check 是開發流程的 Review／測試／部署規則）。
+- **Transitions (`transitionTicket`)**: validated against the ticket's definition; a custom-flow ticket's roleOverrides is its own workflow's roles map, while a built-in flow ticket keeps the project active workflow's role map. Returns (`kind=backward` / `return`) require a reason, enforced by the state machine's requiresReason.
+- **Queue (`listClaimable`)**: the built-in flow keeps the trial scope (only requirement / pending_dev, roles from the project role map); custom flows switch to "the current state has a `pickup`-kind transition, and the caller holds the state's effective role (roles map first)" to be claimable. A state waiting for pickup is exactly a state with a pickup exit — the definition itself says where the queue is.
+- **Monitoring stalled (`listStalled` / `isStalledState`)**: the built-in flow keeps the Ch. 13 `STALLED_STATES` list (`pending_deploy` is included as an established exception: deployment is the last step, and it is not worth deriving it from transition kinds); custom flows use the general rule: **non-terminal, and not a waiting-for-pickup queue state (no exit pickup transition), with no transition for over 30 minutes**. Reason: a ticket waiting for pickup is not stuck, it is waiting for someone to take it; any other in-progress state with no movement for over 30 minutes is stuck, consistent with the 30-minute threshold in Ch. 13. `notify_role` and `next_actions` are resolved from the ticket's own workflow (custom: roles map or the first exit transition's role; built-in: project role map + `responsibleRole` fallback). In practice the candidate set can no longer be pre-filtered by state; it reads all tickets in scope and filters them in JS by definition (each workflow's / project's definition and role map cached once).
+- **Ownership (custom flows, `nextOwnershipForCustom`)**: pickup / cancel are claimed by the actor; everything else hands off, clearing the assignee and waiting for the next role to pick it up. `developer_id` is untouched; custom flows have no self-check (self-check is a Review / testing / deployment rule of the development flow).
 
-### 開單選 Workflow
+### Opening a ticket with a workflow
 
-- `POST /api/tickets` 接受 `workflow_id`（省略＝內建流程）。workflow 不存在回 404；專案 workflow 只能用於自己專案的工單，否則 400 `workflow_project_mismatch`；全域 workflow（`project_id` NULL）可用於任何專案。新工單狀態為該 workflow 的起點。
-- `GET /api/meta/transitions?workflow_id=` 回傳該 workflow 的 legal transitions（無參數＝內建表，不變）。
-- 前端 New ticket 表單加 workflow 下拉：預設「Default development flow（14 states）」→ `workflow_id` null，其餘為可用 workflows（該專案的或全域的，不含 Default 列本身——null 選項已代表它；他專案的 workflow 不出現）。
+- `POST /api/tickets` accepts `workflow_id` (omitted = built-in flow). An unknown workflow returns 404; a project workflow may only be used for tickets in its own project, otherwise 400 `workflow_project_mismatch`; a global workflow (`project_id` NULL) may be used for any project. A new ticket's state is that workflow's start state.
+- `GET /api/meta/transitions?workflow_id=` returns that workflow's legal transitions (no parameter = the built-in table, unchanged).
+- The frontend New ticket form adds a workflow dropdown: default "Default development flow (14 states)" → `workflow_id` null, the rest are the usable workflows (that project's or global ones, excluding the Default row itself — the null option already represents it; other projects' workflows do not appear).
 
-### Workflow 編輯器（Admin／PM）
+### Workflow editor (Admin / PM)
 
-- `src/WorkflowsPanel.tsx` 大改：States 編輯器（label、code、順序上下移、起點 radio、終態 checkbox、新增／刪除；code 改名時自動重指所有引用它的 transition；刪除狀態時一併刪掉相關 transition 與 roles 條目）、Transitions 編輯器（from／to 下拉、kind 下拉 forward／backward／pickup／clarify／return、requiresReason／requiresHandoff checkbox、role 為 from-state 衍生顯示唯讀）、Roles 表改由該 workflow 自己的 states 驅動（不再是寫死的 14 狀態）。
-- 新建預設從空白開始（0 個狀態），不再複製 Default workflow 的完整定義；範本一鍵套用與快速建立見下節。Default workflow 唯讀檢視（View 開啟同一表單、全部 disabled、不送出）。
-- 前端先做與伺服器相同的輕量驗證（恰一個起點、至少一終態、code 格式與唯一、backward／return 需理由、每非終態有出路等），伺服器再驗一次，後端訊息為準。Cancel 不列在編輯器裡（隱式規則，見上）。
-- 守則：仍有工單處於某狀態時，該狀態不可刪除（400 `state_in_use`）；有工單的 workflow 不可刪除（400 `workflow_in_use`）。第 14 章的刪除守則（預設唯讀、active 需替代）維持不變。
+- `src/WorkflowsPanel.tsx` heavily revised: states editor (label, code, move up/down, start radio, terminal checkbox, add / delete; renaming a code automatically re-points every transition that references it; deleting a state also deletes its transitions and roles entries), transitions editor (from / to dropdowns, kind dropdown forward / backward / pickup / clarify / return, requiresReason / requiresHandoff checkboxes, role shown as derived read-only from the from-state), roles table driven by that workflow's own states (no longer the hard-coded 14 states).
+- New workflows start blank (0 states) instead of copying the Default workflow's full definition; one-click templates and quick create are in the next section. The Default workflow is read-only view (View opens the same form, everything disabled, no submit).
+- The frontend first does the same lightweight validation as the server (exactly one start, at least one terminal, code format and uniqueness, backward / return require a reason, every non-terminal state has an exit, and so on), and the server validates again; the backend message wins. Cancel is not listed in the editor (implicit rule, see above).
+- Rules: a state with tickets still in it cannot be deleted (400 `state_in_use`); a workflow with tickets cannot be deleted (400 `workflow_in_use`). The Ch. 14 deletion rules (default is read-only, active needs an alternative) stay unchanged.
 
-### 簡化建立流程：空白開始、範本、快速建立
+### Simplifying creation: blank start, templates, quick create
 
-> 工單 ecf671fb：新建時編輯器直接複製預設的完整定義（14 個狀態＋全部轉換＋角色），做短流程得先刪一堆不要的東西，Dylan 回報建立流程太複雜。
+> Ticket ecf671fb: the editor copied the default's full definition (14 states) when creating a workflow, so building a short flow meant deleting a pile of unwanted states first. Dylan reported that creating a flow was too complicated.
 
-- **空白開始**：新建 workflow 的表單初始為 0 個狀態、0 條轉換、空 roles map（`WorkflowsPanel.openCreate` 不再複製 Default workflow）。Default workflow 本身不動，既有 workflow 不受影響。
-- **範本一鍵套用**：新建表單的「Start from」區列出三條內建範本，點一下把該範本的 states／transitions／roles 填入表單，微調後存檔。範本的單一來源仍是 `server/workflowExamples.js`，前端經 `GET /api/workflow-examples` 讀取（唯讀參考資料，不分專案，任何登入用戶可讀），不另寫一份；表單已有內容時套用前先確認覆蓋。
-- **快速建立**：同一區的 Quick create：輸入狀態名清單、每狀態選負責人，Generate 自動串成線性流程（第一個狀態為起點、最後一個為終態；第一條轉換 kind `pickup`、其餘 `forward`；每狀態負責人寫進 roles map；responsibilities 自動填預設句，可在 Roles 表修改）。退回、理由等進階設定收進「Advanced」區（加一條 backward 轉換，from／to 自選，理由自動必填），預設不用填。產生邏輯是共用純函式 `src/workflowQuickCreate.ts` 的 `buildLinearFlow`（無 React、無 DOM），編輯器與 server 測試共用同一份；中文等無法 slug 的 label 以 `state_N` 為 code、碰撞加數字後綴。
-- **驗證規則沒有改**：0 狀態的草稿只存在瀏覽器表單裡，存檔時仍須符合既有規則（恰一個起點、至少一個終態、每非終態至少一條出路等）；前端 `validateForm` 在 0 狀態時擋下送出（`Add at least one state.`），後端 `createWorkflow` 對明確傳入的空 states／transitions 亦回 400 `invalid_workflow`（有測試鎖住）。`createWorkflow` 省略 states／transitions 時預設內建 definition 的舊行為不變（roles-only 建立仍走該路徑）。
+- **Blank start**: a new workflow's form starts with 0 states, 0 transitions, and an empty roles map (`WorkflowsPanel.openCreate` no longer copies the Default workflow). The Default workflow itself is untouched, and existing workflows are unaffected.
+- **One-click templates**: the create form's "Start from" section lists the three built-in templates; one click fills the form with that template's states / transitions / roles, then tweak and save. The single source of the templates is still `server/workflowExamples.js`, read by the frontend through `GET /api/workflow-examples` (read-only reference data, not per project, readable by any signed-in user) — no second copy. When the form already has content, applying a template asks for confirmation before overwriting.
+- **Quick create**: the same section's Quick create: enter a list of state names, pick an owner per state, and Generate chains them into a linear flow automatically (the first state is the start, the last is terminal; the first transition is kind `pickup`, the rest `forward`; each state's owner goes into the roles map; responsibilities get a default sentence automatically, editable in the Roles table). Return, reason, and other advanced settings live in the "Advanced" section (add one backward transition, from/to freely chosen, reason automatically required) and are not needed by default. The generation logic is the shared pure function `buildLinearFlow` in `src/workflowQuickCreate.ts` (no React, no DOM), shared by the editor and the server tests; labels that cannot be slugified, such as Chinese, fall back to `state_N` codes, with a numeric suffix on collision.
+- **Validation rules unchanged**: a 0-state draft only lives in the browser form; on save it still has to satisfy the existing rules (exactly one start, at least one terminal, every non-terminal state has an exit, and so on). The frontend `validateForm` blocks submitting with 0 states (`Add at least one state.`), and the backend `createWorkflow` also returns 400 `invalid_workflow` for explicitly passed empty states / transitions (locked by a test). The old behavior when `createWorkflow` omits states / transitions — defaulting to the built-in definition — is unchanged (roles-only creation still takes that path).
 
-### 三條範例流程
+### The three example flows
 
-`server/workflowExamples.js`（fixture，僅供測試與編輯器參考）：
+`server/workflowExamples.js` (fixture, for tests and editor reference only):
 
-| 流程 | 狀態 | 轉換 | 角色 |
+| Flow | States | Transitions | Roles |
 | --- | --- | --- | --- |
-| A：含使用者確認 | 使用者需求 → 功能規劃 → 使用者確認 → 產生規格書 → 交付 | 需求→規劃 pickup（leader）；規劃→確認 forward（leader）；確認→規格 forward（pm）；確認→規劃 **backward**（pm，需理由）；規格→交付 forward（engineer） | 需求 leader、規劃 leader、確認 pm、規格 engineer |
-| B：不含確認 | 使用者需求 → 功能規劃 → 產生規格書 → 交付 | 需求→規劃 pickup（leader）；規劃→規格 forward（leader）；規格→交付 forward（engineer） | 同 A 去掉確認 |
-| C：報案 | 系統事件 → 建立報案 → 結束 | 事件→報案 pickup（pm）；報案→結束 forward（engineer） | 事件 pm、報案 engineer（報案由 PM 接取建立、由 engineer 處理結案） |
+| A: with user confirmation | User requirement → Feature planning → User confirmation → Generate spec → Delivered | requirement→planning pickup (leader); planning→confirmation forward (leader); confirmation→spec forward (pm); confirmation→planning **backward** (pm, reason required); spec→delivered forward (engineer) | requirement: leader, planning: leader, confirmation: pm, spec: engineer |
+| B: without confirmation | User requirement → Feature planning → Generate spec → Delivered | requirement→planning pickup (leader); planning→spec forward (leader); spec→delivered forward (engineer) | Same as A without confirmation |
+| C: incident | System event → Create incident → Closed | event→incident pickup (pm); incident→closed forward (engineer) | event: pm, incident: engineer (the incident is opened by PM pickup and closed by the engineer) |
 
-驗收：三條流程都能在編輯器裡建出來、開單時選得到、按順序走完、使用者確認可退回功能規劃；預設開發流程行為不變（既有測試全過）。
+Acceptance: all three flows can be built in the editor, picked when opening a ticket, walked through in order, and user confirmation can return to feature planning; the default development flow behaves unchanged (existing tests all pass).
 
-### 端點（新增／變更）
+### Endpoints (new / changed)
 
-| 方法 | 端點 | 說明 |
+| Method | Endpoint | Notes |
 | --- | --- | --- |
-| `POST` | `/api/tickets` | 加 `workflow_id`（見上） |
-| `GET` | `/api/meta/transitions?workflow_id=` | 該 workflow 的 legal transitions；無參數＝內建表 |
-| `GET` | `/api/workflow-examples` | 三條內建範本（編輯器一鍵套用）；唯讀，不分專案 |
-| `POST` | `/api/workflows` | 加 `states`／`transitions`（省略時預設內建 definition；驗證失敗 400 `invalid_workflow`／`invalid_roles`） |
-| `PATCH` | `/api/workflows/:id` | 加 `states`／`transitions`（同上；另有 `state_in_use` 守則） |
-| `DELETE` | `/api/workflows/:id` | 加 `workflow_in_use` 守則（有工單時拒絕） |
+| `POST` | `/api/tickets` | Adds `workflow_id` (see above) |
+| `GET` | `/api/meta/transitions?workflow_id=` | That workflow's legal transitions; no parameter = built-in table |
+| `GET` | `/api/workflow-examples` | The three built-in templates (editor one-click apply); read-only, not per project |
+| `POST` | `/api/workflows` | Adds `states` / `transitions` (omitted → defaults to the built-in definition; validation failure 400 `invalid_workflow` / `invalid_roles`) |
+| `PATCH` | `/api/workflows/:id` | Adds `states` / `transitions` (same; plus the `state_in_use` rule) |
+| `DELETE` | `/api/workflows/:id` | Adds the `workflow_in_use` rule (refused when tickets exist) |
 
-### 前端（workflow-aware 顯示）
+### Frontend (workflow-aware display)
 
-- `src/api.ts`：Ticket 加 `workflow_id`；Workflow 加 `states`／`transitions`；新 type `WorkflowState`／`WorkflowTransition`；`metaTransitions(workflowId?)`。
-- `src/helpers.ts`：`stateLabelFor`／`isTerminalFor`／`statusBucketFor`（自訂狀態：終態→done、`in_*`／decomposing／deploying→active、其餘 pending）；`statusColor` 對未知狀態碼以 hash 取色；`transitionTargets`／`targetsForUser` 接受 terminal 判斷函式（Cancel 只在非終態出現）；`countTicketsByProject`／`ganttRange` 接受 workflow 對照。
-- 狀態標籤、Dashboard bucket、Gantt 終態判斷、工單詳情、佇列 next-step 皆改走 workflow-aware helper；自訂狀態只出現在 All／Claimable 頁籤，不新增動態頁籤。Admin Users 頁新增「Workflow responsibilities」衍生顯示。
+- `src/api.ts`: Ticket gains `workflow_id`; Workflow gains `states` / `transitions`; new types `WorkflowState` / `WorkflowTransition`; `metaTransitions(workflowId?)`.
+- `src/helpers.ts`: `stateLabelFor` / `isTerminalFor` / `statusBucketFor` (custom states: terminal→done, `in_*` / decomposing / deploying→active, the rest pending); `statusColor` picks a color by hash for unknown state codes; `transitionTargets` / `targetsForUser` take a terminal-check function (Cancel only appears on non-terminal states); `countTicketsByProject` / `ganttRange` take a workflow mapping.
+- State labels, Dashboard buckets, Gantt terminal checks, ticket detail, and queue next-steps all use the workflow-aware helpers; custom states only appear on the All / Claimable tabs, no dynamic tabs are added. The Admin Users page adds the "Workflow responsibilities" derived display.
 
-### 測試
+### Tests
 
-- `stateMachine.test.js`：`validateTransitionFor`／`allowedTransitionsFor`／`legalTransitionsFor` 對自訂 definition（建得出、走得完、退得回、cancel、起點、未知狀態、終態、錯角色、backward 需理由）；`legalTransitionsFor(BUILTIN_DEFINITION)` 等於 `legalTransitions()`。
-- `workflows.test.js`：`validateWorkflowDefinition` 各規則、三條範例流程 fixture、create／update 含 states／transitions、roles-only 更新重推 transition roles、`state_in_use`／`workflow_in_use` 守則、`definitionForTicket`；`listWorkflowExamples` 回傳三條範本且與 fixture 一致、每條皆通過驗證；明確傳入空 states／transitions 建立時回 400（空白草稿不可存檔）。
-- `workflowQuickCreate.test.js`：`buildLinearFlow`——三狀態線性串接（起點／終態、第一條 pickup）、兩狀態、少於兩個拒絕、空白 label 略過、中文 label 以 `state_N` 為 code、code 碰撞加後綴、非終態缺角色拒絕、終態角色忽略、transition 角色與 from-state 一致、輸入不被改動；產生的定義皆通過伺服器驗證。
-- `tickets.test.js`：開單帶 workflow（起點、稽核列、404／400）、三條流程走完＋退回＋cancel、佇列自訂 pickup 規則；預設流程既有測試全過。
-- `monitor.test.js`：自訂流程通用 stalled 規則（工作狀態卡住、佇列／終態不卡住、30 分鐘門檻）、內建清單不變。
-- `migrations.test.js`：001／002 無狀態 CHECK、011 仍重加 14 狀態 CHECK、012 移除三約束且不重加、013 欄位與 seed 內容等於內建 definition；003 與 014 的 `users.roles` CHECK 皆為完整八種角色、014 的 DROP＋ADD 在 guard 內（已有違規列時跳過、不卡住啟動）。
+- `stateMachine.test.js`: `validateTransitionFor` / `allowedTransitionsFor` / `legalTransitionsFor` against custom definitions (can be built, walked through, returned, cancelled, start state, unknown state, terminal, wrong role, backward requires a reason); `legalTransitionsFor(BUILTIN_DEFINITION)` equals `legalTransitions()`.
+- `workflows.test.js`: `validateWorkflowDefinition` rules, the three example flow fixtures, create / update with states / transitions, roles-only updates re-deriving transition roles, the `state_in_use` / `workflow_in_use` rules, `definitionForTicket`; `listWorkflowExamples` returns the three templates matching the fixtures, each passing validation; explicitly passed empty states / transitions return 400 on create (a blank draft cannot be saved).
+- `workflowQuickCreate.test.js`: `buildLinearFlow` — three states chaining linearly (start / terminal, first transition pickup), two states, fewer than two rejected, blank labels skipped, Chinese labels fall back to `state_N` codes, colliding codes get a suffix, a non-terminal state without a role is rejected, a terminal state's role is ignored, transition roles match the from-state, input is not mutated; generated definitions all pass server validation.
+- `tickets.test.js`: opening a ticket with a workflow (start state, audit row, 404 / 400), walking all three flows through plus return plus cancel, queue custom pickup rules; existing default-flow tests all pass.
+- `monitor.test.js`: custom-flow general stall rules (working states stall, queue / terminal states do not, 30-minute threshold), built-in list unchanged.
+- `migrations.test.js`: 001/002 have no state CHECK, 011 still re-adds the 14-state CHECK, 012 removes the three constraints and does not re-add them, 013 fields and seed content equal the built-in definition; the 003 and 014 `users.roles` CHECKs are both the full eight-role list, and 014's DROP+ADD sits inside a guard (skipped when violating rows exist, so startup is not blocked).
 
-### 備註
+### Notes
 
-- 未驗證：前端編輯器未做瀏覽器實點驗證（無瀏覽器）；migration 012／013 未在 live PostgreSQL 上實際執行（本機無資料庫），合併部署前應在 VM 臨時 scratch 資料庫驗證 001→013 依序套用與全新建表，絕對不要碰 live 資料庫。
-- migration 014 已在 VM 臨時 scratch 資料庫驗證（工單 45e47047）：全新庫 001→014 依序套用、8 種角色帳號皆可建、違規角色仍被擋、重跑冪等；舊庫升級路徑（舊 003 建庫 → ui_ux 被擋重現 → 套用 014 → ui_ux 可建 → 含 ui_ux 列重跑冪等）皆通過；scratch 庫已刪除，未碰 live 資料庫。migration 014 尚未在 live DB 執行，部署後應在 live DB 驗證可建 ui_ux 帳號，UI&UX 值班設定才能繼續。
-- 第 14 章的「自訂 Workflow」現指「專案的角色對照」；本章的「狀態機編輯器」指「workflow 自身的 states／transitions」。兩者共用 `workflows` 表：roles map 是第 14 章的層，states／transitions 是本章加的層。
+- Not verified: the frontend editor has no browser click-through verification (no browser); migrations 012/013 have not actually run on a live PostgreSQL instance (no database on this machine). Before merging and deploying, verify on a VM scratch database that 001→013 apply in order and create all tables fresh — never touch the live database.
+- Migration 014 was verified on a VM scratch database (ticket 45e47047): a fresh database applies 001→014 in order, all 8 role types of accounts can be created, violating roles are still blocked, and re-runs are idempotent; the old-database upgrade path (database built with old 003 → ui_ux blocked reproduced → apply 014 → ui_ux creatable → idempotent re-run with a ui_ux row present) all passed; the scratch database was deleted, the live database untouched. Migration 014 has not yet run on the live DB; after deployment, verify on the live DB that a ui_ux account can be created, so the UI&UX on-call setup can continue.
+- Ch. 14's "Custom Workflow" now means "a project's role mapping"; this chapter's "state machine editor" means "the workflow's own states / transitions". Both share the `workflows` table: the roles map is the Ch. 14 layer, states / transitions are the layer this chapter adds.
 
 ---
 
-## 附錄 A. 狀態代碼對照
+## Appendix A. State Code Reference
 
-> 本表是內建 14 狀態開發流程的狀態。自訂 workflow 有自己的狀態（見第 15 章），不列在此表。
+> This table is the built-in 14-state development flow's states. Custom workflows have their own states (see Ch. 15), not listed here.
 
-| 中文狀態 | 代碼 | 類型 | 負責角色 |
+| State | Code | Type | Responsible role |
 | --- | --- | --- | --- |
-| 需求 | `requirement` | 待接取 | Leader |
-| 拆解中 | `decomposing` | 進行中 | Leader |
-| 待澄清 | `needs_clarification` | 等待補充 | PM |
-| 待開發 | `pending_dev` | 待接取 | 工程師 |
-| 開發中 | `in_dev` | 進行中 | 工程師 |
-| 待 Review | `pending_review` | 待接取 | Reviewer |
-| Review 中 | `in_review` | 進行中 | Reviewer |
-| 待測試 | `pending_test` | 待接取 | Tester |
-| 測試中 | `in_test` | 進行中 | Tester |
-| 待驗收澄清 | `needs_acceptance_clarification` | 等待補充 | PM |
-| 待部署 | `pending_deploy` | 待接取 | Deployer |
-| 部署中 | `deploying` | 進行中 | Deployer |
-| 已交付 | `delivered` | 終點 | - |
-| 已取消 | `cancelled` | 終點 | - |
+| Requirement | `requirement` | Waiting for pickup | Leader |
+| Decomposing | `decomposing` | In progress | Leader |
+| Needs clarification | `needs_clarification` | Waiting for input | PM |
+| Pending dev | `pending_dev` | Waiting for pickup | Engineer |
+| In dev | `in_dev` | In progress | Engineer |
+| Pending review | `pending_review` | Waiting for pickup | Reviewer |
+| In review | `in_review` | In progress | Reviewer |
+| Pending test | `pending_test` | Waiting for pickup | Tester |
+| In test | `in_test` | In progress | Tester |
+| Needs acceptance clarification | `needs_acceptance_clarification` | Waiting for input | PM |
+| Pending deploy | `pending_deploy` | Waiting for pickup | Deployer |
+| Deploying | `deploying` | In progress | Deployer |
+| Delivered | `delivered` | Terminal | - |
+| Cancelled | `cancelled` | Terminal | - |
 
-## 附錄 B. 工單生命週期範例
+## Appendix B. Ticket Lifecycle Example
 
-以下範例示範一張 Project 需求工單的完整歷史，包含一次澄清來回與一次 Review 退回。每列就是一筆轉換紀錄，這正是第 7 章要求能隨時重播的內容。
+The example below walks one Project requirement ticket through its full history, including one clarification round-trip and one review return. Each row is one transition record — exactly the content Ch. 7 requires to be replayable at any time.
 
-| # | 執行者 | 從 → 到 | 理由 / 產出 |
+| # | Actor | From → To | Reason / output |
 | --- | --- | --- | --- |
-| 1 | PM | （開立）→ 需求 | 建立需求：目標、範圍、驗收條件 |
-| 2 | Leader | 需求 → 拆解中 | 開始拆解 |
-| 3 | Leader | 拆解中 → 待澄清 | 疑問：驗收條件中的效能指標未定義 |
-| 4 | PM | 待澄清 → 拆解中 | 補充效能指標定義 |
-| 5 | Leader | 拆解中 → 待開發 | 拆解完成，附開發工作清單 |
-| 6 | 工程師 | 待開發 → 開發中 | 接取開發 |
-| 7 | 工程師 | 開發中 → 待 Review | 附變更說明與自測結果 |
-| 8 | Reviewer | 待 Review → Review 中 | 接取審查 |
-| 9 | Reviewer | Review 中 → 開發中 | 退回：附待改事項 |
-| 10 | 工程師 | 開發中 → 待 Review | 修正後再次送審 |
-| 11 | Reviewer | Review 中 → 待測試 | 審查通過（經待 Review → Review 中接取） |
-| 12 | Tester | 測試中 → 待部署 | 測試通過，附測試結果（經待測試 → 測試中接取） |
-| 13 | Deployer | 部署中 → 已交付 | 部署成功，附版本與驗證結果（經待部署 → 部署中接取） |
+| 1 | PM | (create) → Requirement | Create requirement: goal, scope, acceptance criteria |
+| 2 | Leader | Requirement → Decomposing | Start decomposing |
+| 3 | Leader | Decomposing → Needs clarification | Question: the performance metric in the acceptance criteria is undefined |
+| 4 | PM | Needs clarification → Decomposing | Add the performance metric definition |
+| 5 | Leader | Decomposing → Pending dev | Decomposition done, with the development work list |
+| 6 | Engineer | Pending dev → In dev | Pick up development |
+| 7 | Engineer | In dev → Pending review | With change notes and self-test results |
+| 8 | Reviewer | Pending review → In review | Pick up review |
+| 9 | Reviewer | In review → In dev | Return: with items to change |
+| 10 | Engineer | In dev → Pending review | Resubmit after fixes |
+| 11 | Reviewer | In review → Pending test | Review passed (via pending review → in review pickup) |
+| 12 | Tester | In test → Pending deploy | Testing passed, with test results (via pending test → in test pickup) |
+| 13 | Deployer | Deploying → Delivered | Deployment succeeded, with version and verification results (via pending deploy → deploying pickup) |
 
-範例為流程示意，不對應任何真實工單。省略的接取步驟已在理由欄註明，實際紀錄中每一筆轉換各自成列。
+The example illustrates the flow and does not correspond to any real ticket. Omitted pickup steps are noted in the reason column; in the actual records each transition is its own row.
 
-## 16. URL Hash 路由（重新整理與 Deep Link）
+## 16. URL Hash Routing (Refresh and Deep Links)
 
-> 本章實作於工單 9d562e41（Admin 子頁切換改到側邊欄）的退回修正：Reviewer 指出「重新整理後停在同一子頁」驗收沒做到——App 完全沒有路由機制，`mainView` 是純 React state，重新整理一律回到 Dashboard。Dylan 拍板在該單範圍內直接加路由機制。
+> This chapter implements the return fix for ticket 9d562e41 (Admin sub-page switching moves to the sidebar): the Reviewer pointed out that the "refresh stays on the same sub-page" acceptance item was not met — the App had no routing mechanism at all, `mainView` was plain React state, and a refresh always returned to the Dashboard. Dylan decided to add the routing mechanism within that ticket's scope.
 
-### 為什麼選 URL hash，不用 localStorage
+### Why URL hash, not localStorage
 
-localStorage 只能做到同一瀏覽器重新整理，做不到「直接開連結進到對應子頁」；hash 寫進網址才是真正的 deep link。hash 不打到伺服器（SPA 由 `/` 提供），不需要後端改動、不需要 nginx 設定。
+localStorage can only survive a refresh in the same browser; it cannot do "open a link straight into the matching sub-page". A hash written into the URL is a real deep link. The hash never reaches the server (the SPA is served from `/`), so no backend change and no nginx configuration are needed.
 
-### Hash 格式
+### Hash format
 
-| 檢視 | Hash |
+| View | Hash |
 | --- | --- |
 | Dashboard | `#/dashboard` |
-| Tickets 列表 | `#/tickets/list` |
+| Tickets list | `#/tickets/list` |
 | Tickets Gantt | `#/tickets/gantt` |
 | New ticket | `#/new` |
 | Projects | `#/projects` |
-| Admin 總覽／使用者／Workflows／API keys | `#/admin/overview`／`users`／`workflows`／`keys` |
-| 工單 detail | `#/ticket/<id>` |
+| Admin overview / users / Workflows / API keys | `#/admin/overview` / `users` / `workflows` / `keys` |
+| Ticket detail | `#/ticket/<id>` |
 
-空 hash、未知路徑一律回到 Dashboard。對照邏輯是共用純函式 `src/viewHash.ts`（`viewToHash`／`hashToView`／`gateView`），無 React、無 DOM；`MainView` 型別也搬到該檔，與對照表放同一處。該檔沒有 runtime import（node type-stripping 解析不了無副檔名的 import，實測確認）：Admin tab 清單在檔內重複一份常數，測試以 `ADMIN_TABS` 交叉檢查，少寫一個 tab 測試就失敗。
+An empty hash or an unknown path always returns to the Dashboard. The mapping logic is the shared pure function `src/viewHash.ts` (`viewToHash` / `hashToView` / `gateView`), with no React and no DOM; the `MainView` type also moved into that file, next to the mapping table. That file has no runtime import (node type-stripping cannot resolve an extensionless import, confirmed by testing): the Admin tab list is duplicated as a constant inside the file, and the tests cross-check it against `ADMIN_TABS` — miss a tab and the test fails.
 
-### 同步機制（App.tsx）
+### Sync mechanism (App.tsx)
 
-- 首次檢視從 hash 讀（`useState` lazy init）；登入／建帳後也從 hash 恢復檢視（登出時已回 Dashboard，不留舊 deep link）。
-- 檢視變化 → `pushState` 寫 hash，上一頁／下一頁跟著動；首次寫入用 `replaceState`，初次載入不佔一筆歷史紀錄。`pushState`／`replaceState` 不觸發 `hashchange`，不會與監聽器互迴圈。
-- `hashchange` 監聽（上一頁／下一頁、手動改 hash）：hash 是檢視的來源，解析後切換 `mainView`（detail 同時帶 `selectedId`）。
-- 重新整理時 queue tab 與 project filter 不進 hash：回到預設（全部佇列、全部專案），這是既有行為，本章不改。
+- The first view is read from the hash (`useState` lazy init); after login / account creation the view is also restored from the hash (on logout it is already back at the Dashboard, leaving no stale deep link).
+- When the view changes, `pushState` writes the hash, so Back / Forward move with it; the first write uses `replaceState`, so the initial load does not take a history entry. `pushState` / `replaceState` do not fire `hashchange`, so they cannot loop with the listener.
+- A `hashchange` listener (Back / Forward, manually edited hash): the hash is the source of the view; after parsing, switch `mainView` (detail also carries `selectedId`).
+- On refresh, the queue tab and project filter do not go into the hash: they return to their defaults (all queues, all projects). That is the existing behavior, unchanged by this chapter.
 
-### Hash 不是權限
+### The hash is not a permission
 
-非 admin 開 Admin hash、非 PM／Admin 開 `#/projects`，一律 gate 回 Dashboard（`gateView`）；detail hash 沒有 ticket id 時退回 Tickets 列表。Gate 在登入態確定後執行，URL 用 `replaceState` 原地取代——不用 push，否則上一頁會回到被擋的 hash、再被擋一次。畫面渲染本來就有同一道 gate（非 admin 的 Admin 檢視會 fall through 到 Tickets 列表），gate 只是讓網址也誠實。
+A non-admin opening an Admin hash, or a non-PM / non-Admin opening `#/projects`, is always gated back to the Dashboard (`gateView`); a detail hash without a ticket id falls back to the Tickets list. Gating runs once the login state is known, and the URL is replaced in place with `replaceState` — not a push, or Back would return to the blocked hash and get blocked again. Rendering already has the same gate (a non-admin Admin view falls through to the Tickets list); the gate just makes the URL honest too.
 
-### Detail 的處理
+### Handling detail
 
-Detail hash 同時帶 ticket id（`#/ticket/<id>`），重新整理後重新載入該工單；沒有 id 的 detail 不是一個檢視，退回列表。重新整理後「回上頁」的目的地（`ticketsReturnView`）是 React state、不進 hash，預設回到列表；從 Gantt 開的工單、重新整理後按回上頁會回到列表而非 Gantt，這是已知取捨。
+A detail hash also carries the ticket id (`#/ticket/<id>`); after a refresh the ticket is reloaded. A detail without an id is not a view, so it falls back to the list. The "back" destination after a refresh (`ticketsReturnView`) is React state and does not go into the hash, so it defaults to the list; a ticket opened from Gantt, refreshed, then Back goes to the list rather than Gantt — a known trade-off.
 
-### 測試
+### Tests
 
-`server/viewHash.test.js`（8 項）：每個檢視的 hash 來回對照、無 id 的 detail 退回列表、空 hash 與未知路徑回 null、每個 Admin tab 都有 hash 對照（與 `ADMIN_TABS` 交叉檢查）、`gateView` 三種擋下情況。路由的實際重新整理／上一頁／下一頁行為沒有瀏覽器測試基礎設施，留待 Tester／Reviewer 在真機上驗。
+`server/viewHash.test.js` (8 items): round-trip hash mapping for every view, detail without an id falls back to the list, empty hash and unknown paths return null, every Admin tab has a hash mapping (cross-checked against `ADMIN_TABS`), `gateView` blocks in three cases. The actual refresh / Back / Forward behavior has no browser test infrastructure, so it is left for the Tester / Reviewer to verify on a real browser.
 
-## 17. Document（文件收錄）
+## 17. Documents (Filing Cabinet)
 
-> 本章實作於工單 abe5fa10（新增 Document 功能）。
+> This chapter implements ticket abe5fa10 (add the Documents feature).
 
-### 盤點：平台目前產什麼文件
+### Inventory: what documents does the platform produce today
 
-實作前先盤點現有會產文件的功能，結果是：**平台目前不產生任何檔案**。
+Before implementing, inventory the existing features that produce documents. The result: **the platform currently produces no files at all**.
 
-- 全程式碼搜尋 download／export／Blob／`createObjectURL`，沒有任何下載或匯出功能。
-- 範本流程裡的「產生規格書」只是一個 workflow 狀態名稱（`spec_generation`，範本流程 A／B）：那一步是人的工作（「Write the spec, then deliver it」），沒有任何程式碼產出規格書檔案。
-- README 與本設計文件是 repo 檔案，不是平台產生的文件。
-- 最接近「平台產出文件」的東西是工單的交接／轉換紀錄（資料庫裡的文字），不是檔案。
+- A full code search for download / export / Blob / `createObjectURL` finds no download or export feature anywhere.
+- "Generate spec" in the template flows is only a workflow state name (`spec_generation`, template flows A / B): that step is a person's job ("Write the spec, then deliver it"), and no code produces a spec file.
+- The README and this design document are repo files, not documents the platform produces.
+- The closest thing to a "platform-produced document" is a ticket's handoff / transition records (text in the database), not files.
 
-### 第一版收錄範圍（取捨）
+### Filing scope for v1 (trade-offs)
 
-因為沒有自動產生的文件可收，第一版 Document 是一個**歸檔櫃**：文件由人歸檔進來（表單填標題、選類別、貼內容，或上傳 .md／.txt 檔由瀏覽器讀進內容欄），統一列在 Document 頁、可瀏覽、可下載。沒有發明任何文件來源，也沒有把不存在的生成功能寫進來。
+Because there are no automatically produced documents to file, Document v1 is a **filing cabinet**: documents are filed in by hand (a form takes a title, picks a category, pastes content, or uploads a .md / .txt file whose text is read into the content field), listed together on the Documents page, browsable and downloadable. No document source was invented, and no non-existent generation feature was written in.
 
-- 收錄：手動歸檔的文件（`source='manual'`）。`source` 欄位預留給未來：若「產生規格書」那一步真的產出檔案，由該功能以自己的 `source` 值歸檔進來（第 10 章未決事項）。
-- 不收：工單交接紀錄（那是工單歷史，在 Ticket detail 已可查）、README／設計文件（repo 檔案，不進資料庫）。
+- Files: manually archived documents (`source='manual'`). The `source` column is reserved for the future: if the "Generate spec" step ever really produces a file, that feature files it with its own `source` value (Ch. 10 open item).
+- Not filed: ticket handoff records (that is ticket history, already visible in Ticket detail), README / design document (repo files, not database rows).
 
-### 資料模型
+### Data model
 
-Migration 015（`db/migrations/015_create_documents.sql`，冪等）：
+Migration 015 (`db/migrations/015_create_documents.sql`, idempotent):
 
-- `document_categories`：`id`、`name`（唯一）、`created_by`、`created_at`。預設兩類 Prototype、Undefined 由 migration 以 `INSERT ... SELECT ... WHERE NOT EXISTS` 種入，重跑不重複。
-- `documents`：`id`、`project_id`（可空，未分類；刪專案時 SET NULL，與工單一致）、`category_id`（必填，指向類別）、`title`、`content`（Markdown 文字）、`source`（預設 `'manual'`）、`created_by`、`created_at`／`updated_at`。
+- `document_categories`: `id`, `name` (unique), `created_by`, `created_at`. The two defaults, Prototype and Undefined, are seeded by the migration with `INSERT ... SELECT ... WHERE NOT EXISTS`, so re-running does not duplicate them.
+- `documents`: `id`, `project_id` (nullable, uncategorized; SET NULL when the project is deleted, matching tickets), `category_id` (required, points at the category), `title`, `content` (Markdown text), `source` (default `'manual'`), `created_by`, `created_at` / `updated_at`.
 
-內容存在資料庫 TEXT 欄位，不另建檔案儲存：平台全部狀態本來就在 PostgreSQL 裡，文件跟著走，不用再管一個檔案層；下載時由後端把存的內容渲染成 .md 檔回傳。
+Content lives in a database TEXT column, with no separate file store: all platform state already lives in PostgreSQL, so documents travel with it and no file layer needs managing; on download the backend renders the stored content as a .md file.
 
-類別是全域的（不分專案）：一張共用的類別表，任一專案新增的類別在各專案都看得到。第一版這樣最簡單；若日後類別需要分專案，再拆。
+Categories are global (not per project): one shared category table, and a category added by any project is visible in every project. That is simplest for v1; if categories ever need to split per project, split them then.
 
-### 權限
+### Permissions
 
-| 動作 | 誰可以 |
+| Action | Who can |
 | --- | --- |
-| 瀏覽／下載 | 任何登入帳號，專案範圍與工單一致（被指派到某專案的帳號只看得到該專案的文件，未分類文件對其不在範圍內） |
-| 歸檔文件、新增類別、刪除文件 | PM 或 Admin（與建立專案同一個規則：文件是需整理的流程產物） |
-| Agent 上傳文件（`POST /api/documents/upload`） | 任何登入帳號（以 API key 為主；session 也可，API key 與 session 在認證上完全等價，見第 12 章）；不設 PM／Admin 限制，但必須上傳到自己專案範圍內的專案，`project_id` 必填 |
-| Prototype「實作」按鈕 | 只有 PM（因為開單本身就是 PM 專屬，見下） |
+| Browse / download | Any signed-in account, with the same project scope as tickets (an account assigned to a project only sees that project's documents; uncategorized documents are out of scope for them) |
+| File a document, add a category, delete a document | PM or Admin (same rule as creating a project: documents are flow products that need organizing) |
+| Agent upload (`POST /api/documents/upload`) | Any signed-in account (API key first; sessions also work — API keys and sessions are fully equivalent for authentication, see Ch. 12); no PM / Admin limit, but uploads must land in a project within the caller's scope, and `project_id` is required |
+| Prototype "Implement" button | PM only (because opening a ticket is itself PM-only, see below) |
 
-### 端點
+### Endpoints
 
-| Method | Endpoint | 說明 |
+| Method | Endpoint | Notes |
 | --- | --- | --- |
-| `GET` | `/api/document-categories` | 全部類別（依名稱排序，Prototype 在 Undefined 之前） |
-| `POST` | `/api/document-categories` | 新增類別（PM 或 Admin；重名回 409 `category_name_taken`） |
-| `GET` | `/api/documents?project_id=<id\|none>&category_id=<id>` | 文件列表（專案＋類別篩選；被指派帳號只看得到自己專案的） |
-| `POST` | `/api/documents` | 歸檔文件（PM 或 Admin；類別不存在回 400 `unknown_category`，專案不存在回 400 `unknown_project`） |
-| `POST` | `/api/documents/upload` | Agent 上傳文件（見下；任何登入帳號，專案範圍內才可上傳） |
-| `GET` | `/api/documents/:id` | 單一文件 |
-| `DELETE` | `/api/documents/:id` | 刪除文件（PM 或 Admin） |
-| `GET` | `/api/documents/:id/download` | 下載：`text/markdown`，`Content-Disposition: attachment`，檔名由標題產生（見下） |
+| `GET` | `/api/document-categories` | All categories (sorted by name, Prototype before Undefined) |
+| `POST` | `/api/document-categories` | Add a category (PM or Admin; duplicate name returns 409 `category_name_taken`) |
+| `GET` | `/api/documents?project_id=<id\|none>&category_id=<id>` | Document list (project + category filters; an assigned account only sees its own project's documents) |
+| `POST` | `/api/documents` | File a document (PM or Admin; unknown category 400 `unknown_category`, unknown project 400 `unknown_project`) |
+| `POST` | `/api/documents/upload` | Agent upload (see below; any signed-in account, only within project scope) |
+| `GET` | `/api/documents/:id` | One document |
+| `DELETE` | `/api/documents/:id` | Delete a document (PM or Admin) |
+| `GET` | `/api/documents/:id/download` | Download: `text/markdown`, `Content-Disposition: attachment`, filename generated from the title (see below) |
 
-### Agent 上傳（工單 63544206）
+### Agent upload (ticket 63544206)
 
-給 agent 一個上傳端點，寫進同一張 `documents` 表、走同一套列表／下載：上傳完的文件在 Document 頁面看得到、下載得到，不另建儲存。
+Give agents an upload endpoint that writes into the same `documents` table and follows the same list / download flow: uploaded documents are visible on the Documents page and downloadable, with no separate storage.
 
-- **格式：JSON ＋ base64，不是 multipart。** multipart 需要再加一個解析依賴（multer／busboy 之類），而 agent 本來就用 JSON 打 API；`content_base64` 帶檔案內容的 base64，JSON body 直接收，不加新依賴。請求欄位：`title`、`category_id`、`project_id`、`content_base64`，四個都必填。
-- **認證與權限：** 路由掛在既有 `requireAuth` 之下，`X-API-Key` 與 session 完全等價（第 12 章）；無效 key 在 middleware 就回 401，不進 service。不設 PM／Admin 限制——這端點就是要讓 agent 上傳——權限只有「已認證＋專案範圍內」：被指派到某專案的帳號只能上傳到該專案（`assignedProjectId` 範圍檢查，與列表的範圍規則一致），否則回 403 `out_of_scope`；未被指派的帳號可上傳到任一已存在的專案。
-- **分類與專案必須已存在：** 未知分類回 400 `unknown_category`、未知專案回 400 `unknown_project`，不自動建類別；`project_id` 必填（手動歸檔允許未分類，agent 上傳不允許——沒有專案可掛的文件在 Document 頁面不會出現在任何專案檢視裡，寧可在上傳時就擋下）。
-- **內容驗證：** `content_base64` 必須是標準 base64（正確字母表與補位；`Buffer.from` 本身很寬鬆，只靠它會默默接受亂碼，所以多做一次 round-trip 驗證）且解出來的 bytes 必須是合法 UTF-8（`content` 是 TEXT 欄位，無效 UTF-8 會在資料庫層報錯變 500，所以先在 service 擋下），否則回 400 `invalid_content`。缺標題／缺分類／缺專案／缺內容都回 400。
-- **上限：** 解碼後內容最多 1 MiB（`MAX_AGENT_UPLOAD_BYTES`），超過回 413 `content_too_large`。base64 會膨脹 4/3，1 MiB 內容上線約 1.4 MB，所以全域 `express.json()` 上限從預設 100 KB 放寬到 2 MB（見 `server/index.js`）；service 層的 1 MiB 才是真正執行的上限，超過 2 MB 的 body 由 JSON parser 直接回 413。
-- **來源：** 上傳的文件一律 `source='agent'`（呼叫方不能自選來源，歸檔出處才可信）；寫入邏輯與手動歸檔共用同一個 `insertDocumentRow`，只有前面的驗證與權限規則不同。
-- **前端不用改：** 上傳完的文件走既有的 `GET /api/documents` 列表與 `GET /api/documents/:id/download`，Document 頁面直接看得到、下載得到。
+- **Format: JSON + base64, not multipart.** Multipart would need another parsing dependency (multer / busboy or similar), while agents already call the API with JSON; `content_base64` carries the file content as base64, and the JSON body is received directly, adding no new dependency. Request fields: `title`, `category_id`, `project_id`, `content_base64` — all four required.
+- **Authentication and permissions:** the route sits under the existing `requireAuth`, so `X-API-Key` and sessions are fully equivalent (Ch. 12); an invalid key returns 401 in the middleware and never reaches the service. No PM / Admin limit — this endpoint exists so agents can upload — the only permissions are "authenticated + within project scope": an account assigned to a project may only upload to that project (`assignedProjectId` scope check, same scope rule as the list), otherwise 403 `out_of_scope`; an unassigned account may upload to any existing project.
+- **Category and project must already exist:** an unknown category returns 400 `unknown_category`, an unknown project returns 400 `unknown_project`; categories are not auto-created. `project_id` is required (manual filing allows uncategorized, agent upload does not — a document with no project to hang on would not appear in any project view on the Documents page, so it is better blocked at upload time).
+- **Content validation:** `content_base64` must be standard base64 (correct alphabet and padding; `Buffer.from` on its own is lenient and would silently accept garbage, so an extra round-trip check is done) and the decoded bytes must be valid UTF-8 (`content` is a TEXT column, and invalid UTF-8 would fail at the database layer as a 500, so the service blocks it first); otherwise 400 `invalid_content`. Missing title / category / project / content all return 400.
+- **Limit:** decoded content is at most 1 MiB (`MAX_AGENT_UPLOAD_BYTES`); above that returns 413 `content_too_large`. Base64 inflates by 4/3, so 1 MiB of content arrives as about 1.4 MB — the global `express.json()` limit is raised from the 100 KB default to 2 MB (see `server/index.js`); the service-level 1 MiB is the real enforced limit, and bodies over 2 MB are answered 413 directly by the JSON parser.
+- **Source:** uploaded documents are always `source='agent'` (the caller cannot pick a source, so the filing origin stays trustworthy); the write logic shares the same `insertDocumentRow` as manual filing, and only the earlier validation and permission rules differ.
+- **No frontend change:** uploaded documents go through the existing `GET /api/documents` list and `GET /api/documents/:id/download`, so the Documents page shows and downloads them directly.
 
-### 下載
+### Download
 
-檔名由標題產生（`server/documents.js` 的 `slugifyTitle`）：小寫、連續非字母數字合併為一個 `-`、最長 80 字元；中文等 Unicode 字母保留（中文標題仍可讀），無可用字元時退回 `document.md`。回應同時帶 `filename="document.md"` 與 RFC 5987 的 `filename*=UTF-8''...`，非 ASCII 標題也能正確下載。前端以下載 blob 的方式觸發（`fetch` 帶 Bearer token → `createObjectURL` → `<a download>`），權杖不進網址。
+The filename comes from the title (`slugifyTitle` in `server/documents.js`): lowercase, runs of non-alphanumeric characters merged into one `-`, at most 80 characters; Unicode letters such as Chinese are kept (a Chinese title stays readable), and titles with no usable characters fall back to `document.md`. The response carries both `filename="document.md"` and the RFC 5987 `filename*=UTF-8''...`, so non-ASCII titles download correctly. The frontend triggers the download as a blob (`fetch` with the Bearer token → `createObjectURL` → `<a download>`), so the token never enters the URL.
 
-列表回傳即含完整內容（不另開單一文件端點取內容），面板點標題展開就看得到；文件是文字、量級不大，這是第一版的簡化，文件變大時再拆。
+The list response already includes the full content (no separate endpoint to fetch content for one document); clicking a title in the panel expands it to show the content. Documents are text and small in scale, so this is the v1 simplification — split it out when documents get large.
 
-### Prototype「實作」按鈕
+### Prototype "Implement" button
 
-Prototype 類別的文件在列表有一顆「實作」按鈕（只有 PM 看得到可按的狀態；非 PM 看到的是停用按鈕加說明，沿用 New ticket 表單的做法）。按下後前端直接呼叫既有的 `POST /api/tickets` 開單，不另寫開單邏輯：
+A Prototype-category document has an "Implement" button in its list row (only the PM sees it enabled; non-PM users see a disabled button with an explanation, following the New ticket form's approach). Pressing it calls the existing `POST /api/tickets` directly to open a ticket — no separate ticket-opening logic:
 
-- 標題：`實作 Prototype：<文件標題>`。
-- 描述：來源文件區塊（文件標題、類別、文件 ID、文件頁面連結 `<origin>/#/documents`、專案）＋文件完整內容。工單帶著文件全文，實作者從工單本身就能讀到 Prototype；工單定格的是按下按鈕當下的文件內容，文件之後若改，連結指向的是最新版。
-- 專案：文件的所屬專案（未分類文件開出的工單亦為未分類）；不指定 workflow，開出的工單走內建流程，與 New ticket 不選 workflow 時一致。
-- 開單成功後直接導到新工單的 detail 頁。
+- Title: `Implement Prototype: <document title>`.
+- Description: a source-document block (document title, category, document ID, Documents page link `<origin>/#/documents`, project) plus the document's full content. The ticket carries the full prototype text, so the implementer can read the Prototype from the ticket itself; the ticket freezes the document as it was when implementation was requested, while the link points at the live document.
+- Project: the document's owning project (a ticket opened from an uncategorized document is also uncategorized); no workflow is named, so the opened ticket follows the built-in flow, matching a New ticket opened without a workflow.
+- On success, navigate straight to the new ticket's detail page.
 
-### 前端
+### Frontend
 
-- 側邊欄頂層新增 Documents 入口（所有登入帳號都看得到），檢視為 `documents`、hash 為 `#/documents`（第 16 章的路由對照已補）。
-- `src/DocumentsPanel.tsx`：列表（類別篩選＋專案篩選、點標題展開看內容）、＋ icon 新增類別、歸檔表單（標題、類別、專案、內容，可上傳 .md／.txt 檔讀進內容欄、上傳時標題未填則以檔名預填）、每列下載／實作（Prototype）／刪除按鈕。面板自己管資料載入（沿用 AdminPanel 的做法）；App 頁首的 Refresh 按鈕透過 `refreshKey` 觸發面板重載。
-- 類別篩選在前端做（列表已按專案載入），切換類別不需再打 API。
+- A Documents entry is added at the top level of the sidebar (visible to all signed-in accounts), with view `documents` and hash `#/documents` (the Ch. 16 routing table already covers it).
+- `src/DocumentsPanel.tsx`: list (category filter + project filter, click a title to expand and read the content), a + icon to add a category, a filing form (title, category, project, content; a .md / .txt file can be uploaded and read into the content field, and the title is pre-filled from the file name when still empty), Download / Implement (Prototype) / Delete buttons per row. The panel manages its own data loading (following AdminPanel's approach); the Refresh button in the App header triggers a panel reload through `refreshKey`.
+- Category filtering is done in the frontend (the list is already loaded per project), so switching categories needs no extra API call.
 
-### 測試
+### Tests
 
-- `server/documents.test.js`（21 項）：檔名 slug（ASCII、中文、無可用字元、超長截斷）、類別列表順序、新增類別（PM 成功、重名 409、engineer 403、缺名 400）、歸檔文件（PM／Admin 成功、engineer 403、缺標題／缺類別／未知類別／未知專案皆 400）、列表篩選（專案、類別、合併、未分類）與被指派帳號的範圍（含 `none` 篩選被指派覆蓋）、單一文件讀取（404、跨專案 403）、刪除（403、404、跨專案 403）、下載檔名與 404；Agent 上傳（engineer 上傳成功、`source='agent'`、中文內容 round-trip；上傳後列表可見、下載內容一致；任何角色都可上傳、無 PM／Admin 限制；缺標題／缺分類／缺專案／缺內容與未知分類／未知專案皆 400；亂碼 base64、缺補位、非 UTF-8 內容皆 400 `invalid_content`；超過 1 MiB 回 413、剛好 1 MiB 成功；被指派帳號只能上傳到自己專案、跨專案 403、未被指派可上傳到任一專案）。
-- `server/migrations.test.js` 補 015 檢查（兩張表、Prototype／Undefined 種子、種子有 `WHERE NOT EXISTS` 保護）。
-- `server/viewHash.test.js` 補 `#/documents` 來回對照與 `gateView` 不擋 Documents。
-- 前端編輯器／列表沒有瀏覽器測試基礎設施，實際點按（歸檔、上傳、＋ icon 新增類別、下載、實作開單後導到新工單）留待 Tester／Reviewer 在真機上驗。
+- `server/documents.test.js` (21 items): filename slug (ASCII, Chinese, unusable, over-long truncation), category list order, adding a category (PM succeeds, duplicate name 409, engineer 403, missing name 400), filing documents (PM / Admin succeed, engineer 403, missing title / category / unknown category / unknown project all 400), list filters (project, category, combined, uncategorized) and assigned-account scoping (including the `none` filter being overridden by assignment), single document read (404, cross-project 403), delete (403, 404, cross-project 403), download filename and 404; Agent upload (engineer uploads successfully, `source='agent'`, Chinese content round-trip; visible in the list after upload, download byte-identical; any role may upload, no PM / Admin limit; missing title / category / project / content and unknown category / unknown project all 400; garbled base64, missing padding, non-UTF-8 content all 400 `invalid_content`; over 1 MiB returns 413, exactly 1 MiB succeeds; an assigned account may only upload to its own project, cross-project 403, an unassigned account may upload to any project).
+- `server/migrations.test.js` adds the 015 checks (two tables, Prototype / Undefined seeds, seeds protected by `WHERE NOT EXISTS`).
+- `server/viewHash.test.js` adds the `#/documents` round-trip mapping and `gateView` not blocking Documents.
+- The frontend editor / list has no browser test infrastructure; actual clicks (filing, upload, the + icon adding a category, download, Implement opening a ticket and navigating to the new ticket) are left for the Tester / Reviewer to verify on a real browser.

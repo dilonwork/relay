@@ -189,18 +189,18 @@ export default function DocumentsPanel(props: DocumentsPanelProps) {
     if (!isPm) return;
     setImplementingId(doc.id);
     const description = [
-      `實作 Prototype 文件「${doc.title}」。`,
+      `Implement the Prototype document "${doc.title}".`,
       '',
-      `來源文件：${doc.title}（類別：Prototype，文件 ID：${doc.id}）`,
-      `文件頁面：${window.location.origin}/#/documents`,
-      `專案：${projectNameFor(doc.project_id)}`,
+      `Source document: ${doc.title} (category: Prototype, document ID: ${doc.id})`,
+      `Document page: ${window.location.origin}/#/documents`,
+      `Project: ${projectNameFor(doc.project_id)}`,
       '',
-      '文件內容：',
-      doc.content ? doc.content : '（無內容）',
+      'Document content:',
+      doc.content ? doc.content : '(No content)',
     ].join('\n');
     try {
       const created = await api.createTicket({
-        title: `實作 Prototype：${doc.title}`,
+        title: `Implement Prototype: ${doc.title}`,
         description,
         source: 'project',
         project_id: doc.project_id,
@@ -342,7 +342,7 @@ export default function DocumentsPanel(props: DocumentsPanelProps) {
                               disabled={!isPm || implementingId === doc.id}
                               title={isPm ? 'Open a ticket to implement this prototype' : 'Only the PM may open an implementation ticket'}
                             >
-                              實作
+                              Implement
                             </button>
                           </>
                         )}

@@ -697,7 +697,7 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
                             type="text"
                             value={r.label}
                             onChange={(e) => setQuickRow(i, { label: e.target.value })}
-                            placeholder="e.g. 使用者需求"
+                            placeholder="e.g. User requirement"
                             aria-label={`Quick create state ${i + 1} name`}
                           />
                         </td>
@@ -810,7 +810,7 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
                       type="text"
                       value={s.label}
                       onChange={(e) => setStateField(i, { label: e.target.value })}
-                      placeholder="e.g. 使用者需求"
+                      placeholder="e.g. User requirement"
                       disabled={readOnly}
                       aria-label={`Label for state ${i + 1}`}
                     />
