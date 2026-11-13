@@ -151,7 +151,7 @@ relay/
 │   ├── viewHash.test.js
 │   └── migrations.test.js
 ├── db/
-│   └── migrations/       # schema as SQL migrations (001-017)
+│   └── migrations/       # schema as SQL migrations (001-018)
 ├── doc/
 │   └── design.md         # design document (Traditional Chinese)
 ├── screenshots/          # README screenshots (see screenshots/README.md)
@@ -179,7 +179,7 @@ The backend needs a PostgreSQL database (default name `relay`, see
 not done by the code in this repo; the server creates the `tickets`,
 `ticket_transitions`, `users`, `sessions`, `api_keys`, `projects`,
 `monitor_reminders` and `workflows` tables itself on startup (migrations
-`db/migrations/001-017`).
+`db/migrations/001-018`).
 
 On first run the users table is empty, so the app shows a setup screen:
 create the first admin account there (username, display name, password).
@@ -251,18 +251,21 @@ way, including the three-layer role-map fallback and the delete rules.
 Custom workflow definitions are covered too: the three example flows
 are walked end to end (including the backward move), the definition
 validator's rules are tested case by case, and the migration files are
-tested for the 001→017 sequence. The document service is tested the
-same way, including the filename slug, the project scope rules and the
-download filename. Document ticket payloads are tested too — the Implement
+tested for the 001→018 sequence. The document service is tested the
+same way, including the filename slug, the project scope rules, the
+project ownership (project_id stored and returned, the list filters by
+project, unassigned documents show as Unassigned, the agent upload
+accepts an omitted project_id) and the download filename. Document ticket payloads are tested too — the Implement
 payload is locked byte-identical and the Not OK re-planning payload carries
-the reason and a link back to the source document — and document rendering
+the reason and a link back to the source document, and the Implement
+ticket inherits the document's project — and document rendering
 is covered (type detection from title extension and content, Markdown
 rendering with raw HTML escaped, the sandbox flag). Gantt helpers are
 covered as pure functions: search filtering, status-chip counts,
 grouping, the zoom window, and the 36-hour stalled rule.
 
-243 tests in total: state machine 21, tickets 32, projects 7, auth 15,
-admin 7, API keys 6, monitor 18, workflows 26, quick-create builder 11, documents 22, document tickets 10, document render 18, gantt helpers 14, admin nav 5, view hash 8, migrations 19, role lists 4.
+249 tests in total: state machine 21, tickets 32, projects 7, auth 15,
+admin 7, API keys 6, monitor 18, workflows 26, quick-create builder 11, documents 24, document tickets 12, document render 18, gantt helpers 14, admin nav 5, view hash 8, migrations 21, role lists 4.
 
 ## Accounts & authentication
 
@@ -462,7 +465,7 @@ each sub-page owns its own form state and handlers.
   category is stored in the database, not in frontend state, so it
   survives refresh. Categories are global, not per-project.
 - **Filing a document:** the File a document form takes a title, a
-  category, a project (or Uncategorized) and Markdown content; a
+  category, a project (required) and Markdown content; a
   .md / .txt file can be uploaded instead and its text lands in the
   content field (the title is pre-filled from the file name when it is
   still empty). Filing, adding a category and deleting a document are
@@ -470,13 +473,16 @@ each sub-page owns its own form state and handlers.
   project scope.
 - **Agent upload:** agents file documents with an API key via
   `POST /api/documents/upload`: a JSON body with `title`,
-  `category_id`, `project_id` and the file content base64-encoded in
+  `category_id`, `project_id` (optional) and the file content base64-encoded in
   `content_base64`. No PM/Admin role is required — the endpoint exists
   so agents can file their own output — but the upload must land in a
   project in the caller's scope (an account assigned to one project
-  may only upload to that project). Decoded content is capped at
-  1 MiB (413 `content_too_large` above it); the category and the
-  project must already exist. Uploaded documents are filed with
+  may only upload to that project; an assigned account uploading
+  without a project gets 403 `out_of_scope`). An unassigned account
+  may omit `project_id`; the document is then filed as Unassigned.
+  Decoded content is capped at 1 MiB (413 `content_too_large` above
+  it); the category must already exist, and the project must already
+  exist when one is given. Uploaded documents are filed with
   `source='agent'` and show up in the Documents page like any other
   document.
 - **Download:** each document has a Download button; the stored

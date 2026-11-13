@@ -30,7 +30,12 @@
 // list and 017 drops and re-adds the CHECK on an existing database,
 // guarded the same way as 011/014/016. Guest and admin are
 // deliberately not in the actor_role list: guest is read-only and
-// admin does not transition.
+// admin does not transition. Migration 018 guarantees
+// documents.project_id exists with its FK and index (ticket
+// 8f52044c): 015 already created all three on a fresh database, so
+// 018 is an idempotent ensure-step, guarded the same way as
+// 011/014/016/017 — the FK is only added when every stored
+// project_id references an existing project.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -336,10 +341,39 @@ async function main() {
     assert.ok(sql.includes('CREATE TABLE IF NOT EXISTS document_categories'), '015: missing document_categories table');
     assert.ok(sql.includes('CREATE UNIQUE INDEX IF NOT EXISTS idx_document_categories_name'), '015: missing category name unique index');
     assert.ok(sql.includes('CREATE TABLE IF NOT EXISTS documents'), '015: missing documents table');
+    assert.ok(sql.includes('project_id UUID REFERENCES projects(id) ON DELETE SET NULL'), '015: missing documents.project_id FK');
     assert.ok(sql.includes('category_id UUID NOT NULL REFERENCES document_categories(id)'), '015: missing documents.category_id FK');
     assert.ok(sql.includes("SELECT 'Prototype', 'system'"), '015: missing Prototype seed');
     assert.ok(sql.includes("SELECT 'Undefined', 'system'"), '015: missing Undefined seed');
     assert.ok(sql.includes('WHERE NOT EXISTS (SELECT 1 FROM document_categories WHERE name = '), '015: seeds must be guarded by WHERE NOT EXISTS so re-runs are safe');
+  });
+
+  await ok('migration 018 adds documents.project_id with FK and index', async () => {
+    const sql = readMigration('018_add_documents_project_id.sql');
+    assert.ok(sql.includes('ADD COLUMN IF NOT EXISTS project_id UUID'), '018: missing ADD COLUMN for project_id');
+    assert.ok(sql.includes('ADD CONSTRAINT documents_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE SET NULL'), '018: missing project_id FK');
+    assert.ok(sql.includes('CREATE INDEX IF NOT EXISTS idx_documents_project ON documents (project_id)'), '018: missing project index');
+  });
+
+  await ok('migration 018 guards the FK: skips it when a stored project_id does not reference a project', async () => {
+    const sql = readMigration('018_add_documents_project_id.sql');
+    // Same lesson as 011/014/016/017: the server re-runs every
+    // migration on each startup, so an unconditional ADD would fail
+    // on every startup and stop the run if a row with a dangling
+    // project_id was ever written while the FK was absent. The guard
+    // must check stored project_ids before any DROP/ADD runs, and the
+    // DROP must be inside the guard too.
+    assert.ok(sql.includes('DO $$'), '018: DROP+ADD must be inside a DO block guard');
+    assert.ok(
+      sql.includes('FROM documents d WHERE d.project_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM projects p WHERE p.id = d.project_id)'),
+      '018: guard must check stored project_ids against the projects table'
+    );
+    const guardAt = sql.indexOf('DO $$');
+    const dropAt = sql.indexOf('DROP CONSTRAINT IF EXISTS documents_project_id_fkey');
+    const addAt = sql.indexOf('ADD CONSTRAINT documents_project_id_fkey FOREIGN KEY');
+    assert.ok(dropAt > guardAt, '018: DROP must be inside the guard (after DO $$)');
+    assert.ok(addAt > dropAt, '018: ADD must come after DROP');
+    assert.ok(sql.includes('END IF;'), '018: guard must close with END IF');
   });
 
   console.log(`\n${passed} migration tests passed.`);

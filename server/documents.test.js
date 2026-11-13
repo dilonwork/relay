@@ -283,7 +283,7 @@ async function main() {
     assert.equal(refused.error, 'wrong_role');
   });
 
-  await ok('uploadDocument: missing title/category/project/content and unknown category/project are 400', async () => {
+  await ok('uploadDocument: missing title/category/content and unknown category/project are 400', async () => {
     const db = new FakeDb();
     const b64 = Buffer.from('x', 'utf8').toString('base64');
     const base = { actorId: 'eng-1', actorRoles: ENGINEER, title: 'T', categoryId: 'cat-proto', projectId: 'proj-1', contentBase64: b64 };
@@ -294,8 +294,6 @@ async function main() {
     const badCategory = await documents.uploadDocument(db, { ...base, categoryId: 'cat-nope' });
     assert.equal(badCategory.status, 400);
     assert.equal(badCategory.error, 'unknown_category');
-    const noProject = await documents.uploadDocument(db, { ...base, projectId: null });
-    assert.equal(noProject.status, 400);
     const badProject = await documents.uploadDocument(db, { ...base, projectId: 'proj-nope' });
     assert.equal(badProject.status, 400);
     assert.equal(badProject.error, 'unknown_project');
@@ -303,6 +301,46 @@ async function main() {
     assert.equal(noContent.status, 400);
     const nonString = await documents.uploadDocument(db, { ...base, contentBase64: 123 });
     assert.equal(nonString.status, 400);
+  });
+
+  await ok('uploadDocument: project_id is optional — omitted files as unassigned (ticket 8f52044c)', async () => {
+    const db = new FakeDb();
+    const b64 = Buffer.from('x', 'utf8').toString('base64');
+    // With a project: stored and returned, listed under that project.
+    const withProject = await documents.uploadDocument(db, {
+      actorId: 'eng-1', actorRoles: ENGINEER,
+      title: 'With project', categoryId: 'cat-proto', projectId: 'proj-2', contentBase64: b64,
+    });
+    assert.equal(withProject.ok, true);
+    assert.equal(withProject.document.project_id, 'proj-2');
+    assert.deepEqual((await documents.listDocuments(db, { projectId: 'proj-2' })).map((d) => d.title), ['With project']);
+    // Without a project (unassigned caller): filed as unassigned, not
+    // an error — existing agent uploaders do not send project_id yet.
+    const unassigned = await documents.uploadDocument(db, {
+      actorId: 'eng-1', actorRoles: ENGINEER,
+      title: 'No project', categoryId: 'cat-proto', projectId: undefined, contentBase64: b64,
+    });
+    assert.equal(unassigned.ok, true);
+    assert.equal(unassigned.status, 201);
+    assert.equal(unassigned.document.project_id, null);
+    assert.equal(unassigned.document.source, 'agent');
+    assert.deepEqual((await documents.listDocuments(db, { projectId: 'none' })).map((d) => d.title), ['No project']);
+    assert.deepEqual((await documents.listDocuments(db, { projectId: 'proj-1' })).map((d) => d.title), []);
+    // Unknown project is still 400 when one is given.
+    const badProject = await documents.uploadDocument(db, {
+      actorId: 'eng-1', actorRoles: ENGINEER,
+      title: 'Bad project', categoryId: 'cat-proto', projectId: 'proj-nope', contentBase64: b64,
+    });
+    assert.equal(badProject.status, 400);
+    assert.equal(badProject.error, 'unknown_project');
+    // An assigned caller omitting the project is out of scope: an
+    // unassigned document would be invisible to them.
+    const assignedNoProject = await documents.uploadDocument(db, {
+      actorId: 'eng-1', actorRoles: ENGINEER, assignedProjectId: 'proj-1',
+      title: 'Assigned, no project', categoryId: 'cat-proto', projectId: undefined, contentBase64: b64,
+    });
+    assert.equal(assignedNoProject.status, 403);
+    assert.equal(assignedNoProject.error, 'out_of_scope');
   });
 
   await ok('uploadDocument: malformed base64 and non-UTF8 bytes are 400 invalid_content', async () => {
@@ -367,7 +405,7 @@ async function main() {
     assert.equal(global.ok, true);
   });
 
-  await ok('listDocuments: all, by project, by category, combined, uncategorized', async () => {
+  await ok('listDocuments: all, by project, by category, combined, unassigned', async () => {
     const db = new FakeDb();
     db.seedDocument({ title: 'A', project_id: 'proj-1', category_id: 'cat-proto' });
     db.seedDocument({ title: 'B', project_id: 'proj-2', category_id: 'cat-proto' });
@@ -379,6 +417,17 @@ async function main() {
     assert.deepEqual((await documents.listDocuments(db, { projectId: 'proj-1', categoryId: 'cat-undef' })).map((d) => d.title), ['C']);
     assert.deepEqual((await documents.listDocuments(db, { projectId: 'none' })).map((d) => d.title), ['D']);
     assert.deepEqual((await documents.listDocuments(db, { projectId: 'none', categoryId: 'cat-undef' })).map((d) => d.title), ['D']);
+  });
+
+  await ok('listDocuments: returned rows carry project_id, including null for unassigned (ticket 8f52044c)', async () => {
+    const db = new FakeDb();
+    db.seedDocument({ title: 'A', project_id: 'proj-1', category_id: 'cat-proto' });
+    db.seedDocument({ title: 'B', project_id: 'proj-2', category_id: 'cat-proto' });
+    db.seedDocument({ title: 'D', project_id: null, category_id: 'cat-undef' });
+    const all = await documents.listDocuments(db, {});
+    assert.deepEqual(all.map((d) => [d.title, d.project_id]), [['A', 'proj-1'], ['B', 'proj-2'], ['D', null]]);
+    assert.deepEqual((await documents.listDocuments(db, { projectId: 'proj-1' })).map((d) => d.project_id), ['proj-1']);
+    assert.deepEqual((await documents.listDocuments(db, { projectId: 'none' })).map((d) => [d.title, d.project_id]), [['D', null]]);
   });
 
   await ok('listDocuments: an assigned caller only ever sees their own project', async () => {

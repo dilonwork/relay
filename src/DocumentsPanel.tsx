@@ -2,7 +2,7 @@ import { Fragment, useCallback, useEffect, useState } from 'react';
 import { api } from './api';
 import type { DocumentCategory, DocumentItem, Project } from './api';
 import {
-  buildImplementTicket,
+  buildImplementTicketPayload,
   buildReplanTicket,
   findPrototypeFlow,
   isValidReplanReason,
@@ -159,7 +159,7 @@ export default function DocumentsPanel(props: DocumentsPanelProps) {
   }
 
   function projectNameFor(projectId: string | null): string {
-    if (!projectId) return 'Uncategorized';
+    if (!projectId) return 'Unassigned';
     return projects.find((p) => p.id === projectId)?.name || '—';
   }
 
@@ -251,24 +251,21 @@ export default function DocumentsPanel(props: DocumentsPanelProps) {
   // page — plus the document's full content, so the implementer can
   // read the prototype from the ticket itself; the ticket captures
   // the prototype as it was when implementation was requested, and
-  // the link points at the live document. No workflow is named, so
-  // the ticket follows the built-in flow, like a ticket created
-  // without a workflow from the New ticket form.
+  // the link points at the live document. The ticket inherits the
+  // document's project (a document with no project opens a ticket
+  // with no project). No workflow is named, so the ticket follows
+  // the built-in flow, like a ticket created without a workflow from
+  // the New ticket form.
   async function handleImplement(doc: DocumentItem) {
     if (!isPm) return;
     setImplementingId(doc.id);
-    const { title, description } = buildImplementTicket(
+    const payload = buildImplementTicketPayload(
       doc,
       projectNameFor(doc.project_id),
       window.location.origin,
     );
     try {
-      const created = await api.createTicket({
-        title,
-        description,
-        source: 'project',
-        project_id: doc.project_id,
-      });
+      const created = await api.createTicket(payload);
       onNotice(`Ticket created: ${created.title}`);
       onOpenTicket(created.id);
     } catch (err) {
@@ -383,7 +380,7 @@ export default function DocumentsPanel(props: DocumentsPanelProps) {
               onChange={(e) => onProjectFilterChange(e.target.value)}
             >
               <option value="all">All projects</option>
-              <option value="none">Uncategorized</option>
+              <option value="none">Unassigned</option>
               {projects.map((p) => (
                 <option key={p.id} value={p.id}>
                   {p.name}
@@ -554,7 +551,11 @@ export default function DocumentsPanel(props: DocumentsPanelProps) {
             <button type="button" className="primary" onClick={() => {
               setShowCreate(true);
               setNewCategoryId(defaultCategoryId);
-              setNewProjectId(projectFilter !== 'all' && projectFilter !== 'none' ? projectFilter : '');
+              // Filing requires a project (ticket 8f52044c): pre-fill
+              // the current project filter when it names one, else
+              // the first project; the submit stays disabled until
+              // a project is picked.
+              setNewProjectId(projectFilter !== 'all' && projectFilter !== 'none' ? projectFilter : (projects[0]?.id || ''));
             }}>
               + New document
             </button>
@@ -586,13 +587,12 @@ export default function DocumentsPanel(props: DocumentsPanelProps) {
                   </select>
                 </div>
                 <div>
-                  <label className="field" htmlFor="doc-new-project">Project</label>
+                  <label className="field" htmlFor="doc-new-project">Project (required)</label>
                   <select
                     id="doc-new-project"
                     value={newProjectId}
                     onChange={(e) => setNewProjectId(e.target.value)}
                   >
-                    <option value="">Uncategorized</option>
                     {projects.map((p) => (
                       <option key={p.id} value={p.id}>
                         {p.name}
@@ -616,7 +616,7 @@ export default function DocumentsPanel(props: DocumentsPanelProps) {
                 onChange={handleFileChange}
               />
               {uploadedName && <p className="muted">Loaded from {uploadedName}.</p>}
-              <button className="primary" type="submit" disabled={busy || !newTitle.trim() || !newCategoryId}>
+              <button className="primary" type="submit" disabled={busy || !newTitle.trim() || !newCategoryId || !newProjectId}>
                 File document
               </button>{' '}
               <button

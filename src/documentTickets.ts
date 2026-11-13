@@ -86,6 +86,22 @@ export function buildImplementTicket(
   };
 }
 
+// The full createTicket payload for Implement: the title and
+// description from buildImplementTicket plus the document's project,
+// so the implementation ticket runs in the same project as the
+// prototype. A document with no project (project_id null) opens a
+// ticket with no project, the same as a ticket created without a
+// project from the New ticket form. The panel passes this payload
+// straight to api.createTicket.
+export function buildImplementTicketPayload(
+  doc: PrototypeDocumentRef,
+  projectName: string,
+  origin: string,
+): { title: string; description: string; source: string; project_id: string | null } {
+  const { title, description } = buildImplementTicket(doc, projectName, origin);
+  return { title, description, source: 'project', project_id: doc.project_id };
+}
+
 // The re-planning ticket opened by Not OK: the title says at a glance
 // that this is a re-plan, not an implementation, and the description
 // leads with the reviewer's reason, then the same document reference

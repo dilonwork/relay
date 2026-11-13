@@ -14,7 +14,7 @@
 //
 // Permissions: any authenticated user may read, list and download,
 // project-scoped like tickets and workflows (an account assigned to
-// one project only ever sees that project's documents; uncategorized
+// one project only ever sees that project's documents; unassigned
 // documents are out of scope for them, same as uncategorized tickets).
 // Creating a document, adding a category or deleting a document is
 // PM or Admin — documents are curated pipeline artifacts, mirroring
@@ -65,7 +65,7 @@ function requirePmOrAdmin(actorRoles) {
 }
 
 // A document is visible to an assigned caller only when it belongs to
-// their project; uncategorized documents are out of scope for them
+// their project; unassigned documents are out of scope for them
 // (same rule as tickets: an assigned caller only ever sees their own
 // project's rows). Unassigned callers see everything.
 function documentVisibleTo(doc, assignedProjectId) {
@@ -141,11 +141,11 @@ async function createDocumentCategory(db, { actorId, actorRoles, name }) {
 }
 
 // List documents visible to the caller. A project filter returns that
-// project's documents ('none' means uncategorized); a category filter
+// project's documents ('none' means unassigned); a category filter
 // narrows to one category; both may combine. An account assigned to
 // one project only ever sees that project's documents — the
 // assignment overrides any project filter the caller passes,
-// including 'none' (uncategorized documents are out of scope for
+// including 'none' (unassigned documents are out of scope for
 // them, same as uncategorized tickets).
 async function listDocuments(db, { projectId, categoryId, assignedProjectId } = {}) {
   const effectiveProject = assignedProjectId || cleanProjectId(projectId);
@@ -221,7 +221,7 @@ async function insertDocumentRow(db, { title, categoryId, projectId, content, so
 
 // File a document: title, an existing category, and markdown content.
 // The project must exist when given; a null project files the
-// document as uncategorized. `source` records where the document came
+// document as unassigned. `source` records where the document came
 // from ('manual' in v1 — there is no auto-generation to collect from
 // yet, so every document is filed by hand; a future generator files
 // with its own source value).
@@ -271,10 +271,15 @@ async function createDocument(db, { actorId, actorRoles, title, categoryId, proj
 // key never reaches here: it gets a 401) and the upload must land in
 // a project in the caller's scope: an account assigned to one project
 // may only upload to that project, exactly like the list scope.
-// The project is required here (manual filing allows uncategorized);
-// an agent upload with nowhere to show up in the Document page is a
-// caller mistake, so it is a 400 rather than a silent uncategorized
-// file. `source` is always 'agent': provenance is not caller-chosen.
+// The project is optional here: an upload without project_id files
+// the document as unassigned (project_id NULL, displayed as
+// Unassigned). Existing agent uploaders (e.g. UI&UX prototype
+// uploads) do not send project_id yet, and the backfill rule defines
+// NULL as a legitimate state, so omitting it must not break them. An
+// assigned account uploading without a project_id is still refused:
+// an unassigned document would be out of scope for them, so the
+// scope check below answers 403 out_of_scope. `source` is always
+// 'agent': provenance is not caller-chosen.
 async function uploadDocument(db, { actorId, actorRoles, assignedProjectId, title, categoryId, projectId, contentBase64 }) {
   if (!actorId || !String(actorId).trim()) {
     return { ok: false, status: 400, error: 'bad_request', message: 'actor_id is required.' };
@@ -299,10 +304,7 @@ async function uploadDocument(db, { actorId, actorRoles, assignedProjectId, titl
     return { ok: false, status: 400, error: 'unknown_category', message: `Unknown category: ${cleanCategoryId}.` };
   }
   const target = cleanProjectId(projectId);
-  if (!target) {
-    return { ok: false, status: 400, error: 'bad_request', message: 'project_id is required.' };
-  }
-  if (!(await projectExists(db, target))) {
+  if (target && !(await projectExists(db, target))) {
     return { ok: false, status: 400, error: 'unknown_project', message: `Unknown project: ${target}.` };
   }
   if (assignedProjectId && target !== assignedProjectId) {
