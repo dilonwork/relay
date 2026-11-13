@@ -27,7 +27,7 @@ export const ROLE_LABELS: Record<string, string> = {
   tester: 'Tester',
   deployer: 'Deployer',
   ui_ux: 'UI&UX',
-  guest: '訪客',
+  guest: 'Guest',
   admin: 'Admin',
 };
 
