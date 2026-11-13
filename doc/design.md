@@ -266,7 +266,7 @@ users
   username      帳號名稱，大小寫不區分且唯一
   password_hash scrypt 雜湊（格式 scrypt$鹽$雜湊），不存明文
   display_name  顯示名稱
-  roles         角色陣列：pm / leader / engineer / reviewer / tester / deployer / ui_ux / admin 的子集
+  roles         角色陣列：pm / leader / engineer / reviewer / tester / deployer / ui_ux / guest / admin 的子集
   project_id    指派的專案（Agent 指派，第 11–12 章）：可空，未指派即看全部專案；刪專案時清空
   is_active     停用後無法登入，既有會話立即失效
   created_at / updated_at
@@ -352,10 +352,10 @@ api_keys
 ### 帳號與角色
 
 - 一個帳號有一組使用者名稱（大小寫不區分、唯一）、顯示名稱、密碼，以及一個或多個角色。
-- 角色共八種：七個流程角色（PM、Leader、工程師、Reviewer、Tester、Deployer、UI&UX）加一個管理者角色（`admin`）。管理者不是流程角色，不能用來切工單狀態。
+- 角色共九種：七個流程角色（PM、Leader、工程師、Reviewer、Tester、Deployer、UI&UX）加兩個帳號角色：`guest`（唯讀，具備 PM 的視野、不能做任何寫入）與管理者（`admin`）。這兩個都不是流程角色，不能用來切工單狀態。
 - 一個帳號可同時持有多個角色，例如工程師兼 Reviewer。轉換時系統檢查帳號是否持有該轉換要求的角色；持有任一符合的角色即可，不需切換身分。
 - 帳號可停用：停用後無法登入，既有會話立即失效。
-- 資料庫層也鎖角色清單：`users.roles` 有 CHECK 約束 `users_roles_check`，只允許上述八種角色的子集。UI&UX 角色由 migration 014 補進 CHECK（工單 45e47047）——f5d2020 只改了 JS 常數，漏了 DB CHECK，導致建 ui_ux 帳號在 live DB 被擋；003 就地更新為完整八種清單，014 在既有資料庫上 DROP＋ADD（有 guard，見第 15 章 migration 011 的寫法）。
+- 資料庫層也鎖角色清單：`users.roles` 有 CHECK 約束 `users_roles_check`，只允許上述九種角色的子集。UI&UX 角色由 migration 014 補進 CHECK（工單 45e47047）——f5d2020 只改了 JS 常數，漏了 DB CHECK，導致建 ui_ux 帳號在 live DB 被擋；003 就地更新為完整八種清單，014 在既有資料庫上 DROP＋ADD（有 guard，見第 15 章 migration 011 的寫法）。Guest 角色由 migration 016 補進 CHECK（工單 5519e03c），003 再就地更新為完整九種清單。
 
 ### 密碼
 

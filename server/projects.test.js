@@ -114,7 +114,7 @@ async function main() {
 
   await ok('other roles may not create a project', async () => {
     const db = new FakeDb();
-    for (const role of ['leader', 'engineer', 'reviewer', 'tester', 'deployer']) {
+    for (const role of ['leader', 'engineer', 'reviewer', 'tester', 'deployer', 'guest']) {
       const res = await projects.createProject(db, {
         actorId: 'u-1', actorRoles: [role], name: 'X', description: '',
       });
@@ -204,6 +204,12 @@ async function main() {
     assert.equal(byLeader.ok, false);
     assert.equal(byLeader.status, 403);
     assert.equal(byLeader.error, 'wrong_role');
+    const byGuest = await projects.assignTicketProject(db, {
+      actorId: 'guest-1', actorRoles: ['guest'], ticketId: 't-1', projectId: p.project.id,
+    });
+    assert.equal(byGuest.ok, false);
+    assert.equal(byGuest.status, 403);
+    assert.equal(byGuest.error, 'wrong_role');
     const unknownProject = await projects.assignTicketProject(db, {
       actorId: 'pm-1', actorRoles: ['pm'], ticketId: 't-1', projectId: 'no-such-project',
     });

@@ -275,9 +275,15 @@ async function createDocument(db, { actorId, actorRoles, title, categoryId, proj
 // an agent upload with nowhere to show up in the Document page is a
 // caller mistake, so it is a 400 rather than a silent uncategorized
 // file. `source` is always 'agent': provenance is not caller-chosen.
-async function uploadDocument(db, { actorId, assignedProjectId, title, categoryId, projectId, contentBase64 }) {
+async function uploadDocument(db, { actorId, actorRoles, assignedProjectId, title, categoryId, projectId, contentBase64 }) {
   if (!actorId || !String(actorId).trim()) {
     return { ok: false, status: 400, error: 'bad_request', message: 'actor_id is required.' };
+  }
+  // Guest accounts are read-only (ticket 5519e03c): unlike every other
+  // role, a guest may not file documents, even through the agent
+  // upload, which is otherwise open to any authenticated caller.
+  if (Array.isArray(actorRoles) && actorRoles.includes('guest')) {
+    return { ok: false, status: 403, error: 'wrong_role', message: 'Guest accounts are read-only and may not upload documents.' };
   }
   if (!title || !String(title).trim()) {
     return { ok: false, status: 400, error: 'bad_request', message: 'title is required.' };

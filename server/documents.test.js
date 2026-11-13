@@ -263,7 +263,7 @@ async function main() {
     assert.equal(dl.filename, 'round-trip.md');
   });
 
-  await ok('uploadDocument: any role may upload, there is no PM/Admin gate', async () => {
+  await ok('uploadDocument: any role except guest may upload; guest is refused (read-only)', async () => {
     const db = new FakeDb();
     const b64 = Buffer.from('x', 'utf8').toString('base64');
     for (const [name, roles] of [['pm', PM], ['admin', ADMIN], ['engineer', ENGINEER], ['tester', ['tester']], ['reviewer', ['reviewer']]]) {
@@ -274,6 +274,13 @@ async function main() {
       assert.equal(uploaded.ok, true, `${name} should be able to upload`);
       assert.equal(uploaded.status, 201);
     }
+    const refused = await documents.uploadDocument(db, {
+      actorId: 'guest-1', actorRoles: ['guest'],
+      title: 'By guest', categoryId: 'cat-proto', projectId: 'proj-1', contentBase64: b64,
+    });
+    assert.equal(refused.ok, false);
+    assert.equal(refused.status, 403);
+    assert.equal(refused.error, 'wrong_role');
   });
 
   await ok('uploadDocument: missing title/category/project/content and unknown category/project are 400', async () => {
@@ -417,6 +424,24 @@ async function main() {
     assert.equal(gone.status, 404);
     const missing = await documents.deleteDocument(db, 'doc-nope', { actorId: 'pm-1', actorRoles: PM });
     assert.equal(missing.status, 404);
+  });
+
+  await ok('guest may not file or delete documents (read-only)', async () => {
+    const db = new FakeDb();
+    const refused = await documents.createDocument(db, {
+      actorId: 'guest-1', actorRoles: ['guest'],
+      title: 'T', categoryId: 'cat-proto', projectId: 'proj-1', content: 'x',
+    });
+    assert.equal(refused.ok, false);
+    assert.equal(refused.status, 403);
+    assert.equal(refused.error, 'wrong_role');
+    const seeded = db.seedDocument({ title: 'A', project_id: 'proj-1' });
+    const noDelete = await documents.deleteDocument(db, seeded.id, { actorId: 'guest-1', actorRoles: ['guest'] });
+    assert.equal(noDelete.ok, false);
+    assert.equal(noDelete.status, 403);
+    assert.equal(noDelete.error, 'wrong_role');
+    const stillThere = await documents.getDocument(db, seeded.id, {});
+    assert.equal(stillThere.document.id, seeded.id);
   });
 
   await ok('downloadDocument: filename comes from the title, missing is 404', async () => {

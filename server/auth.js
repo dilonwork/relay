@@ -18,7 +18,15 @@
 const crypto = require('crypto');
 
 const WORKFLOW_ROLES = ['pm', 'leader', 'engineer', 'reviewer', 'tester', 'deployer', 'ui_ux'];
-const ALL_ROLES = [...WORKFLOW_ROLES, 'admin'];
+// 'guest' is an account role like 'admin', never a workflow role: a
+// guest account reads with PM's visibility but may not take any
+// transition, so no workflow may name guest as the role responsible
+// for a state (ticket 5519e03c). It is in ALL_ROLES so accounts can
+// hold it, but not in WORKFLOW_ROLES, so workflows.js validation
+// rejects it and stateMachine.js attemptedRoleFallback never records
+// it in the audit table (whose actor_role CHECK allows only the
+// workflow roles).
+const ALL_ROLES = [...WORKFLOW_ROLES, 'guest', 'admin'];
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const MIN_PASSWORD_LENGTH = 8;
 

@@ -6,7 +6,9 @@
 -- this CHECK, so creating a ui_ux account failed on the live
 -- database. 014 drops and re-adds the CHECK with all 8 roles on an
 -- existing database; a fresh database is created with the full list
--- here.
+-- here. Migration 016 (ticket 5519e03c) widens it again for the guest
+-- role: 9 roles in total. Guest is an account role, not a workflow
+-- role (see auth.js ALL_ROLES).
 -- Idempotent: safe to run on every server startup.
 
 CREATE TABLE IF NOT EXISTS users (
@@ -15,7 +17,7 @@ CREATE TABLE IF NOT EXISTS users (
   password_hash TEXT NOT NULL,
   display_name TEXT NOT NULL DEFAULT '',
   roles TEXT[] NOT NULL DEFAULT '{}'
-    CHECK (roles <@ ARRAY['pm', 'leader', 'engineer', 'reviewer', 'tester', 'deployer', 'ui_ux', 'admin']::text[]),
+    CHECK (roles <@ ARRAY['pm', 'leader', 'engineer', 'reviewer', 'tester', 'deployer', 'ui_ux', 'guest', 'admin']::text[]),
   is_active BOOLEAN NOT NULL DEFAULT TRUE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP

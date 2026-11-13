@@ -501,6 +501,7 @@ app.post('/api/documents/upload', async (req, res) => {
   try {
     const result = await documents.uploadDocument(db, {
       actorId: req.user.id,
+      actorRoles: req.user.roles,
       assignedProjectId: req.user.project_id,
       title: req.body ? req.body.title : undefined,
       categoryId: req.body ? req.body.category_id : undefined,
