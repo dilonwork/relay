@@ -36,6 +36,7 @@
 14. 自訂 Workflow
 15. 自訂 Workflow：狀態機編輯器
 16. URL Hash 路由（重新整理與 Deep Link）
+17. Document（文件收錄）
 - 附錄 A 狀態代碼對照
 - 附錄 B 工單生命週期範例
 
@@ -235,6 +236,26 @@ workflows
   created_at / updated_at
 ```
 
+文件收錄另有兩張表（第 17 章）：
+
+```
+document_categories
+  id            UUID / 主鍵
+  name          類別名稱，唯一（Prototype、Undefined 為預設）
+  created_by    建立者帳號 ID
+  created_at
+
+documents
+  id            UUID / 主鍵
+  project_id    所屬專案；可空，未分類文件為空（專案視野）
+  category_id   所屬類別（必填）
+  title         文件標題
+  content       文件內容（Markdown 文字）
+  source        文件來源（v1 只有 manual；未來自動收錄以其來源值標記）
+  created_by    建立者帳號 ID
+  created_at / updated_at
+```
+
 上表為綱要而非最終 DDL；欄位型別、索引與拆解子單的關聯方式（一個需求拆成多張開發單時，父子工單如何連結）在實作第一期定案，見第 10 章。
 
 帳號與會話另有兩張表（第 11 章）：
@@ -318,6 +339,7 @@ api_keys
 - 值班來源的工單若只需處置、不需開發，是否走完整開發鏈，還是允許在特定狀態直接交付。
 - 操作介面形式：先以 API 加簡單列表頁面，還是一開始就做完整的工單看板。
 - 通知方式：狀態轉換後是否主動通知下一手負責人，透過哪個頻道。—— PM 監控（第 13 章）已回答其中一半：卡住偵測與提醒狀態由 server 提供，發送由 PM 值班 Agent 負責；其他狀態轉換的主動通知仍待定。
+- 文件自動收錄：目前平台不產生任何檔案，Document 第一版只收手動歸檔的文件。未來若「產生規格書」那一步真的產出規格書檔案，由該功能以 `source='spec_generation'` 歸檔進 Document，還是維持手動歸檔，待拍板。
 
 ---
 
@@ -720,3 +742,82 @@ Detail hash 同時帶 ticket id（`#/ticket/<id>`），重新整理後重新載�
 ### 測試
 
 `server/viewHash.test.js`（8 項）：每個檢視的 hash 來回對照、無 id 的 detail 退回列表、空 hash 與未知路徑回 null、每個 Admin tab 都有 hash 對照（與 `ADMIN_TABS` 交叉檢查）、`gateView` 三種擋下情況。路由的實際重新整理／上一頁／下一頁行為沒有瀏覽器測試基礎設施，留待 Tester／Reviewer 在真機上驗。
+
+## 17. Document（文件收錄）
+
+> 本章實作於工單 abe5fa10（新增 Document 功能）。
+
+### 盤點：平台目前產什麼文件
+
+實作前先盤點現有會產文件的功能，結果是：**平台目前不產生任何檔案**。
+
+- 全程式碼搜尋 download／export／Blob／`createObjectURL`，沒有任何下載或匯出功能。
+- 範本流程裡的「產生規格書」只是一個 workflow 狀態名稱（`spec_generation`，範本流程 A／B）：那一步是人的工作（「Write the spec, then deliver it」），沒有任何程式碼產出規格書檔案。
+- README 與本設計文件是 repo 檔案，不是平台產生的文件。
+- 最接近「平台產出文件」的東西是工單的交接／轉換紀錄（資料庫裡的文字），不是檔案。
+
+### 第一版收錄範圍（取捨）
+
+因為沒有自動產生的文件可收，第一版 Document 是一個**歸檔櫃**：文件由人歸檔進來（表單填標題、選類別、貼內容，或上傳 .md／.txt 檔由瀏覽器讀進內容欄），統一列在 Document 頁、可瀏覽、可下載。沒有發明任何文件來源，也沒有把不存在的生成功能寫進來。
+
+- 收錄：手動歸檔的文件（`source='manual'`）。`source` 欄位預留給未來：若「產生規格書」那一步真的產出檔案，由該功能以自己的 `source` 值歸檔進來（第 10 章未決事項）。
+- 不收：工單交接紀錄（那是工單歷史，在 Ticket detail 已可查）、README／設計文件（repo 檔案，不進資料庫）。
+
+### 資料模型
+
+Migration 015（`db/migrations/015_create_documents.sql`，冪等）：
+
+- `document_categories`：`id`、`name`（唯一）、`created_by`、`created_at`。預設兩類 Prototype、Undefined 由 migration 以 `INSERT ... SELECT ... WHERE NOT EXISTS` 種入，重跑不重複。
+- `documents`：`id`、`project_id`（可空，未分類；刪專案時 SET NULL，與工單一致）、`category_id`（必填，指向類別）、`title`、`content`（Markdown 文字）、`source`（預設 `'manual'`）、`created_by`、`created_at`／`updated_at`。
+
+內容存在資料庫 TEXT 欄位，不另建檔案儲存：平台全部狀態本來就在 PostgreSQL 裡，文件跟著走，不用再管一個檔案層；下載時由後端把存的內容渲染成 .md 檔回傳。
+
+類別是全域的（不分專案）：一張共用的類別表，任一專案新增的類別在各專案都看得到。第一版這樣最簡單；若日後類別需要分專案，再拆。
+
+### 權限
+
+| 動作 | 誰可以 |
+| --- | --- |
+| 瀏覽／下載 | 任何登入帳號，專案範圍與工單一致（被指派到某專案的帳號只看得到該專案的文件，未分類文件對其不在範圍內） |
+| 歸檔文件、新增類別、刪除文件 | PM 或 Admin（與建立專案同一個規則：文件是需整理的流程產物） |
+| Prototype「實作」按鈕 | 只有 PM（因為開單本身就是 PM 專屬，見下） |
+
+### 端點
+
+| Method | Endpoint | 說明 |
+| --- | --- | --- |
+| `GET` | `/api/document-categories` | 全部類別（依名稱排序，Prototype 在 Undefined 之前） |
+| `POST` | `/api/document-categories` | 新增類別（PM 或 Admin；重名回 409 `category_name_taken`） |
+| `GET` | `/api/documents?project_id=<id\|none>&category_id=<id>` | 文件列表（專案＋類別篩選；被指派帳號只看得到自己專案的） |
+| `POST` | `/api/documents` | 歸檔文件（PM 或 Admin；類別不存在回 400 `unknown_category`，專案不存在回 400 `unknown_project`） |
+| `GET` | `/api/documents/:id` | 單一文件 |
+| `DELETE` | `/api/documents/:id` | 刪除文件（PM 或 Admin） |
+| `GET` | `/api/documents/:id/download` | 下載：`text/markdown`，`Content-Disposition: attachment`，檔名由標題產生（見下） |
+
+### 下載
+
+檔名由標題產生（`server/documents.js` 的 `slugifyTitle`）：小寫、連續非字母數字合併為一個 `-`、最長 80 字元；中文等 Unicode 字母保留（中文標題仍可讀），無可用字元時退回 `document.md`。回應同時帶 `filename="document.md"` 與 RFC 5987 的 `filename*=UTF-8''...`，非 ASCII 標題也能正確下載。前端以下載 blob 的方式觸發（`fetch` 帶 Bearer token → `createObjectURL` → `<a download>`），權杖不進網址。
+
+列表回傳即含完整內容（不另開單一文件端點取內容），面板點標題展開就看得到；文件是文字、量級不大，這是第一版的簡化，文件變大時再拆。
+
+### Prototype「實作」按鈕
+
+Prototype 類別的文件在列表有一顆「實作」按鈕（只有 PM 看得到可按的狀態；非 PM 看到的是停用按鈕加說明，沿用 New ticket 表單的做法）。按下後前端直接呼叫既有的 `POST /api/tickets` 開單，不另寫開單邏輯：
+
+- 標題：`實作 Prototype：<文件標題>`。
+- 描述：來源文件區塊（文件標題、類別、文件 ID、文件頁面連結 `<origin>/#/documents`、專案）＋文件完整內容。工單帶著文件全文，實作者從工單本身就能讀到 Prototype；工單定格的是按下按鈕當下的文件內容，文件之後若改，連結指向的是最新版。
+- 專案：文件的所屬專案（未分類文件開出的工單亦為未分類）；不指定 workflow，開出的工單走內建流程，與 New ticket 不選 workflow 時一致。
+- 開單成功後直接導到新工單的 detail 頁。
+
+### 前端
+
+- 側邊欄頂層新增 Documents 入口（所有登入帳號都看得到），檢視為 `documents`、hash 為 `#/documents`（第 16 章的路由對照已補）。
+- `src/DocumentsPanel.tsx`：列表（類別篩選＋專案篩選、點標題展開看內容）、＋ icon 新增類別、歸檔表單（標題、類別、專案、內容，可上傳 .md／.txt 檔讀進內容欄、上傳時標題未填則以檔名預填）、每列下載／實作（Prototype）／刪除按鈕。面板自己管資料載入（沿用 AdminPanel 的做法）；App 頁首的 Refresh 按鈕透過 `refreshKey` 觸發面板重載。
+- 類別篩選在前端做（列表已按專案載入），切換類別不需再打 API。
+
+### 測試
+
+- `server/documents.test.js`（14 項）：檔名 slug（ASCII、中文、無可用字元、超長截斷）、類別列表順序、新增類別（PM 成功、重名 409、engineer 403、缺名 400）、歸檔文件（PM／Admin 成功、engineer 403、缺標題／缺類別／未知類別／未知專案皆 400）、列表篩選（專案、類別、合併、未分類）與被指派帳號的範圍（含 `none` 篩選被指派覆蓋）、單一文件讀取（404、跨專案 403）、刪除（403、404、跨專案 403）、下載檔名與 404。
+- `server/migrations.test.js` 補 015 檢查（兩張表、Prototype／Undefined 種子、種子有 `WHERE NOT EXISTS` 保護）。
+- `server/viewHash.test.js` 補 `#/documents` 來回對照與 `gateView` 不擋 Documents。
+- 前端編輯器／列表沒有瀏覽器測試基礎設施，實際點按（歸檔、上傳、＋ icon 新增類別、下載、實作開單後導到新工單）留待 Tester／Reviewer 在真機上驗。

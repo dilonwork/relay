@@ -221,6 +221,17 @@ async function main() {
     assert.ok(sql.includes('END IF;'), '014: guard must close with END IF');
   });
 
+  await ok('migration 015 creates documents and document_categories, seeded with Prototype and Undefined', async () => {
+    const sql = readMigration('015_create_documents.sql');
+    assert.ok(sql.includes('CREATE TABLE IF NOT EXISTS document_categories'), '015: missing document_categories table');
+    assert.ok(sql.includes('CREATE UNIQUE INDEX IF NOT EXISTS idx_document_categories_name'), '015: missing category name unique index');
+    assert.ok(sql.includes('CREATE TABLE IF NOT EXISTS documents'), '015: missing documents table');
+    assert.ok(sql.includes('category_id UUID NOT NULL REFERENCES document_categories(id)'), '015: missing documents.category_id FK');
+    assert.ok(sql.includes("SELECT 'Prototype', 'system'"), '015: missing Prototype seed');
+    assert.ok(sql.includes("SELECT 'Undefined', 'system'"), '015: missing Undefined seed');
+    assert.ok(sql.includes('WHERE NOT EXISTS (SELECT 1 FROM document_categories WHERE name = '), '015: seeds must be guarded by WHERE NOT EXISTS so re-runs are safe');
+  });
+
   console.log(`\n${passed} migration tests passed.`);
 }
 

@@ -28,6 +28,7 @@ function ok(name, fn) {
     assert.equal(viewToHash('admin-users'), '#/admin/users');
     assert.equal(viewToHash('admin-workflows'), '#/admin/workflows');
     assert.equal(viewToHash('admin-keys'), '#/admin/keys');
+    assert.equal(viewToHash('documents'), '#/documents');
     assert.equal(viewToHash('detail', 'abc-123'), '#/ticket/abc-123');
   });
 
@@ -48,6 +49,7 @@ function ok(name, fn) {
       ['#/admin/users', 'admin-users', null],
       ['#/admin/workflows', 'admin-workflows', null],
       ['#/admin/keys', 'admin-keys', null],
+      ['#/documents', 'documents', null],
       ['#/ticket/abc-123', 'detail', 'abc-123'],
     ];
     for (const [hash, view, selectedId] of cases) {
@@ -57,7 +59,7 @@ function ok(name, fn) {
   });
 
   await ok('empty and unknown hashes parse to null', () => {
-    for (const hash of ['', '#', '#/', '#/nonsense', '#/admin', '#/admin/bogus', '#/tickets', '#/tickets/bogus', '#/ticket', '#/ticket/', '#/dashboard/extra', '#/new/extra']) {
+    for (const hash of ['', '#', '#/', '#/nonsense', '#/admin', '#/admin/bogus', '#/tickets', '#/tickets/bogus', '#/ticket', '#/ticket/', '#/dashboard/extra', '#/new/extra', '#/documents/extra']) {
       assert.equal(hashToView(hash), null, `${hash} should be null`);
     }
   });
@@ -86,6 +88,8 @@ function ok(name, fn) {
     assert.deepEqual(gateView('detail', 'abc-123', true, true), { view: 'detail', selectedId: 'abc-123' });
     assert.deepEqual(gateView('dashboard', null, false, false), { view: 'dashboard', selectedId: null });
     assert.deepEqual(gateView('tickets-gantt', null, false, false), { view: 'tickets-gantt', selectedId: null });
+    // Documents is open to every signed-in user: no role gate.
+    assert.deepEqual(gateView('documents', null, false, false), { view: 'documents', selectedId: null });
   });
 
   console.log(`${passed} view hash tests passed.`);

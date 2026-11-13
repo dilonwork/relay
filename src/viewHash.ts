@@ -5,7 +5,8 @@
 // served from /) and no backend change is needed.
 //
 // Hash format: '#/dashboard', '#/tickets/list', '#/tickets/gantt',
-// '#/new', '#/projects', '#/admin/overview|users|workflows|keys',
+// '#/new', '#/projects', '#/documents',
+// '#/admin/overview|users|workflows|keys',
 // '#/ticket/<id>' for the ticket detail. Anything else (empty hash,
 // unknown segments) parses to null and the caller falls back to
 // Dashboard.
@@ -24,6 +25,7 @@ export type MainView =
   | 'tickets-gantt'
   | 'new'
   | 'projects'
+  | 'documents'
   | AdminView
   | 'detail';
 
@@ -44,6 +46,8 @@ export function viewToHash(view: MainView, selectedId?: string | null): string {
       return '#/new';
     case 'projects':
       return '#/projects';
+    case 'documents':
+      return '#/documents';
     case 'detail':
       // A detail without a ticket id is not a view — fall back to the
       // list, so refresh can never land on a detail with no ticket.
@@ -79,6 +83,7 @@ export function hashToView(hash: string): { view: MainView; selectedId: string |
   }
   if (first === 'new' && segments.length === 1) return { view: 'new', selectedId: null };
   if (first === 'projects' && segments.length === 1) return { view: 'projects', selectedId: null };
+  if (first === 'documents' && segments.length === 1) return { view: 'documents', selectedId: null };
   if (first === 'admin' && segments.length === 2) {
     if ((ADMIN_HASH_TABS as readonly string[]).includes(second)) {
       return { view: `admin-${second}` as MainView, selectedId: null };

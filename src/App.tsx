@@ -8,6 +8,7 @@ import { gateView, hashToView, viewToHash } from './viewHash';
 import type { MainView } from './viewHash';
 import AdminPanel from './AdminPanel';
 import Dashboard from './Dashboard';
+import DocumentsPanel from './DocumentsPanel';
 import NewTicketForm from './NewTicketForm';
 import ProjectsPanel from './ProjectsPanel';
 import TicketDetail from './TicketDetail';
@@ -21,6 +22,8 @@ import TicketList from './TicketList';
 // 'dashboard' is the default landing page (project overview).
 // Tickets has two sub-pages, reached from the sidebar group:
 // 'tickets-list' (All tickets) and 'tickets-gantt' (Gantt).
+// Documents is the filing cabinet for the platform's documents
+// (design doc ch. 17): one top-level view, '#/documents'.
 // Admin likewise has four sub-pages, reached from the sidebar Admin
 // group: 'admin-overview', 'admin-users', 'admin-workflows' and
 // 'admin-keys' (see src/adminNav.ts); the Admin page itself has no
@@ -54,6 +57,9 @@ export default function App() {
   // Which Tickets sub-page a ticket detail was opened from, so going
   // back returns there instead of always to the list.
   const [ticketsReturnView, setTicketsReturnView] = useState<'tickets-list' | 'tickets-gantt'>('tickets-list');
+  // Documents (design doc ch. 17) refresh: the panel owns its data,
+  // so the header Refresh button bumps this key and the panel reloads.
+  const [documentsRefreshKey, setDocumentsRefreshKey] = useState(0);
   const [tab, setTab] = useState('all');
   const [ganttTickets, setGanttTickets] = useState<Ticket[]>([]);
   const [journeys, setJourneys] = useState<Record<string, string[]>>({});
@@ -803,6 +809,14 @@ export default function App() {
             <span className="nav-icon" aria-hidden="true">+</span>
             <span className="nav-label">New ticket</span>
           </button>
+          <button
+            className={mainView === 'documents' ? 'active' : ''}
+            onClick={() => setMainView('documents')}
+            title="Documents"
+          >
+            <span className="nav-icon" aria-hidden="true">▧</span>
+            <span className="nav-label">Documents</span>
+          </button>
           {canManageProjects && (
             <button
               className={mainView === 'projects' ? 'active' : ''}
@@ -913,6 +927,7 @@ export default function App() {
           onClick={() => {
             if (mainView === 'dashboard') loadDashboard();
             else if (mainView === 'tickets-gantt') loadGantt();
+            else if (mainView === 'documents') setDocumentsRefreshKey((k) => k + 1);
             else loadTickets(tab);
             if (selectedId) loadDetail(selectedId);
           }}
@@ -935,6 +950,18 @@ export default function App() {
         <AdminPanel
           tab={adminTabForView(mainView) || 'overview'}
           onTabChange={(t: AdminTab) => setMainView(adminViewForTab(t))}
+        />
+      ) : mainView === 'documents' ? (
+        <DocumentsPanel
+          projects={projects}
+          projectFilter={projectFilter}
+          onProjectFilterChange={setProjectFilter}
+          isPm={isPm}
+          canMutate={canManageProjects}
+          refreshKey={documentsRefreshKey}
+          onOpenTicket={openTicket}
+          onError={setError}
+          onNotice={setNotice}
         />
       ) : mainView === 'projects' && canManageProjects ? (
         <ProjectsPanel

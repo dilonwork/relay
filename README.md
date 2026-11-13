@@ -110,6 +110,7 @@ relay/
 │   ├── TicketDetail.tsx  # ticket detail view with transition history
 │   ├── NewTicketForm.tsx # create-ticket form
 │   ├── ProjectsPanel.tsx # project list / create project
+│   ├── DocumentsPanel.tsx # document list / categories / file a document / implement a prototype
 │   ├── WorkflowsPanel.tsx # workflow list / state machine editor / set active
 │   ├── workflowQuickCreate.ts # quick-create builder: rows to a linear flow (shared with the server tests)
 │   ├── adminNav.ts        # Admin sub-pages: tab ↔ view mapping shared by the sidebar and AdminPanel (server-tested)
@@ -125,6 +126,7 @@ relay/
 │   ├── stateMachine.js   # definition-driven state machine; built-in 14 states, 20 legal transitions, role checks
 │   ├── workflowExamples.js # the three example flows (spec with/without confirmation, incident), test fixtures
 │   ├── tickets.js        # ticket service: create / transition / history / claim queue
+│   ├── documents.js      # document service: file / list / categories / download
 │   ├── projects.js       # project service
 │   ├── workflows.js      # workflow service: CRUD, active workflow, role maps
 │   ├── monitor.js        # PM stall monitor: detect stalled tickets, reminder state
@@ -139,11 +141,12 @@ relay/
 │   ├── monitor.test.js
 │   ├── workflows.test.js
 │   ├── workflowQuickCreate.test.js
+│   ├── documents.test.js
 │   ├── adminNav.test.js
 │   ├── viewHash.test.js
 │   └── migrations.test.js
 ├── db/
-│   └── migrations/       # schema as SQL migrations (001-014)
+│   └── migrations/       # schema as SQL migrations (001-015)
 ├── doc/
 │   └── design.md         # design document (Traditional Chinese)
 ├── screenshots/          # README screenshots (see screenshots/README.md)
@@ -194,7 +197,7 @@ account or password anywhere in the code.
 ## Layout
 
 - **Left sidebar:** a dark sidebar holds the module navigation —
-  Dashboard, Tickets, New ticket, Projects (PM or Admin only)
+  Dashboard, Tickets, New ticket, Documents, Projects (PM or Admin only)
   and Admin (admin only) — plus a project filter, the
   signed-in user's name, username and role badges, and Log out. Tickets is an expandable group
   with two sub-pages, All tickets and Gantt; the group stays active on
@@ -212,14 +215,15 @@ account or password anywhere in the code.
   default view; Tickets holds the ticket list (All tickets sub-page, with
   the Claimable queue tab and the project filter) and the Gantt timeline
   (Gantt sub-page), and the ticket creation entry; New ticket is the
-  create form; Projects is the project list; Workflows is the workflow
+  create form; Documents is the filing cabinet for the platform's
+  documents (see [Documents](#documents)); Projects is the project list; Workflows is the workflow
   manager (see [Workflows](#workflows)); Admin is the admin area (see [Admin](#admin)).
 - **Ticket detail is its own view:** clicking a ticket (from the list, a
   Gantt bar or the claimable queue) opens the detail view with its full
   transition history and handoff notes; a back link returns to the
   Tickets sub-page it came from.
 - **URL-hash routing:** every view has a URL hash (`#/dashboard`,
-  `#/tickets/list`, `#/tickets/gantt`, `#/new`, `#/projects`,
+  `#/tickets/list`, `#/tickets/gantt`, `#/new`, `#/documents`, `#/projects`,
   `#/admin/overview|users|workflows|keys`, `#/ticket/<id>`), so refresh
   and a pasted link land on the same sub-page, and Back/Forward step
   through views. The hash is not a permission — a non-admin opening an
@@ -242,10 +246,12 @@ way, including the three-layer role-map fallback and the delete rules.
 Custom workflow definitions are covered too: the three example flows
 are walked end to end (including the backward move), the definition
 validator's rules are tested case by case, and the migration files are
-tested for the 001→014 sequence.
+tested for the 001→015 sequence. The document service is tested the
+same way, including the filename slug, the project scope rules and the
+download filename.
 
-168 tests in total: state machine 21, tickets 31, projects 7, auth 14,
-admin 7, API keys 6, monitor 17, workflows 25, quick-create builder 11, admin nav 5, view hash 8, migrations 13, role lists 3.
+183 tests in total: state machine 21, tickets 31, projects 7, auth 14,
+admin 7, API keys 6, monitor 17, workflows 25, quick-create builder 11, documents 14, admin nav 5, view hash 8, migrations 14, role lists 3.
 
 ## Accounts & authentication
 
@@ -431,6 +437,40 @@ each sub-page owns its own form state and handlers.
   account sees only its own project's workflows plus the global
   default; cross-project reads answer 403 `out_of_scope`.
 
+## Documents
+
+- **Filing cabinet:** Documents collects the documents the platform
+  produces, in one place. An inventory for this feature found the
+  platform currently generates no files at all — no download or export
+  code, and 「產生規格書」 is only a workflow state label, not a
+  generator — so v1 is a registry: documents are filed here by hand
+  (title, category, Markdown content) and downloaded from here.
+- **Categories:** two defaults ship with the system, Prototype and
+  Undefined. The + icon next to the category filter adds more; a
+  category is stored in the database, not in frontend state, so it
+  survives refresh. Categories are global, not per-project.
+- **Filing a document:** the File a document form takes a title, a
+  category, a project (or Uncategorized) and Markdown content; a
+  .md / .txt file can be uploaded instead and its text lands in the
+  content field (the title is pre-filled from the file name when it is
+  still empty). Filing, adding a category and deleting a document are
+  PM or Admin; anyone signed in may browse and download, within their
+  project scope.
+- **Download:** each document has a Download button; the stored
+  Markdown is rendered as a `.md` file whose name comes from the title
+  (lowercase, dashes, Unicode letters kept, capped at 80 characters).
+- **Prototype → implement:** a Prototype document has a 實作 button
+  (PM only, because ticket creation is PM only). It opens a new ticket
+  from the prototype via the existing `POST /api/tickets`: the title is
+  `實作 Prototype：<document title>`, and the description carries the
+  document reference (title, category, document id, a link back to the
+  Documents page) plus the document's full content, so the implementer
+  can read the prototype from the ticket itself. On success the app
+  navigates to the new ticket's detail view. No workflow is named, so
+  the ticket follows the built-in flow.
+- **Endpoints:** see the API table (`/api/documents`,
+  `/api/document-categories`, `/api/documents/:id/download`).
+
 ## Gantt view
 
 - **Gantt tab:** next to the ticket list, the Gantt tab shows every
@@ -488,6 +528,13 @@ log records the role actually exercised.
 | `GET` | `/api/projects` | List projects with ticket counts |
 | `POST` | `/api/projects` | Create a project (PM or Admin) |
 | `GET` | `/api/projects/:id` | One project |
+| `GET` | `/api/document-categories` | All categories, by name (seeded Prototype, Undefined) |
+| `POST` | `/api/document-categories` | Add a category (PM or Admin; duplicate name answers 409 `category_name_taken`) |
+| `GET` | `/api/documents?project_id=<id\|none>&category_id=<id>` | List documents, optionally filtered by project and category; an assigned caller only sees their project's documents |
+| `POST` | `/api/documents` | File a document (PM or Admin; `title`, `category_id`, optional `project_id`, `content`) |
+| `GET` | `/api/documents/:id` | One document; reading another project's document is rejected 403 `out_of_scope` for an assigned caller |
+| `GET` | `/api/documents/:id/download` | Download the document as a `.md` file (filename from the title) |
+| `DELETE` | `/api/documents/:id` | Delete a document (PM or Admin) |
 | `GET` | `/api/workflows?project_id=<id>` | List workflows (project's plus the global default); an assigned caller only sees their project's workflows plus the default |
 | `GET` | `/api/workflows/:id` | One workflow; reading another project's workflow is rejected 403 `out_of_scope` for an assigned caller |
 | `POST` | `/api/workflows` | Create a workflow (admin only; `name`, `project_id`, `roles`) |

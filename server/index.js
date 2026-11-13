@@ -5,6 +5,7 @@ const cors = require('cors');
 const db = require('./database');
 const { legalTransitions, legalTransitionsFor } = require('./stateMachine');
 const tickets = require('./tickets');
+const documents = require('./documents');
 const monitor = require('./monitor');
 const projects = require('./projects');
 const workflows = require('./workflows');
@@ -414,6 +415,116 @@ app.post('/api/projects/:id/active-workflow', async (req, res) => {
     });
     if (!result.ok) return res.status(result.status).json({ error: result.error, message: result.message });
     res.json({ workflow: result.workflow, is_default: result.is_default });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- Document endpoints (design doc ch. 17) ---
+// Documents filed in the platform, with user-defined categories.
+// Reads are project-scoped like the ticket reads (an account assigned
+// to one project only sees that project's documents); filing a
+// document, adding a category or deleting one is PM or Admin, and the
+// service enforces it. Download renders the stored markdown content
+// as a .md file on the fly — there is no file store.
+app.get('/api/document-categories', async (req, res) => {
+  try {
+    res.json(await documents.listDocumentCategories(db));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/document-categories', async (req, res) => {
+  try {
+    const result = await documents.createDocumentCategory(db, {
+      actorId: req.user.id,
+      actorRoles: req.user.roles,
+      name: req.body ? req.body.name : undefined,
+    });
+    if (!result.ok) return res.status(result.status).json({ error: result.error, message: result.message });
+    res.status(201).json(result.category);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/documents', async (req, res) => {
+  try {
+    const projectId = req.query.project_id ? String(req.query.project_id).trim() : undefined;
+    const categoryId = req.query.category_id ? String(req.query.category_id).trim() : undefined;
+    if (req.user.project_id && projectId && projectId !== 'none' && projectId !== req.user.project_id) {
+      return res.status(403).json({ error: 'out_of_scope', message: 'This project is not the one you are assigned to.' });
+    }
+    res.json(await documents.listDocuments(db, {
+      projectId,
+      categoryId,
+      assignedProjectId: req.user.project_id,
+    }));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/documents', async (req, res) => {
+  try {
+    const result = await documents.createDocument(db, {
+      actorId: req.user.id,
+      actorRoles: req.user.roles,
+      title: req.body ? req.body.title : undefined,
+      categoryId: req.body ? req.body.category_id : undefined,
+      projectId: req.body ? req.body.project_id : undefined,
+      content: req.body ? req.body.content : undefined,
+      source: req.body ? req.body.source : undefined,
+    });
+    if (!result.ok) return res.status(result.status).json({ error: result.error, message: result.message });
+    res.status(201).json(result.document);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Download renders the stored markdown as a .md file. The filename
+// comes from the title (the service slugifies it); the RFC 5987
+// filename* carries non-ASCII titles, with a plain ASCII fallback.
+app.get('/api/documents/:id/download', async (req, res) => {
+  try {
+    const result = await documents.downloadDocument(db, req.params.id, {
+      assignedProjectId: req.user.project_id,
+    });
+    if (!result.ok) return res.status(result.status).json({ error: result.error, message: result.message });
+    res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="document.md"; filename*=UTF-8''${encodeURIComponent(result.filename)}`
+    );
+    res.send(result.document.content);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/documents/:id', async (req, res) => {
+  try {
+    const result = await documents.getDocument(db, req.params.id, {
+      assignedProjectId: req.user.project_id,
+    });
+    if (!result.ok) return res.status(result.status).json({ error: result.error, message: result.message });
+    res.json(result.document);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/documents/:id', async (req, res) => {
+  try {
+    const result = await documents.deleteDocument(db, req.params.id, {
+      actorId: req.user.id,
+      actorRoles: req.user.roles,
+      assignedProjectId: req.user.project_id,
+    });
+    if (!result.ok) return res.status(result.status).json({ error: result.error, message: result.message });
+    res.json(result.document);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
