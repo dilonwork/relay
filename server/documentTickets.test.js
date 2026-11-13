@@ -7,6 +7,7 @@ const assert = require('node:assert/strict');
 const {
   PROTOTYPE_FLOW_NAME,
   buildImplementTicket,
+  buildImplementTicketPayload,
   buildReplanTicket,
   findPrototypeFlow,
   isValidReplanReason,
@@ -45,6 +46,24 @@ const origin = 'http://129.146.97.44:3000';
   await ok('Implement: empty content falls back to (No content)', () => {
     const payload = buildImplementTicket({ ...doc, content: '' }, 'Relay', origin);
     assert.ok(payload.description.includes('(No content)'));
+  });
+
+  await ok('Implement payload: the ticket inherits the document project (ticket 8f52044c)', () => {
+    const payload = buildImplementTicketPayload(doc, 'Relay', origin);
+    assert.equal(payload.project_id, 'proj-1');
+    assert.equal(payload.source, 'project');
+    // Title and description are the same as buildImplementTicket.
+    const text = buildImplementTicket(doc, 'Relay', origin);
+    assert.equal(payload.title, text.title);
+    assert.equal(payload.description, text.description);
+  });
+
+  await ok('Implement payload: a document with no project opens a ticket with no project', () => {
+    const payload = buildImplementTicketPayload({ ...doc, project_id: null }, 'Unassigned', origin);
+    assert.equal(payload.project_id, null);
+    assert.equal(payload.source, 'project');
+    assert.equal(payload.title, 'Implement Prototype: Gantt prototype');
+    assert.ok(payload.description.includes('Project: Unassigned'));
   });
 
   await ok('Re-plan: title says re-plan, description leads with the reason', () => {

@@ -251,18 +251,21 @@ way, including the three-layer role-map fallback and the delete rules.
 Custom workflow definitions are covered too: the three example flows
 are walked end to end (including the backward move), the definition
 validator's rules are tested case by case, and the migration files are
-tested for the 001→017 sequence. The document service is tested the
-same way, including the filename slug, the project scope rules and the
-download filename. Document ticket payloads are tested too — the Implement
+tested for the 001→018 sequence. The document service is tested the
+same way, including the filename slug, the project scope rules, the
+project ownership (project_id stored and returned, the list filters by
+project, unassigned documents show as Unassigned, the agent upload
+accepts an omitted project_id) and the download filename. Document ticket payloads are tested too — the Implement
 payload is locked byte-identical and the Not OK re-planning payload carries
-the reason and a link back to the source document — and document rendering
+the reason and a link back to the source document, and the Implement
+ticket inherits the document's project — and document rendering
 is covered (type detection from title extension and content, Markdown
 rendering with raw HTML escaped, the sandbox flag). Gantt helpers are
 covered as pure functions: search filtering, status-chip counts,
 grouping, the zoom window, and the 36-hour stalled rule.
 
-243 tests in total: state machine 21, tickets 32, projects 7, auth 15,
-admin 7, API keys 6, monitor 18, workflows 26, quick-create builder 11, documents 22, document tickets 10, document render 18, gantt helpers 14, admin nav 5, view hash 8, migrations 19, role lists 4.
+249 tests in total: state machine 21, tickets 32, projects 7, auth 15,
+admin 7, API keys 6, monitor 18, workflows 26, quick-create builder 11, documents 24, document tickets 12, document render 18, gantt helpers 14, admin nav 5, view hash 8, migrations 21, role lists 4.
 
 ## Accounts & authentication
 
