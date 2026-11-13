@@ -333,6 +333,7 @@ api_keys
 - 角色共八種：七個流程角色（PM、Leader、工程師、Reviewer、Tester、Deployer、UI&UX）加一個管理者角色（`admin`）。管理者不是流程角色，不能用來切工單狀態。
 - 一個帳號可同時持有多個角色，例如工程師兼 Reviewer。轉換時系統檢查帳號是否持有該轉換要求的角色；持有任一符合的角色即可，不需切換身分。
 - 帳號可停用：停用後無法登入，既有會話立即失效。
+- 資料庫層也鎖角色清單：`users.roles` 有 CHECK 約束 `users_roles_check`，只允許上述八種角色的子集。UI&UX 角色由 migration 014 補進 CHECK（工單 45e47047）——f5d2020 只改了 JS 常數，漏了 DB CHECK，導致建 ui_ux 帳號在 live DB 被擋；003 就地更新為完整八種清單，014 在既有資料庫上 DROP＋ADD（有 guard，見第 15 章 migration 011 的寫法）。
 
 ### 密碼
 
@@ -626,11 +627,12 @@ states：非空、code 為小寫 snake_case 且唯一、label 非空、恰一個
 - `workflowQuickCreate.test.js`：`buildLinearFlow`——三狀態線性串接（起點／終態、第一條 pickup）、兩狀態、少於兩個拒絕、空白 label 略過、中文 label 以 `state_N` 為 code、code 碰撞加後綴、非終態缺角色拒絕、終態角色忽略、transition 角色與 from-state 一致、輸入不被改動；產生的定義皆通過伺服器驗證。
 - `tickets.test.js`：開單帶 workflow（起點、稽核列、404／400）、三條流程走完＋退回＋cancel、佇列自訂 pickup 規則；預設流程既有測試全過。
 - `monitor.test.js`：自訂流程通用 stalled 規則（工作狀態卡住、佇列／終態不卡住、30 分鐘門檻）、內建清單不變。
-- `migrations.test.js`：001／002 無狀態 CHECK、011 仍重加 14 狀態 CHECK、012 移除三約束且不重加、013 欄位與 seed 內容等於內建 definition。
+- `migrations.test.js`：001／002 無狀態 CHECK、011 仍重加 14 狀態 CHECK、012 移除三約束且不重加、013 欄位與 seed 內容等於內建 definition；003 與 014 的 `users.roles` CHECK 皆為完整八種角色、014 的 DROP＋ADD 在 guard 內（已有違規列時跳過、不卡住啟動）。
 
 ### 備註
 
 - 未驗證：前端編輯器未做瀏覽器實點驗證（無瀏覽器）；migration 012／013 未在 live PostgreSQL 上實際執行（本機無資料庫），合併部署前應在 VM 臨時 scratch 資料庫驗證 001→013 依序套用與全新建表，絕對不要碰 live 資料庫。
+- migration 014 已在 VM 臨時 scratch 資料庫驗證（工單 45e47047）：全新庫 001→014 依序套用、8 種角色帳號皆可建、違規角色仍被擋、重跑冪等；舊庫升級路徑（舊 003 建庫 → ui_ux 被擋重現 → 套用 014 → ui_ux 可建 → 含 ui_ux 列重跑冪等）皆通過；scratch 庫已刪除，未碰 live 資料庫。migration 014 尚未在 live DB 執行，部署後應在 live DB 驗證可建 ui_ux 帳號，UI&UX 值班設定才能繼續。
 - 第 14 章的「自訂 Workflow」現指「專案的角色對照」；本章的「狀態機編輯器」指「workflow 自身的 states／transitions」。兩者共用 `workflows` 表：roles map 是第 14 章的層，states／transitions 是本章加的層。
 
 ---
