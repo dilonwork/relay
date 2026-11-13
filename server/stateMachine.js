@@ -46,7 +46,7 @@ const STATUSES = [
 
 const TERMINAL_STATUSES = ['delivered', 'cancelled'];
 
-const ROLES = ['pm', 'leader', 'engineer', 'reviewer', 'tester', 'deployer'];
+const ROLES = ['pm', 'leader', 'engineer', 'reviewer', 'tester', 'deployer', 'ui_ux'];
 
 // Display labels for the built-in states (same wording as the frontend's
 // STATUS_LABELS). A workflow definition carries its own labels for its
@@ -197,7 +197,7 @@ function legalTransitions() {
 
 // The role recorded for an attempt that has no applicable transition
 // rule: the actor's first workflow role, or 'pm' when they hold none.
-// (The audit table requires one of the six workflow roles; 'admin' alone
+// (The audit table requires one of the seven workflow roles; 'admin' alone
 // is not a workflow role, so it can never be the role of a transition.)
 function attemptedRoleFallback(actorRoles) {
   const roles = Array.isArray(actorRoles) ? actorRoles : [];

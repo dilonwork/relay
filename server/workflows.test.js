@@ -551,6 +551,26 @@ async function main() {
     }
   });
 
+  await ok('validateWorkflowDefinition: a ui_ux prototype state validates', async () => {
+    const check = workflows.validateWorkflowDefinition({
+      states: [
+        { code: 'requirement', label: 'Requirement', sort_order: 0, is_start: true, is_terminal: false },
+        { code: 'prototype', label: 'Prototype', sort_order: 1, is_start: false, is_terminal: false },
+        { code: 'delivered', label: 'Delivered', sort_order: 2, is_start: false, is_terminal: true },
+      ],
+      transitions: [
+        { from: 'requirement', to: 'prototype', role: 'pm', requiresReason: false, requiresHandoff: false, kind: 'forward', selfCheck: false },
+        { from: 'prototype', to: 'delivered', role: 'ui_ux', requiresReason: false, requiresHandoff: false, kind: 'pickup', selfCheck: false },
+      ],
+      roles: {
+        requirement: { role: 'pm', responsibilities: 'Describe the requirement, then send it to prototyping.' },
+        prototype: { role: 'ui_ux', responsibilities: 'Build the prototype so the user can see the feature early.' },
+        delivered: { role: null, responsibilities: 'Terminal state. The work is delivered; no further action.' },
+      },
+    });
+    assert.equal(check.ok, true, check.message || '');
+  });
+
   await ok('validateWorkflowDefinition: structural failures are rejected with invalid_workflow', async () => {
     const base = examples.FLOW_WITH_CONFIRMATION;
     const bad = (mutate) => {

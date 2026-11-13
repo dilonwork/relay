@@ -278,6 +278,16 @@ async function main() {
     assert.deepEqual(updated.user.roles, ['engineer', 'reviewer', 'tester']);
   });
 
+  await ok('ui_ux is a valid account role', async () => {
+    const db = new FakeDb();
+    const created = await auth.createUser(db, {
+      username: 'ux', password: 'correct horse battery staple', displayName: 'Ux', roles: ['ui_ux'],
+    });
+    assert.equal(created.ok, true, JSON.stringify(created));
+    assert.deepEqual(created.user.roles, ['ui_ux']);
+    assert.equal(await auth.countUsers(db), 1);
+  });
+
   await ok('public user data carries the assigned project (null when unassigned)', async () => {
     const db = new FakeDb();
     const created = await auth.createUser(db, {
