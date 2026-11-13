@@ -79,6 +79,11 @@ export const HTML_PREVIEW_SANDBOX = 'allow-scripts';
 // ordinary Markdown (headings, lists, tables, code) renders
 // normally. walkTokens runs on every token, block and inline, so
 // both kinds of HTML are caught.
+//
+// Link and image hrefs are sanitized the same way (see sanitizeHref):
+// marked's cleanUrl only does encodeURI and does not block dangerous
+// protocols, so a [click](javascript:alert(1)) in a filed document
+// would execute JS in the app origin when clicked.
 function escapeHtml(value: string): string {
   return value
     .replace(/&/g, '&amp;')
@@ -87,10 +92,53 @@ function escapeHtml(value: string): string {
     .replace(/"/g, '&quot;');
 }
 
+// Decode the entities an attacker can use to hide a dangerous
+// protocol from a plain-text check: numeric decimal (&#106;) and hex
+// (&#x6A;) entities, with or without the trailing semicolon, plus the
+// named entities that produce a colon or whitespace (&colon;, &Tab;,
+// &NewLine;). Decoding happens before the protocol comparison in
+// sanitizeHref, so &#106;avascript: is judged as javascript:.
+function decodeEntities(value: string): string {
+  return String(value || '')
+    .replace(/&#(?:x([0-9a-fA-F]+)|(\d+));?/g, (_m, hex, dec) => {
+      const code = parseInt(hex ?? dec, hex ? 16 : 10);
+      return Number.isFinite(code) && code >= 0 && code <= 0x10ffff
+        ? String.fromCodePoint(code)
+        : '';
+    })
+    .replace(/&colon;?/gi, ':')
+    .replace(/&tab;?/gi, '\t')
+    .replace(/&newline;?/gi, '\n');
+}
+
+// Sanitize a link or image href against stored XSS. The allowlist:
+// links may use http / https / mailto, or be relative or an anchor;
+// images may additionally use data:image/*. Everything else
+// (javascript:, vbscript:, data:text/html, any other protocol) is
+// replaced with '#'. Before the protocol check, entities are decoded
+// and ASCII control characters and whitespace are stripped, then the
+// scheme is lowercased, so &#106;avascript:, java<TAB>script: and
+// JaVaScRiPt: are all judged as javascript:. A href with no scheme
+// at all is relative or an anchor and passes unchanged.
+export function sanitizeHref(href: string, allowDataImage: boolean): string {
+  const raw = String(href || '');
+  const cleaned = decodeEntities(raw).replace(/[\u0000-\u0020\u007f]/g, '').toLowerCase();
+  const scheme = cleaned.match(/^([a-z][a-z0-9+.-]*):/);
+  if (!scheme) return raw;
+  const protocol = scheme[1];
+  if (protocol === 'http' || protocol === 'https' || protocol === 'mailto') return raw;
+  if (allowDataImage && protocol === 'data' && cleaned.startsWith('data:image/')) return raw;
+  return '#';
+}
+
 marked.use({
   walkTokens(token) {
     if (token.type === 'html') {
       token.text = escapeHtml(token.text);
+    } else if (token.type === 'link') {
+      token.href = sanitizeHref(token.href, false);
+    } else if (token.type === 'image') {
+      token.href = sanitizeHref(token.href, true);
     }
   },
 });

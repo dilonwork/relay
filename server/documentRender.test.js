@@ -80,6 +80,57 @@ function ok(name, fn) {
     assert.ok(out.includes('&lt;script&gt;'), out);
   });
 
+  await ok('dangerous link hrefs are neutralized (javascript:, vbscript:, data:text/html)', () => {
+    for (const href of [
+      'javascript:alert(1)',
+      'JaVaScRiPt:alert(1)',
+      ' javascript:alert(1)',
+      '&#106;avascript:alert(1)',
+      '&#x6A;avascript:alert(1)',
+      'vbscript:msgbox(1)',
+      'data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==',
+    ]) {
+      const out = render.renderMarkdownToHtml(`[click](${href})`);
+      assert.ok(!/href="javascript:/i.test(out), out);
+      assert.ok(!/href="vbscript:/i.test(out), out);
+      assert.ok(!/href="data:text\/html/i.test(out), out);
+      assert.ok(out.includes('href="#"'), out);
+    }
+  });
+
+  await ok('autolink javascript: hrefs are neutralized', () => {
+    const out = render.renderMarkdownToHtml('<javascript:alert(1)>');
+    assert.ok(!/href="javascript:/i.test(out), out);
+    assert.ok(out.includes('href="#"'), out);
+  });
+
+  await ok('safe link hrefs still work (https, http, mailto, relative, anchor)', () => {
+    const out = render.renderMarkdownToHtml('[a](https://example.com) [b](http://example.com) [c](mailto:hi@example.com) [d](guide/page.html) [e](#section) [f](/docs/guide)');
+    assert.ok(out.includes('<a href="https://example.com">a</a>'), out);
+    assert.ok(out.includes('<a href="http://example.com">b</a>'), out);
+    assert.ok(out.includes('<a href="mailto:hi@example.com">c</a>'), out);
+    assert.ok(out.includes('<a href="guide/page.html">d</a>'), out);
+    assert.ok(out.includes('<a href="#section">e</a>'), out);
+    assert.ok(out.includes('<a href="/docs/guide">f</a>'), out);
+  });
+
+  await ok('image hrefs allow data:image but block javascript:', () => {
+    const out = render.renderMarkdownToHtml('![a](data:image/png;base64,iVBORw0KGgo=) ![b](javascript:alert(1)) ![c](https://example.com/x.png)');
+    assert.ok(out.includes('src="data:image/png;base64,iVBORw0KGgo="'), out);
+    assert.ok(out.includes('src="#"'), out);
+    assert.ok(out.includes('src="https://example.com/x.png"'), out);
+  });
+
+  await ok('sanitizeHref blocks encoded and control-char bypasses', () => {
+    assert.equal(render.sanitizeHref('java\tscript:alert(1)', false), '#');
+    assert.equal(render.sanitizeHref('java\nscript:alert(1)', false), '#');
+    assert.equal(render.sanitizeHref('&#106;avascript:alert(1)', false), '#');
+    assert.equal(render.sanitizeHref('data:text/html,<script>alert(1)</script>', true), '#');
+    assert.equal(render.sanitizeHref('data:image/svg+xml,<svg></svg>', true), 'data:image/svg+xml,<svg></svg>');
+    assert.equal(render.sanitizeHref('https://example.com', false), 'https://example.com');
+    assert.equal(render.sanitizeHref('#section', false), '#section');
+  });
+
   await ok('empty Markdown renders to an empty string', () => {
     assert.equal(render.renderMarkdownToHtml(''), '');
   });

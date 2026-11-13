@@ -261,8 +261,8 @@ rendering with raw HTML escaped, the sandbox flag). Gantt helpers are
 covered as pure functions: search filtering, status-chip counts,
 grouping, the zoom window, and the 36-hour stalled rule.
 
-238 tests in total: state machine 21, tickets 32, projects 7, auth 15,
-admin 7, API keys 6, monitor 18, workflows 26, quick-create builder 11, documents 22, document tickets 10, document render 13, gantt helpers 14, admin nav 5, view hash 8, migrations 19, role lists 4.
+243 tests in total: state machine 21, tickets 32, projects 7, auth 15,
+admin 7, API keys 6, monitor 18, workflows 26, quick-create builder 11, documents 22, document tickets 10, document render 18, gantt helpers 14, admin nav 5, view hash 8, migrations 19, role lists 4.
 
 ## Accounts & authentication
 
