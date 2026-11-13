@@ -810,11 +810,16 @@ export default function App() {
       >
         <span aria-hidden="true">☰</span> Menu
       </button>
+      {/* The page header brands the app; on the Gantt view the brand is
+          redundant (the sidebar already says Relay), so only the Refresh
+          control stays there. Other views keep the full header. */}
       <header>
-        <div>
-          <h1>Relay</h1>
-          <p>Multi-agent ticket system — one pipeline, every handoff recorded.</p>
-        </div>
+        {mainView !== 'tickets-gantt' && (
+          <div>
+            <h1>Relay</h1>
+            <p>Multi-agent ticket system — one pipeline, every handoff recorded.</p>
+          </div>
+        )}
         <button
           className="link"
           onClick={() => {
