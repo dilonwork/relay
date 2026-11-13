@@ -35,7 +35,16 @@
 // 8f52044c): 015 already created all three on a fresh database, so
 // 018 is an idempotent ensure-step, guarded the same way as
 // 011/014/016/017 — the FK is only added when every stored
-// project_id references an existing project.
+// project_id references an existing project. Migration 019 splits
+// users into humans and agents and projects into internal and
+// external (ticket 0f26169c): users.kind ('human' | 'agent',
+// backfilled to agent where the account already has an API key),
+// users.password_hash becomes nullable (agents have no password),
+// projects.type ('internal' | 'external', default internal). 003 is
+// updated in place with the kind column and a nullable
+// password_hash, 007 with the type column; 019 brings existing
+// databases to the same schema, with the same DO-block guard
+// convention for the CHECK adds.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -374,6 +383,74 @@ async function main() {
     assert.ok(dropAt > guardAt, '018: DROP must be inside the guard (after DO $$)');
     assert.ok(addAt > dropAt, '018: ADD must come after DROP');
     assert.ok(sql.includes('END IF;'), '018: guard must close with END IF');
+  });
+
+  await ok('migration 019 adds users.kind with the API-key backfill rule', async () => {
+    const sql = readMigration('019_users_split_humans_agents.sql');
+    assert.ok(sql.includes('ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT \'human\''), '019: missing ADD COLUMN for kind');
+    // Backfill: an existing account becomes an agent when it already
+    // has an API key, otherwise it stays human (the default).
+    assert.ok(sql.includes('UPDATE users SET kind = \'agent\''), '019: missing kind backfill UPDATE');
+    assert.ok(sql.includes('EXISTS (SELECT 1 FROM api_keys k WHERE k.user_id = users.id)'), '019: backfill must check for an existing API key');
+    assert.ok(sql.includes('ADD CONSTRAINT users_kind_check CHECK (kind IN (\'human\', \'agent\'))'), '019: missing kind CHECK');
+  });
+
+  await ok('migration 019 guards the kind CHECK: skips it when a stored kind is outside human/agent', async () => {
+    const sql = readMigration('019_users_split_humans_agents.sql');
+    // Same lesson as 011/014/016/017/018: the server re-runs every
+    // migration on each startup, so an unconditional ADD would fail
+    // on every startup and stop the run. The guard must check stored
+    // kinds before any DROP/ADD runs, and the DROP must be inside the
+    // guard too.
+    assert.ok(sql.includes('DO $$'), '019: DROP+ADD must be inside a DO block guard');
+    assert.ok(
+      sql.includes('FROM users WHERE kind NOT IN (\'human\', \'agent\')'),
+      '019: guard must check stored kind values against human/agent'
+    );
+    const guardAt = sql.indexOf('DO $$');
+    const dropAt = sql.indexOf('DROP CONSTRAINT IF EXISTS users_kind_check');
+    const addAt = sql.indexOf('ADD CONSTRAINT users_kind_check CHECK');
+    assert.ok(dropAt > guardAt, '019: DROP must be inside the guard (after DO $$)');
+    assert.ok(addAt > dropAt, '019: ADD must come after DROP');
+    assert.ok(sql.includes('END IF;'), '019: guard must close with END IF');
+  });
+
+  await ok('migration 019 makes users.password_hash nullable', async () => {
+    const sql = readMigration('019_users_split_humans_agents.sql');
+    assert.ok(sql.includes('ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL'), '019: missing DROP NOT NULL for password_hash');
+  });
+
+  await ok('migration 019 adds projects.type with its CHECK', async () => {
+    const sql = readMigration('019_users_split_humans_agents.sql');
+    assert.ok(sql.includes('ADD COLUMN IF NOT EXISTS type TEXT NOT NULL DEFAULT \'internal\''), '019: missing ADD COLUMN for type');
+    assert.ok(sql.includes('ADD CONSTRAINT projects_type_check CHECK (type IN (\'internal\', \'external\'))'), '019: missing type CHECK');
+  });
+
+  await ok('migration 019 guards the type CHECK: skips it when a stored type is outside internal/external', async () => {
+    const sql = readMigration('019_users_split_humans_agents.sql');
+    assert.ok(sql.includes('DO $$'), '019: DROP+ADD must be inside a DO block guard');
+    assert.ok(
+      sql.includes('FROM projects WHERE type NOT IN (\'internal\', \'external\')'),
+      '019: guard must check stored type values against internal/external'
+    );
+    const dropAt = sql.indexOf('DROP CONSTRAINT IF EXISTS projects_type_check');
+    const addAt = sql.indexOf('ADD CONSTRAINT projects_type_check CHECK');
+    assert.ok(dropAt > sql.indexOf('DO $$'), '019: DROP must be inside the guard (after DO $$)');
+    assert.ok(addAt > dropAt, '019: ADD must come after DROP');
+  });
+
+  await ok('migration 003 creates users with kind and a nullable password_hash (019 updated it)', async () => {
+    const sql = readMigration('003_create_users.sql');
+    assert.ok(sql.includes('password_hash TEXT,'), '003: password_hash must be nullable (no NOT NULL)');
+    assert.ok(!sql.includes('password_hash TEXT NOT NULL'), '003: password_hash must not be NOT NULL');
+    assert.ok(sql.includes('kind TEXT NOT NULL DEFAULT \'human\''), '003: missing kind column');
+    assert.ok(sql.includes('CHECK (kind IN (\'human\', \'agent\'))'), '003: missing kind CHECK');
+  });
+
+  await ok('migration 007 creates projects with type (019 updated it)', async () => {
+    const sql = readMigration('007_create_projects.sql');
+    assert.ok(sql.includes('type TEXT NOT NULL DEFAULT \'internal\''), '007: missing type column');
+    assert.ok(sql.includes('CHECK (type IN (\'internal\', \'external\'))'), '007: missing type CHECK');
   });
 
   console.log(`\n${passed} migration tests passed.`);

@@ -120,9 +120,10 @@ relay/
 │   ├── workflowQuickCreate.ts # quick-create builder: rows to a linear flow (shared with the server tests)
 │   ├── adminNav.ts        # Admin sub-pages: tab ↔ view mapping shared by the sidebar and AdminPanel (server-tested)
 │   ├── viewHash.ts       # URL-hash routing: mainView ↔ location.hash mapping, permission gate (server-tested)
-│   ├── AdminPanel.tsx    # Admin shell: renders the active sub-page (Overview / Users / Workflows / API keys)
+│   ├── AdminPanel.tsx    # Admin shell: renders the active sub-page (Overview / Users / Onboarding / Workflows / API keys)
 │   ├── AdminOverview.tsx # system overview, tickets by status, audit
-│   ├── AdminUsers.tsx    # user list, create/edit, assign project, reset password, workflow responsibilities
+│   ├── AdminUsers.tsx    # Humans/Agents tabs, create/edit, assign project, reset password, workflow responsibilities
+│   ├── OnboardingPanel.tsx # external project onboarding packages (admin only)
 │   ├── AdminApiKeys.tsx  # per-user API key management
 │   └── index.css
 ├── server/               # Express backend (Node.js)
@@ -132,7 +133,8 @@ relay/
 │   ├── workflowExamples.js # the three example flows (spec with/without confirmation, incident), test fixtures
 │   ├── tickets.js        # ticket service: create / transition / history / claim queue
 │   ├── documents.js      # document service: file / list / categories / download
-│   ├── projects.js       # project service
+│   ├── projects.js       # project service (internal/external, role agents on external creation)
+│   ├── onboarding.js     # onboarding packages: live doc from the active workflow + role definitions
 │   ├── workflows.js      # workflow service: CRUD, active workflow, role maps
 │   ├── monitor.js        # PM stall monitor: detect stalled tickets, reminder state
 │   ├── auth.js           # users, scrypt passwords, sessions, API keys, auth middleware
@@ -140,6 +142,7 @@ relay/
 │   ├── stateMachine.test.js
 │   ├── tickets.test.js
 │   ├── projects.test.js
+│   ├── onboarding.test.js
 │   ├── auth.test.js
 │   ├── admin.test.js
 │   ├── apikeys.test.js
@@ -151,7 +154,7 @@ relay/
 │   ├── viewHash.test.js
 │   └── migrations.test.js
 ├── db/
-│   └── migrations/       # schema as SQL migrations (001-018)
+│   └── migrations/       # schema as SQL migrations (001-019)
 ├── doc/
 │   └── design.md         # design document (Traditional Chinese)
 ├── screenshots/          # README screenshots (see screenshots/README.md)
@@ -179,7 +182,7 @@ The backend needs a PostgreSQL database (default name `relay`, see
 not done by the code in this repo; the server creates the `tickets`,
 `ticket_transitions`, `users`, `sessions`, `api_keys`, `projects`,
 `monitor_reminders` and `workflows` tables itself on startup (migrations
-`db/migrations/001-018`).
+`db/migrations/001-019`).
 
 On first run the users table is empty, so the app shows a setup screen:
 create the first admin account there (username, display name, password).
@@ -207,8 +210,8 @@ account or password anywhere in the code.
   signed-in user's name, username and role badges, and Log out. Tickets is an expandable group
   with two sub-pages, All tickets and Gantt; the group stays active on
   either sub-page and while a ticket detail is open. Admin is likewise an
-  expandable group with four sub-pages — Overview, Users, Workflows and
-  API keys — switched from the sidebar; the Admin page itself has no
+  expandable group with five sub-pages — Overview, Users, Onboarding,
+  Workflows and API keys — switched from the sidebar; the Admin page itself has no
   tab switcher. The active module is
   highlighted. A collapse toggle shrinks the sidebar to a 60px icon rail;
   on narrow screens (≤720px) the sidebar is hidden by default and opens
@@ -251,7 +254,7 @@ way, including the three-layer role-map fallback and the delete rules.
 Custom workflow definitions are covered too: the three example flows
 are walked end to end (including the backward move), the definition
 validator's rules are tested case by case, and the migration files are
-tested for the 001→018 sequence. The document service is tested the
+tested for the 001→019 sequence. The document service is tested the
 same way, including the filename slug, the project scope rules, the
 project ownership (project_id stored and returned, the list filters by
 project, unassigned documents show as Unassigned, the agent upload
@@ -262,10 +265,15 @@ ticket inherits the document's project — and document rendering
 is covered (type detection from title extension and content, Markdown
 rendering with raw HTML escaped, the sandbox flag). Gantt helpers are
 covered as pure functions: search filtering, status-chip counts,
-grouping, the zoom window, and the 36-hour stalled rule.
+grouping, the zoom window, and the 36-hour stalled rule. The users
+split is tested too: the migration backfill, agent password-login
+rejection, human key creation and authentication rejection, external
+project creation (one agent per flow role, with keys and onboarding
+packages, rolled back when a role has no free username) and the
+onboarding document regenerating from a live workflow edit.
 
-249 tests in total: state machine 21, tickets 32, projects 7, auth 15,
-admin 7, API keys 6, monitor 18, workflows 26, quick-create builder 11, documents 24, document tickets 12, document render 18, gantt helpers 14, admin nav 5, view hash 8, migrations 21, role lists 4.
+276 tests in total: state machine 21, tickets 32, projects 13, onboarding 6, auth 21,
+admin 7, API keys 8, monitor 18, workflows 26, quick-create builder 11, documents 24, document tickets 12, document render 18, gantt helpers 14, admin nav 5, view hash 8, migrations 28, role lists 4.
 
 ## Accounts & authentication
 
@@ -277,7 +285,11 @@ admin 7, API keys 6, monitor 18, workflows 26, quick-create builder 11, document
   `engineer` + `reviewer`, matching the design doc's rule that one person
   may wear several hats but never review, test or deploy their own work.
   Deactivated accounts cannot log in, and their sessions stop working
-  immediately.
+  immediately. Every account also has a kind, `human` or `agent`:
+  humans log in with a password, agents have no password and
+  authenticate with an API key (see [Users split](#users-split-humans-and-agents)).
+  Accounts with a key backfill to `agent` when the split is applied; an
+  admin corrects a wrong kind in the Users screen.
 - **Passwords:** hashed with Node's built-in `crypto.scrypt` and a
   per-user random salt (`scrypt$<salt>$<hash>`); no hashing dependency.
   Minimum 8 characters. Only hashes are stored, never plaintext.
@@ -302,11 +314,13 @@ admin 7, API keys 6, monitor 18, workflows 26, quick-create builder 11, document
 
 ## Agent access
 
-- **API keys:** an admin issues a key for an account from the Admin
+- **API keys:** an admin issues a key for an agent account from the Admin
   panel (per account: list, create, revoke). A key looks like
   `rl_` + 32 random hex characters and is sent as the `X-API-Key`
   header. Only a scrypt hash of the key is stored; the full key is shown
-  exactly once, when it is created, and is never logged. A key inherits
+  exactly once, when it is created, and is never logged. Keys are
+  agent-only: creating a key for a human account is refused, and a key
+  whose account is human does not authenticate. A key inherits
   its account's roles and is subject to exactly the same role checks,
   self-work check and audit rules as a password session — including the
   rule that a key cannot use admin endpoints unless its account holds the
@@ -358,19 +372,58 @@ admin 7, API keys 6, monitor 18, workflows 26, quick-create builder 11, document
   At most one reminder per ticket per 15-minute cycle. The server has
   no channel to the chat rooms, so it never sends a message itself.
 
+## Users split (humans and agents)
+
+- **Kind:** every account is `human` or `agent` (migration 019).
+  Humans log in with a password; agents have no password and
+  authenticate with an API key. Password login rejects agent accounts
+  with the same generic error as a wrong password; key creation and
+  key authentication reject human accounts. Existing accounts backfill
+  to `agent` when they already have an API key, otherwise `human`; an
+  admin corrects a wrong kind in the Edit form (human → agent clears
+  the password and revokes sessions; agent → human leaves the password
+  empty until an admin resets it).
+- **Users screen:** the Admin Users page splits into Humans and Agents
+  subtabs. Humans show username, display name, roles, project and
+  active, with Edit, Project, Reset password and Responsibilities; they
+  have no key actions and no key column. Agents show username, role,
+  project, API key status, last seen and chat room, with Edit, Keys,
+  Project, Deactivate and Responsibilities; they have no password
+  actions. Creating a human takes a password (min 8 characters) and
+  role checkboxes; creating an agent takes a username, a workflow role
+  and a project (internal projects only, or assign later) and returns
+  its first API key exactly once, in a notice banner with a Copy
+  button. Last seen reuses `api_keys.last_used_at`. The chat room is a
+  display label derived from role + project (`"<Project> <Role>"`) —
+  Relay has no chat system.
+- **Onboarding package:** admin-only, on the Admin Onboarding sub-page
+  (`GET /api/admin/projects/:id/onboarding/:role`). Per role agent it
+  shows the masked API key, a live onboarding document generated from
+  the project's current workflow and role definitions (with a
+  generated-at timestamp and a Regenerate action that re-reads the live
+  definitions — after a workflow edit, Regenerate shows the new
+  definition), and the chat-room recommendation. The document never
+  contains a token; the full key is only shown once, at creation. See
+  the design doc, ch. 18.
+
 ## Admin
 
 The Admin area is only visible to accounts holding the `admin` role. It
-is split into four sub-pages, switched from the sidebar Admin group
+is split into five sub-pages, switched from the sidebar Admin group
 (defaulting to Overview); the shell owns the shared data load, and
 each sub-page owns its own form state and handlers.
 
 - **Overview:** system overview (database health, user count, ticket
   count, transition count), tickets by status, and the most recent audit
   entries.
-- **Users:** user list with create, edit (display name, roles, active
+- **Users:** Humans / Agents subtabs (see [Users split](#users-split-humans-and-agents)):
+  user list with create, edit (display name, roles, kind, active
   flag), project assignment (the Agent assignment dropdown, or
-  unassigned) and password reset (which revokes that user's sessions).
+  unassigned) and password reset (which revokes that user's sessions;
+  refused for agent accounts).
+- **Onboarding:** onboarding packages for external projects, per role
+  agent — masked API key, live onboarding document with Regenerate,
+  and the chat-room recommendation (see [Users split](#users-split-humans-and-agents)).
 - **Workflows:** workflow list and state machine editor (see
   [Workflows](#workflows)); creating, editing, deleting and setting the
   active workflow are admin-only.
@@ -383,7 +436,17 @@ each sub-page owns its own form state and handlers.
 - **Project list:** projects are a formal list every ticket belongs to.
   The PM or an Admin creates a project (name + description); project
   names are unique. A ticket created without a project is
-  *uncategorized* and can be assigned later by the PM.
+  *uncategorized* and can be assigned later by the PM. The list shows
+  each project's type and agent count.
+- **Project types:** a project is `internal` (ours, the default) or
+  `external` (a client project). Creating an external project
+  auto-creates one role agent per role in the configured flow —
+  username `<project-slug>-<role>`, each with its own API key and
+  onboarding package — in a single transaction; for the default flow
+  that is six agents (leader, pm, engineer, reviewer, tester,
+  deployer). The full keys are shown once, in a banner after creation,
+  with a Copy button per key. Creating an internal project creates no
+  agents. See the design doc, ch. 18.
 - **Single-project view:** the ticket list has a project filter (all
   projects / uncategorized / one project). Picking a project shows only
   its tickets, with the project name, description and ticket count on
@@ -394,7 +457,9 @@ each sub-page owns its own form state and handlers.
   `/api/tickets/:id/project`). Creating a project is PM or Admin;
   assigning a ticket is PM only. A duplicate name answers 409
   `project_name_taken`; an unknown project on create or assign answers
-  400 `unknown_project`.
+  400 `unknown_project`; an invalid type answers 400, and an external
+  creation that cannot find a free username for a role answers 409
+  `username_taken` with nothing created.
 
 ## Workflows
 
@@ -590,8 +655,8 @@ log records the role actually exercised.
 | `GET` | `/api/monitor/stalled` | Stalled tickets in the caller's project scope, with reminder state and flags (PM only) |
 | `POST` | `/api/monitor/stalled/:id/reminded` | Record that a reminder was sent for a stalled ticket (PM only) |
 | `POST` | `/api/monitor/stalled/:id/escalated` | Record that a stalled ticket was escalated to the main chat (PM only, after 3 reminders) |
-| `GET` | `/api/projects` | List projects with ticket counts |
-| `POST` | `/api/projects` | Create a project (PM or Admin) |
+| `GET` | `/api/projects` | List projects with ticket counts and agent counts |
+| `POST` | `/api/projects` | Create a project (PM or Admin); `type` internal (default) or external — external auto-creates one role agent per flow role, each with a key and onboarding package |
 | `GET` | `/api/projects/:id` | One project |
 | `GET` | `/api/document-categories` | All categories, by name (seeded Prototype, Undefined) |
 | `POST` | `/api/document-categories` | Add a category (PM or Admin; duplicate name answers 409 `category_name_taken`) |
@@ -608,9 +673,11 @@ log records the role actually exercised.
 | `GET` | `/api/projects/:id/active-workflow` | The workflow in force for a project: `{workflow, is_default}` |
 | `POST` | `/api/projects/:id/active-workflow` | Set a project's active workflow (`workflow_id`, or null to switch back to the default; admin only) |
 | `GET` | `/api/admin/overview` | System overview (admin only) |
-| `GET` | `/api/admin/users` | List accounts (admin only) |
-| `POST` | `/api/admin/users` | Create an account (admin only) |
-| `PATCH` | `/api/admin/users/:id` | Edit display name, roles, active flag (admin only) |
+| `GET` | `/api/admin/users` | List accounts with kind and, for agents, key status (admin only) |
+| `POST` | `/api/admin/users` | Create an account (admin only); accepts `kind` (human default) |
+| `POST` | `/api/admin/users/agents` | Create an agent account with its first API key; full key returned exactly once (admin only) |
+| `PATCH` | `/api/admin/users/:id` | Edit display name, roles, kind, active flag (admin only) |
+| `GET` | `/api/admin/projects/:id/onboarding/:role` | Onboarding package for a role agent: masked key, live document, chat room (admin only) |
 | `PATCH` | `/api/admin/users/:id/project` | Assign an account to a project, or clear the assignment (`project_id` null; admin only) |
 | `POST` | `/api/admin/users/:id/reset-password` | Set a new password, revokes sessions (admin only) |
 | `GET` | `/api/admin/users/:id/api-keys` | List an account's API keys, without hashes (admin only) |

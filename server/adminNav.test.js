@@ -18,10 +18,10 @@ function ok(name, fn) {
 (async () => {
   console.log('admin nav');
 
-  await ok('lists exactly four sub-pages in order', () => {
-    assert.deepEqual(ADMIN_TABS.map((t) => t.key), ['overview', 'users', 'workflows', 'keys']);
-    assert.deepEqual(ADMIN_TABS.map((t) => t.label), ['Overview', 'Users', 'Workflows', 'API keys']);
-    assert.deepEqual(ADMIN_TABS.map((t) => t.view), ['admin-overview', 'admin-users', 'admin-workflows', 'admin-keys']);
+  await ok('lists exactly five sub-pages in order', () => {
+    assert.deepEqual(ADMIN_TABS.map((t) => t.key), ['overview', 'users', 'onboarding', 'workflows', 'keys']);
+    assert.deepEqual(ADMIN_TABS.map((t) => t.label), ['Overview', 'Users', 'Onboarding', 'Workflows', 'API keys']);
+    assert.deepEqual(ADMIN_TABS.map((t) => t.view), ['admin-overview', 'admin-users', 'admin-onboarding', 'admin-workflows', 'admin-keys']);
   });
 
   await ok('every sub-page has a label and an icon', () => {
@@ -46,7 +46,7 @@ function ok(name, fn) {
     assert.equal(adminTabForView(''), null);
   });
 
-  await ok('isAdminView is true only for the four Admin sub-pages', () => {
+  await ok('isAdminView is true only for the five Admin sub-pages', () => {
     for (const t of ADMIN_TABS) assert.equal(isAdminView(t.view), true);
     assert.equal(isAdminView('dashboard'), false);
     assert.equal(isAdminView('tickets-list'), false);

@@ -1,0 +1,335 @@
+// Relay onboarding package unit tests (no live database needed).
+// Run: node server/onboarding.test.js
+// The service is tested against an in-memory FakeDb implementing the same
+// { query, withTransaction } interface as server/database.js.
+const assert = require('node:assert/strict');
+const auth = require('./auth.js');
+const onboarding = require('./onboarding.js');
+const workflows = require('./workflows.js');
+const sm = require('./stateMachine.js');
+
+let passed = 0;
+function ok(name, fn) {
+  return Promise.resolve()
+    .then(fn)
+    .then(() => { passed++; console.log(`  ✓ ${name}`); })
+    .catch((err) => { console.error(`  ✗ ${name}\n    ${err.message}`); process.exitCode = 1; });
+}
+
+// In-memory stand-in for the pg pool: understands exactly the SQL statements
+// the onboarding service (and the workflow/project services it calls)
+// issue, nothing else.
+class FakeDb {
+  constructor() {
+    this.projects = [];
+    this.users = [];
+    this.apiKeys = [];
+    this.workflows = [];
+    this.seq = 0;
+  }
+
+  _norm(sql) {
+    return sql.replace(/\s+/g, ' ').trim();
+  }
+
+  seedProject(name, type) {
+    const p = {
+      id: `test-project-${++this.seq}`,
+      name,
+      description: '',
+      type: type || 'external',
+      created_by: 'admin-1',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    this.projects.push(p);
+    return p;
+  }
+
+  seedDefaultWorkflow() {
+    const w = {
+      id: 'test-workflow-default',
+      name: 'Default',
+      project_id: null,
+      roles: workflows.DEFAULT_WORKFLOW_ROLES,
+      states: sm.BUILTIN_STATES,
+      transitions: sm.BUILTIN_DEFINITION.transitions,
+      is_default: true,
+      is_active: false,
+      created_by: 'system',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    this.workflows.push(w);
+    return w;
+  }
+
+  async query(text, params = []) {
+    const sql = this._norm(text);
+
+    if (/^SELECT \* FROM projects WHERE id = \$1/.test(sql)) {
+      const p = this.projects.find((x) => x.id === params[0]);
+      return { rows: p ? [{ ...p }] : [] };
+    }
+    if (sql.startsWith('SELECT * FROM users WHERE LOWER(username) = LOWER($1)')) {
+      const u = this.users.find((x) => x.username.toLowerCase() === String(params[0]).toLowerCase());
+      return { rows: u ? [{ ...u, roles: [...u.roles] }] : [] };
+    }
+    if (sql.startsWith('SELECT * FROM users WHERE id = $1')) {
+      const u = this.users.find((x) => x.id === params[0]);
+      return { rows: u ? [{ ...u, roles: [...u.roles] }] : [] };
+    }
+    if (sql.startsWith('SELECT * FROM users WHERE kind = \'agent\' AND project_id = $1')) {
+      const matches = this.users
+        .filter((u) => u.kind === 'agent' && u.project_id === params[0])
+        .sort((a, b) => (a.created_at < b.created_at ? -1 : 1));
+      return { rows: matches.map((u) => ({ ...u, roles: [...u.roles] })) };
+    }
+    if (sql.startsWith('INSERT INTO users')) {
+      const u = {
+        id: `test-user-${++this.seq}`,
+        username: params[0],
+        password_hash: params[1],
+        display_name: params[2],
+        roles: [...params[3]],
+        kind: params[4],
+        project_id: params[5] || null,
+        is_active: true,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+      this.users.push(u);
+      return { rows: [{ ...u, roles: [...u.roles] }] };
+    }
+    if (sql.startsWith('INSERT INTO api_keys')) {
+      const k = {
+        id: `test-key-${++this.seq}`,
+        user_id: params[0],
+        name: params[1],
+        key_hash: params[2],
+        key_prefix: params[3],
+        created_at: new Date().toISOString(),
+        last_used_at: null,
+        revoked_at: null,
+      };
+      this.apiKeys.push(k);
+      return { rows: [{ ...k }] };
+    }
+    if (sql.startsWith('SELECT * FROM api_keys WHERE user_id = $1 AND revoked_at IS NULL')) {
+      const matches = this.apiKeys
+        .filter((k) => k.user_id === params[0] && !k.revoked_at)
+        .sort((a, b) => (a.created_at < b.created_at ? -1 : 1));
+      return { rows: matches.map((k) => ({ ...k })) };
+    }
+    if (sql.startsWith('SELECT * FROM workflows WHERE project_id = $1 AND is_active = true')) {
+      const w = this.workflows.find((x) => x.project_id === params[0] && x.is_active);
+      return { rows: w ? [{ ...w }] : [] };
+    }
+    if (sql.startsWith('SELECT * FROM workflows WHERE is_default = true')) {
+      const w = this.workflows.find((x) => x.is_default);
+      return { rows: w ? [{ ...w }] : [] };
+    }
+    if (sql.startsWith('SELECT * FROM workflows WHERE id = $1')) {
+      const w = this.workflows.find((x) => x.id === params[0]);
+      return { rows: w ? [{ ...w }] : [] };
+    }
+    if (sql.startsWith('INSERT INTO workflows')) {
+      const w = {
+        id: `test-workflow-${++this.seq}`,
+        name: params[0],
+        project_id: params[1],
+        roles: JSON.parse(params[2]),
+        states: JSON.parse(params[3]),
+        transitions: JSON.parse(params[4]),
+        created_by: params[5],
+        is_default: false,
+        is_active: false,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+      this.workflows.push(w);
+      return { rows: [{ ...w }] };
+    }
+    if (sql.startsWith('UPDATE workflows SET is_active = false WHERE project_id = $1')) {
+      for (const w of this.workflows) {
+        if (w.project_id === params[0] && w.is_active) w.is_active = false;
+      }
+      return { rows: [] };
+    }
+    if (sql.startsWith('UPDATE workflows SET is_active = true WHERE id = $1')) {
+      const w = this.workflows.find((x) => x.id === params[0]);
+      if (!w) return { rows: [] };
+      w.is_active = true;
+      w.updated_at = new Date().toISOString();
+      return { rows: [{ ...w }] };
+    }
+    if (sql.startsWith('UPDATE workflows SET name = $1')) {
+      const w = this.workflows.find((x) => x.id === params[4]);
+      if (!w) return { rows: [] };
+      w.name = params[0];
+      w.roles = JSON.parse(params[1]);
+      w.states = JSON.parse(params[2]);
+      w.transitions = JSON.parse(params[3]);
+      w.updated_at = new Date().toISOString();
+      return { rows: [{ ...w }] };
+    }
+    throw new Error(`FakeDb: unhandled query: ${sql}`);
+  }
+
+  async withTransaction(fn) {
+    const snap = JSON.stringify({
+      projects: this.projects,
+      users: this.users,
+      apiKeys: this.apiKeys,
+      workflows: this.workflows,
+    });
+    try {
+      return await fn(this);
+    } catch (err) {
+      const restored = JSON.parse(snap);
+      this.projects = restored.projects;
+      this.users = restored.users;
+      this.apiKeys = restored.apiKeys;
+      this.workflows = restored.workflows;
+      throw err;
+    }
+  }
+}
+
+async function main() {
+  console.log('Relay onboarding package tests:');
+
+  await ok('chatRoomLabel names the role room; unassigned agents say so', async () => {
+    assert.equal(onboarding.chatRoomLabel('Acme Support', 'engineer'), 'Acme Support Engineer');
+    assert.equal(onboarding.chatRoomLabel('Relay', 'ui_ux'), 'Relay UI&UX');
+    assert.equal(onboarding.chatRoomLabel(null, 'pm'), 'PM (unassigned)');
+    assert.equal(onboarding.chatRoomLabel('', 'tester'), 'Tester (unassigned)');
+  });
+
+  await ok('flowRolesFromDefinition returns distinct roles in state order', async () => {
+    // The built-in default flow: the roles map assigns each state the
+    // role of its first outgoing transition.
+    assert.deepEqual(
+      workflows.flowRolesFromDefinition({
+        states: sm.BUILTIN_STATES,
+        roles: workflows.DEFAULT_WORKFLOW_ROLES,
+      }),
+      ['leader', 'pm', 'engineer', 'reviewer', 'tester', 'deployer']
+    );
+    assert.deepEqual(
+      workflows.flowRolesFromDefinition({
+        states: [{ code: 'a' }, { code: 'b' }, { code: 'c' }],
+        roles: { a: { role: 'pm' }, b: { role: 'pm' }, c: { role: null } },
+      }),
+      ['pm']
+    );
+    assert.deepEqual(workflows.flowRolesFromDefinition(null), []);
+    assert.deepEqual(workflows.flowRolesFromDefinition({}), []);
+  });
+
+  await ok('buildOnboardingDocument generates a live doc for an external project role', async () => {
+    const db = new FakeDb();
+    const project = db.seedProject('Acme Support', 'external');
+    db.seedDefaultWorkflow();
+    const doc = await onboarding.buildOnboardingDocument(db, { projectId: project.id, role: 'engineer' });
+    assert.equal(doc.ok, true, JSON.stringify(doc));
+    assert.equal(doc.project.name, 'Acme Support');
+    assert.equal(doc.role, 'engineer');
+    assert.equal(doc.role_label, 'Engineer');
+    assert.equal(doc.workflow_name, 'Default');
+    assert.equal(doc.chat_room, 'Acme Support Engineer');
+    assert.deepEqual(doc.states.map((s) => s.code), ['pending_dev', 'in_dev']);
+    assert.ok(doc.document.generated_at, 'generated-at timestamp present');
+    assert.ok(doc.document.markdown.includes('# Onboarding — Engineer · Acme Support'));
+    assert.ok(doc.document.markdown.includes('**Flow:** Default'));
+    assert.ok(doc.document.markdown.includes(`**Generated:** ${doc.document.generated_at}`));
+    assert.ok(doc.document.markdown.includes('Check the queue every 5 minutes'));
+    assert.ok(doc.document.markdown.includes('**Pending dev** — Pick up the ticket and start development.'));
+    assert.ok(doc.document.markdown.includes('**In dev** — Implement the plan, then hand it over for review with a handoff note.'));
+    assert.ok(doc.document.markdown.includes('Open the **Acme Support Engineer** chat room'));
+    assert.ok(!doc.document.markdown.includes('rl_'), 'the document never contains a token');
+  });
+
+  await ok('the package returns the agent, its masked key and the live doc', async () => {
+    const db = new FakeDb();
+    const project = db.seedProject('Acme Support', 'external');
+    db.seedDefaultWorkflow();
+    const agent = await auth.createAgent(db, {
+      username: 'acme-support-engineer', displayName: 'Acme Support Engineer', role: 'engineer', projectId: project.id,
+    });
+    assert.equal(agent.ok, true, JSON.stringify(agent));
+    const pkg = await onboarding.getOnboardingPackage(db, { projectId: project.id, role: 'engineer' });
+    assert.equal(pkg.ok, true, JSON.stringify(pkg));
+    assert.equal(pkg.agent.username, 'acme-support-engineer');
+    assert.equal(pkg.agent.kind, 'agent');
+    assert.equal(pkg.role_label, 'Engineer');
+    assert.equal(pkg.chat_room, 'Acme Support Engineer');
+    // The key is masked, never the full key: only the prefix is shown.
+    assert.ok(pkg.key, 'an active key exists');
+    assert.equal(pkg.key.masked, `${pkg.key.key_prefix}…`);
+    assert.equal('key' in pkg.key, false);
+    assert.ok(!pkg.document.markdown.includes(agent.key), 'the document never contains the token');
+    assert.ok(pkg.document.markdown.includes('**In dev**'));
+  });
+
+  await ok('Regenerate reflects a workflow edit', async () => {
+    const db = new FakeDb();
+    const project = db.seedProject('Acme Support', 'external');
+    db.seedDefaultWorkflow();
+    // A project workflow, set active: the package follows it, not the default.
+    const created = await workflows.createWorkflow(db, {
+      actorId: 'admin-1', actorRoles: ['admin'], name: 'Acme flow', projectId: project.id,
+      roles: workflows.DEFAULT_WORKFLOW_ROLES,
+      states: sm.BUILTIN_STATES,
+      transitions: sm.BUILTIN_DEFINITION.transitions,
+    });
+    assert.equal(created.ok, true, JSON.stringify(created));
+    const setActive = await workflows.setActiveWorkflow(db, {
+      actorId: 'admin-1', actorRoles: ['admin'], projectId: project.id, workflowId: created.workflow.id,
+    });
+    assert.equal(setActive.ok, true, JSON.stringify(setActive));
+    const before = await onboarding.buildOnboardingDocument(db, { projectId: project.id, role: 'engineer' });
+    assert.equal(before.ok, true, JSON.stringify(before));
+    assert.equal(before.workflow_name, 'Acme flow');
+    assert.ok(before.document.markdown.includes('Pick up the ticket and start development.'));
+    assert.ok(!before.document.markdown.includes('UPDATED RESPONSIBILITY'));
+    // Edit the workflow: change one responsibilities sentence.
+    const editedRoles = JSON.parse(JSON.stringify(workflows.DEFAULT_WORKFLOW_ROLES));
+    editedRoles.pending_dev.responsibilities = 'UPDATED RESPONSIBILITY: pick up and start.';
+    const updated = await workflows.updateWorkflow(db, created.workflow.id, {
+      actorId: 'admin-1', actorRoles: ['admin'], roles: editedRoles,
+    });
+    assert.equal(updated.ok, true, JSON.stringify(updated));
+    // Regenerate (the same call again) re-reads the live definitions.
+    const after = await onboarding.buildOnboardingDocument(db, { projectId: project.id, role: 'engineer' });
+    assert.equal(after.ok, true, JSON.stringify(after));
+    assert.ok(after.document.markdown.includes('UPDATED RESPONSIBILITY: pick up and start.'));
+    assert.ok(!after.document.markdown.includes('Pick up the ticket and start development.'));
+  });
+
+  await ok('internal projects, unknown projects and unknown roles are rejected; a missing agent is 404', async () => {
+    const db = new FakeDb();
+    const internal = db.seedProject('Relay', 'internal');
+    const external = db.seedProject('Acme Support', 'external');
+    db.seedDefaultWorkflow();
+    const notExternal = await onboarding.buildOnboardingDocument(db, { projectId: internal.id, role: 'engineer' });
+    assert.equal(notExternal.ok, false);
+    assert.equal(notExternal.status, 400);
+    assert.equal(notExternal.error, 'not_external');
+    const unknownProject = await onboarding.buildOnboardingDocument(db, { projectId: 'no-such-project', role: 'engineer' });
+    assert.equal(unknownProject.ok, false);
+    assert.equal(unknownProject.status, 400);
+    assert.equal(unknownProject.error, 'unknown_project');
+    const badRole = await onboarding.buildOnboardingDocument(db, { projectId: external.id, role: 'superuser' });
+    assert.equal(badRole.ok, false);
+    assert.equal(badRole.status, 400);
+    const noAgent = await onboarding.getOnboardingPackage(db, { projectId: external.id, role: 'engineer' });
+    assert.equal(noAgent.ok, false);
+    assert.equal(noAgent.status, 404);
+    assert.equal(noAgent.error, 'agent_not_found');
+  });
+
+  console.log(`\n${passed} onboarding package tests passed.`);
+}
+
+main();

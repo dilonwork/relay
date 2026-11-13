@@ -132,6 +132,28 @@ function normalizeWorkflow(row) {
   };
 }
 
+// The roles a workflow needs one agent each for: the distinct
+// non-null roles in its roles map, in the workflow's state order
+// (terminal states have role null and contribute nothing). Used by
+// external project creation (one role agent per flow role, ticket
+// 0f26169c) and by the onboarding package. For the built-in default
+// flow that is pm, leader, engineer, reviewer, tester, deployer —
+// six roles; a custom flow's roles are whatever its map assigns.
+function flowRolesFromDefinition(definition) {
+  if (!definition || typeof definition !== 'object') return [];
+  const roles = definition.roles || {};
+  const codes = Array.isArray(definition.states)
+    ? definition.states.map((s) => s.code)
+    : Object.keys(roles);
+  const seen = [];
+  for (const code of codes) {
+    const entry = roles[code];
+    const role = entry && typeof entry === 'object' ? entry.role : entry;
+    if (typeof role === 'string' && role && !seen.includes(role)) seen.push(role);
+  }
+  return seen;
+}
+
 // A workflow definition as the state machine consumes it: the states,
 // the transitions and the roles map, all parsed. The roles in the
 // returned definition are the roles map's roles (state -> role).
@@ -563,6 +585,21 @@ async function deleteWorkflow(db, id, { actorId, actorRoles, assignedProjectId }
   return { ok: true, status: 200, workflow: normalizeWorkflow(row) };
 }
 
+// The default workflow's definition: the seeded default row when it
+// exists, otherwise the built-in definition (the seed has not run
+// yet). Used where no project exists yet — external project creation
+// derives the new project's role agents from the configured flow,
+// which for a brand-new project is always the default flow.
+async function getDefaultWorkflowDefinition(db) {
+  const { rows } = await db.query('SELECT * FROM workflows WHERE is_default = true LIMIT 1');
+  if (rows[0]) return definitionFromRow(rows[0]);
+  return {
+    states: sm.BUILTIN_STATES,
+    transitions: sm.BUILTIN_DEFINITION.transitions,
+    roles: DEFAULT_WORKFLOW_ROLES,
+  };
+}
+
 // The workflow in force for a project: its active workflow, otherwise
 // the global default. When the database has no default row yet (the
 // seed has not run), the built-in default is synthesized so callers
@@ -707,8 +744,10 @@ module.exports = {
   validateRolesMap,
   validateWorkflowDefinition,
   normalizeDefinition,
+  flowRolesFromDefinition,
   definitionFromRow,
   getWorkflowDefinition,
+  getDefaultWorkflowDefinition,
   definitionForTicket,
   createWorkflow,
   listWorkflows,

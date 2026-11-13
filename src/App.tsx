@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, getToken, onUnauthorized, setToken } from './api';
-import type { LegalTransition, Project, QueueEntry, Ticket, TicketWithHistory, User, Workflow } from './api';
+import type { LegalTransition, Project, QueueEntry, RoleAgent, Ticket, TicketWithHistory, User, Workflow } from './api';
 import { QUEUE_TABS, ROLE_LABELS, countTicketsByProject, isTerminalFor, journeyFromTransitions, stateLabelFor, statusLabel, targetsForUser } from './helpers';
 import { ADMIN_TABS, adminTabForView, adminViewForTab, isAdminView } from './adminNav';
 import type { AdminTab } from './adminNav';
@@ -93,6 +93,11 @@ export default function App() {
   const [projectFilter, setProjectFilter] = useState('all');
   const [newProjectName, setNewProjectName] = useState('');
   const [newProjectDescription, setNewProjectDescription] = useState('');
+  const [newProjectType, setNewProjectType] = useState('internal');
+  // Role agents created with the last external project, with each
+  // API key shown exactly once (cleared when the admin closes the
+  // box or creates another project).
+  const [createdAgents, setCreatedAgents] = useState<RoleAgent[] | null>(null);
   const [assignProjectId, setAssignProjectId] = useState('');
 
   const [loginUsername, setLoginUsername] = useState('');
@@ -491,10 +496,18 @@ export default function App() {
       const created = await api.createProject({
         name: newProjectName,
         description: newProjectDescription,
+        type: newProjectType,
       });
       setNewProjectName('');
       setNewProjectDescription('');
-      setNotice(`Project created: ${created.name}`);
+      setNewProjectType('internal');
+      if (created.agents.length > 0) {
+        setCreatedAgents(created.agents);
+        setNotice(`Project created: ${created.project.name} with ${created.agents.length} role agents. Copy their API keys now — each is shown only once.`);
+      } else {
+        setCreatedAgents(null);
+        setNotice(`Project created: ${created.project.name}`);
+      }
       await loadProjects();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create project.');
@@ -969,10 +982,14 @@ export default function App() {
           projectFilter={projectFilter}
           newProjectName={newProjectName}
           newProjectDescription={newProjectDescription}
+          newProjectType={newProjectType}
+          createdAgents={createdAgents}
           busy={busy}
           onNewProjectNameChange={setNewProjectName}
           onNewProjectDescriptionChange={setNewProjectDescription}
+          onNewProjectTypeChange={setNewProjectType}
           onCreateProject={handleCreateProject}
+          onClearCreatedAgents={() => setCreatedAgents(null)}
           onSelectProject={selectProject}
         />
       ) : mainView === 'new' ? (
