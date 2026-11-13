@@ -146,7 +146,7 @@ relay/
 │   ├── viewHash.test.js
 │   └── migrations.test.js
 ├── db/
-│   └── migrations/       # schema as SQL migrations (001-015)
+│   └── migrations/       # schema as SQL migrations (001-017)
 ├── doc/
 │   └── design.md         # design document (Traditional Chinese)
 ├── screenshots/          # README screenshots (see screenshots/README.md)
@@ -174,7 +174,7 @@ The backend needs a PostgreSQL database (default name `relay`, see
 not done by the code in this repo; the server creates the `tickets`,
 `ticket_transitions`, `users`, `sessions`, `api_keys`, `projects`,
 `monitor_reminders` and `workflows` tables itself on startup (migrations
-`db/migrations/001-014`).
+`db/migrations/001-017`).
 
 On first run the users table is empty, so the app shows a setup screen:
 create the first admin account there (username, display name, password).
@@ -246,12 +246,12 @@ way, including the three-layer role-map fallback and the delete rules.
 Custom workflow definitions are covered too: the three example flows
 are walked end to end (including the backward move), the definition
 validator's rules are tested case by case, and the migration files are
-tested for the 001→015 sequence. The document service is tested the
+tested for the 001→017 sequence. The document service is tested the
 same way, including the filename slug, the project scope rules and the
 download filename.
 
-183 tests in total: state machine 21, tickets 31, projects 7, auth 14,
-admin 7, API keys 6, monitor 17, workflows 25, quick-create builder 11, documents 21, admin nav 5, view hash 8, migrations 14, role lists 3.
+201 tests in total: state machine 21, tickets 32, projects 7, auth 15,
+admin 7, API keys 6, monitor 18, workflows 26, quick-create builder 11, documents 22, admin nav 5, view hash 8, migrations 19, role lists 4.
 
 ## Accounts & authentication
 
