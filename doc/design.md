@@ -447,6 +447,13 @@ At first launch, requests carried a self-declared identity from the caller and t
 - The clock is the latest applied transition record (`ticket_transitions`.`created_at`), not `tickets.updated_at`: moving a ticket to another project also updates `updated_at`, and rejected attempts do not move the ticket — neither should reset the clock.
 - Deliberately excluded: `requirement`, `pending_dev`, `pending_review`, `pending_test` (queue states waiting for pickup) and `needs_acceptance_clarification`. The spec lists only the five working states plus needs clarification; if the Leader wants waiting-for-pickup queues monitored too, change one line in `server/monitor.js` (`STALLED_STATES`).
 
+### Stalled on the Gantt (display rule, not the monitor rule)
+
+- Ticket 78462e97 adds a separate, display-only stalled flag on the Gantt view: a ticket in a working state (`decomposing`, `in_dev`, `in_review`, `in_test`, `pending_deploy`) with no transition for 36 hours or more gets an amber border on its bar, a Stalled badge, and can be isolated with the "Stalled only" toggle. It is not the monitor rule: the threshold is 36 hours (not 30 minutes) and `needs_clarification` does not count — on the Gantt a ticket waiting on the PM is waiting, not stuck in someone's hands.
+- The clock is `tickets.updated_at` (every applied transition bumps it), because the Gantt's data carries no transition timestamps. A project move also bumps `updated_at`, so it resets the display clock — unlike the monitor, whose clock is the latest applied transition. A display approximation, documented in `src/helpers.ts` (`isStalledTicket`).
+- Custom workflows follow the monitor's generic rule (Ch. 15): a non-terminal state with no outgoing pickup transition counts as stalled after 36 hours; a state with a pickup transition is a queue and never counts.
+- P2 (row virtualization for 200+ rows) was measured and not built: rendering 300 rows server-side takes ~15 ms (100 rows ~9 ms, 500 rows ~27 ms), so no virtualization is needed at current scale; re-measure if the ticket count grows past 500.
+
 ### Division of labor: the server detects, the on-call agent sends
 
 - The Relay server has no channel into Muse chat rooms, so "notify the role chat room" cannot be done by the server directly. The division is:

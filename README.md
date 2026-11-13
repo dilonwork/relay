@@ -506,6 +506,17 @@ each sub-page owns its own form state and handlers.
 - **Task relations:** the line under each bar is the ticket's status
   journey, read from its transition history; hovering a bar shows the
   journey with times. Clicking a bar opens the ticket detail.
+- **Find quickly:** search-as-you-type over title and ticket id (full
+  UUID or 8-character prefix), status chips (All plus each status,
+  with counts), group by Project or Status, collapsible groups
+  (counts stay visible), timeline zoom 1×–8× (axis ticks follow the
+  visible window).
+- **See weight:** a dashed Today line (toggleable), stalled tickets
+  get an amber bar border and a Stalled badge (working state, 36 hours
+  or more without a transition; "Stalled only" shows just those),
+  density Comfortable (journey line shown) or Compact (tighter rows,
+  journey line hidden). Defaults are unchanged: no filter, project
+  grouping, 1× zoom render exactly what the view showed before.
 - No new endpoint or schema change: the view reuses `GET /api/tickets`
   and `GET /api/tickets/:id` (which returns the transition history).
   Inter-ticket dependencies are out of scope — they would need a new

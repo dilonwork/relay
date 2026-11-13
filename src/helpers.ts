@@ -188,6 +188,132 @@ export function groupGanttTickets(
   return [...byId.values(), uncategorized].filter((g) => g.rows.length > 0);
 }
 
+// Gantt presentation improvements (ticket 78462e97): search, status
+// chips, group-by, zoom, Today line, stalled highlighting, density.
+// All pure, so server/gantt.test.js exercises the exact code the
+// component runs.
+
+// Search-as-you-type: title substring (case-insensitive) or ticket id
+// (full UUID or its 8-character prefix). `status` is 'all' or one
+// status code; both filters combine.
+export function filterGanttTickets(tickets: Ticket[], query: string, status: string): Ticket[] {
+  const q = query.trim().toLowerCase();
+  return tickets.filter((t) => {
+    if (status !== 'all' && t.status !== status) return false;
+    if (!q) return true;
+    return t.title.toLowerCase().includes(q) || t.id.toLowerCase().includes(q);
+  });
+}
+
+// Per-status row counts for the filter chips, from the search-filtered
+// set (before the status filter is applied), so a chip's count is
+// exactly the rows it shows.
+export function countGanttByStatus(tickets: Ticket[]): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const t of tickets) out[t.status] = (out[t.status] || 0) + 1;
+  return out;
+}
+
+// Group Gantt rows by status, in built-in status order, unknown codes
+// last in first-seen order. The group label comes from the first row's
+// workflow, so a custom workflow's own label wins.
+export function groupGanttTicketsByStatus(
+  rows: Ticket[],
+  workflowById?: Map<string, Workflow>
+): { name: string; rows: Ticket[] }[] {
+  const byCode = new Map<string, Ticket[]>();
+  for (const t of rows) {
+    const group = byCode.get(t.status);
+    if (group) group.push(t);
+    else byCode.set(t.status, [t]);
+  }
+  const order = (code: string) => {
+    const i = ALL_STATUSES.indexOf(code);
+    return i === -1 ? ALL_STATUSES.length : i;
+  };
+  return [...byCode.entries()]
+    .sort((a, b) => order(a[0]) - order(b[0]))
+    .map(([code, groupRows]) => {
+      const first = groupRows[0];
+      const workflow = workflowById && first.workflow_id ? workflowById.get(first.workflow_id) : undefined;
+      return { name: stateLabelFor(workflow, code), rows: groupRows };
+    });
+}
+
+// Stalled on the Gantt (display rule, ticket 78462e97): a ticket in a
+// working state with no transition for 36 hours or more. The working
+// set is the PM monitor's STALLED_STATES (server/monitor.js) minus
+// needs_clarification: the monitor reminds the PM about a clarification
+// it owes, but on the Gantt a ticket waiting on the PM is waiting, not
+// stuck in someone's hands — so pending_dev and needs_clarification do
+// not count here. The threshold is 36 hours, not the monitor's
+// 30 minutes: the monitor is a nudge, the Gantt flag is a visual
+// "this has been sitting with someone for a day and a half".
+// For a custom workflow the same rule as the monitor's generic rule
+// applies (design doc ch. 15): a non-terminal state with no outgoing
+// pickup transition — a ticket waiting to be claimed is waiting, not
+// stalled.
+// The clock is tickets.updated_at: every applied transition bumps it
+// (server/tickets.js), and the Gantt's data carries no transition
+// timestamps. A project move also bumps updated_at, so it resets the
+// display clock the same way it does not reset the monitor's
+// applied-transition clock — a display approximation, documented here.
+export const GANTT_STALLED_AFTER_MS = 36 * 60 * 60 * 1000;
+
+export const GANTT_STALLED_STATES = new Set([
+  'decomposing',
+  'in_dev',
+  'in_review',
+  'in_test',
+  'pending_deploy',
+]);
+
+export function isStalledTicket(
+  ticket: Ticket,
+  workflow: Workflow | null | undefined,
+  now: number = Date.now()
+): boolean {
+  if (isTerminalFor(workflow, ticket.status)) return false;
+  if (workflow) {
+    const hasPickup = (workflow.transitions || []).some(
+      (t) => t.from === ticket.status && t.kind === 'pickup'
+    );
+    if (hasPickup) return false;
+  } else if (!GANTT_STALLED_STATES.has(ticket.status)) {
+    return false;
+  }
+  return now - new Date(ticket.updated_at).getTime() >= GANTT_STALLED_AFTER_MS;
+}
+
+// Timeline zoom (ticket 78462e97): 1× shows the full range; z× shows
+// 1/z of it, centred on the range midpoint. The axis ticks and the
+// Today line are computed from the returned window, so they always
+// follow what is visible. Zoom is clamped to 1×–8×.
+export function zoomWindow(range: { min: number; max: number }, zoom: number): { min: number; max: number } {
+  const z = Math.min(8, Math.max(1, zoom || 1));
+  if (z === 1) return { min: range.min, max: range.max };
+  const span = range.max - range.min;
+  const mid = range.min + span / 2;
+  const half = span / z / 2;
+  return { min: mid - half, max: mid + half };
+}
+
+// Bar position against the visible window, in percent of the track
+// width. Null when the bar does not intersect the window at all —
+// the row keeps its label and journey line, only the bar is omitted.
+export function barPositionInWindow(
+  startMs: number,
+  endMs: number,
+  win: { min: number; max: number }
+): { left: number; width: number } | null {
+  const span = win.max - win.min;
+  if (span <= 0) return null;
+  if (endMs < win.min || startMs > win.max) return null;
+  const left = Math.max(0, ((startMs - win.min) / span) * 100);
+  const right = Math.min(100, ((endMs - win.min) / span) * 100);
+  return { left, width: Math.max(0, right - left) };
+}
+
 // Dashboard (default page): ticket counts per project, grouped into
 // three buckets — in progress, waiting, done — computed from
 // GET /api/tickets. Terminal states are done; the active (in-*) states
