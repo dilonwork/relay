@@ -443,7 +443,7 @@ each sub-page owns its own form state and handlers.
 - **Filing cabinet:** Documents collects the documents the platform
   produces, in one place. An inventory for this feature found the
   platform currently generates no files at all — no download or export
-  code, and 「產生規格書」 is only a workflow state label, not a
+  code, and "Generate spec" is only a workflow state label, not a
   generator — so v1 is a registry: documents are filed here by hand
   (title, category, Markdown content) and downloaded from here.
 - **Categories:** two defaults ship with the system, Prototype and
@@ -471,10 +471,10 @@ each sub-page owns its own form state and handlers.
 - **Download:** each document has a Download button; the stored
   Markdown is rendered as a `.md` file whose name comes from the title
   (lowercase, dashes, Unicode letters kept, capped at 80 characters).
-- **Prototype → implement:** a Prototype document has a 實作 button
+- **Prototype → implement:** a Prototype document has an Implement button
   (PM only, because ticket creation is PM only). It opens a new ticket
   from the prototype via the existing `POST /api/tickets`: the title is
-  `實作 Prototype：<document title>`, and the description carries the
+  `Implement Prototype: <document title>`, and the description carries the
   document reference (title, category, document id, a link back to the
   Documents page) plus the document's full content, so the implementer
   can read the prototype from the ticket itself. On success the app

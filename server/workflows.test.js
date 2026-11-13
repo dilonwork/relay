@@ -613,7 +613,7 @@ async function main() {
     assert.equal(bad((d) => { d.states[0].is_start = false; }).error, 'invalid_workflow'); // no start
     assert.equal(bad((d) => { d.states[1].is_start = true; }).error, 'invalid_workflow'); // two starts
     assert.equal(bad((d) => { d.states[4].is_terminal = false; }).error, 'invalid_workflow'); // no terminal
-    assert.equal(bad((d) => { d.states.push({ code: 'orphan', label: '孤兒', sort_order: 5, is_start: false, is_terminal: false }); }).error, 'invalid_workflow'); // unreachable + no outgoing
+    assert.equal(bad((d) => { d.states.push({ code: 'orphan', label: 'Orphan', sort_order: 5, is_start: false, is_terminal: false }); }).error, 'invalid_workflow'); // unreachable + no outgoing
     assert.equal(bad((d) => { d.states[1].code = 'Feature Planning'; }).error, 'invalid_workflow'); // bad code
     assert.equal(bad((d) => { d.states[1].code = 'user_requirement'; }).error, 'invalid_workflow'); // duplicate code
     assert.equal(bad((d) => { d.transitions[0].to = 'no_such_state'; }).error, 'invalid_workflow'); // unknown to

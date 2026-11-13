@@ -2,7 +2,7 @@
 -- (ticket abe5fa10; design doc ch. 17): a filing cabinet for the
 -- documents the platform produces. The inventory for this ticket found
 -- the platform currently generates no files at all — no download or
--- export code anywhere, and 「產生規格書」 is only a workflow state
+-- export code anywhere, and "Generate spec" is only a workflow state
 -- label in the example flows, not a generator — so v1 is a registry:
 -- documents are filed here with title, category and markdown content
 -- stored in the database, and download renders the stored content as

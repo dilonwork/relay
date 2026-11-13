@@ -20,9 +20,9 @@ function ok(name, fn) {
 
   await ok('three entries chain into a linear flow with start and terminal', () => {
     const result = buildLinearFlow([
-      { label: '使用者需求', role: 'leader' },
-      { label: '功能規劃', role: 'leader' },
-      { label: '交付', role: 'engineer' },
+      { label: 'User requirement', role: 'leader' },
+      { label: 'Feature planning', role: 'leader' },
+      { label: 'Delivered', role: 'engineer' },
     ]);
     assert.equal(result.ok, true, result.error || '');
     assert.equal(result.states.length, 3);
@@ -97,6 +97,7 @@ function ok(name, fn) {
   });
 
   await ok('labels with no usable characters fall back to state_N codes', () => {
+    // Chinese labels on purpose: they carry no ASCII slug, so codes fall back to state_N.
     const result = buildLinearFlow([
       { label: '使用者需求', role: 'leader' },
       { label: '功能規劃', role: 'leader' },
