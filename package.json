@@ -25,7 +25,7 @@
     "build": "tsc && vite build",
     "dev": "concurrently \"vite\" \"nodemon server/index.js\"",
     "preview": "vite preview",
-    "test": "node server/stateMachine.test.js && node server/tickets.test.js && node server/projects.test.js && node server/auth.test.js && node server/admin.test.js && node server/apikeys.test.js && node server/monitor.test.js && node server/workflows.test.js && node server/workflowQuickCreate.test.js && node server/migrations.test.js"
+    "test": "node server/stateMachine.test.js && node server/tickets.test.js && node server/projects.test.js && node server/auth.test.js && node server/admin.test.js && node server/apikeys.test.js && node server/monitor.test.js && node server/workflows.test.js && node server/workflowQuickCreate.test.js && node server/adminNav.test.js && node server/viewHash.test.js && node server/migrations.test.js"
   },
   "version": "0.0.0"
 }

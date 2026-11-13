@@ -35,6 +35,7 @@
 13. PM 監控（防卡住）
 14. 自訂 Workflow
 15. 自訂 Workflow：狀態機編輯器
+16. URL Hash 路由（重新整理與 Deep Link）
 - 附錄 A 狀態代碼對照
 - 附錄 B 工單生命週期範例
 
@@ -676,3 +677,44 @@ states：非空、code 為小寫 snake_case 且唯一、label 非空、恰一個
 | 13 | Deployer | 部署中 → 已交付 | 部署成功，附版本與驗證結果（經待部署 → 部署中接取） |
 
 範例為流程示意，不對應任何真實工單。省略的接取步驟已在理由欄註明，實際紀錄中每一筆轉換各自成列。
+
+## 16. URL Hash 路由（重新整理與 Deep Link）
+
+> 本章實作於工單 9d562e41（Admin 子頁切換改到側邊欄）的退回修正：Reviewer 指出「重新整理後停在同一子頁」驗收沒做到——App 完全沒有路由機制，`mainView` 是純 React state，重新整理一律回到 Dashboard。Dylan 拍板在該單範圍內直接加路由機制。
+
+### 為什麼選 URL hash，不用 localStorage
+
+localStorage 只能做到同一瀏覽器重新整理，做不到「直接開連結進到對應子頁」；hash 寫進網址才是真正的 deep link。hash 不打到伺服器（SPA 由 `/` 提供），不需要後端改動、不需要 nginx 設定。
+
+### Hash 格式
+
+| 檢視 | Hash |
+| --- | --- |
+| Dashboard | `#/dashboard` |
+| Tickets 列表 | `#/tickets/list` |
+| Tickets Gantt | `#/tickets/gantt` |
+| New ticket | `#/new` |
+| Projects | `#/projects` |
+| Admin 總覽／使用者／Workflows／API keys | `#/admin/overview`／`users`／`workflows`／`keys` |
+| 工單 detail | `#/ticket/<id>` |
+
+空 hash、未知路徑一律回到 Dashboard。對照邏輯是共用純函式 `src/viewHash.ts`（`viewToHash`／`hashToView`／`gateView`），無 React、無 DOM；`MainView` 型別也搬到該檔，與對照表放同一處。該檔沒有 runtime import（node type-stripping 解析不了無副檔名的 import，實測確認）：Admin tab 清單在檔內重複一份常數，測試以 `ADMIN_TABS` 交叉檢查，少寫一個 tab 測試就失敗。
+
+### 同步機制（App.tsx）
+
+- 首次檢視從 hash 讀（`useState` lazy init）；登入／建帳後也從 hash 恢復檢視（登出時已回 Dashboard，不留舊 deep link）。
+- 檢視變化 → `pushState` 寫 hash，上一頁／下一頁跟著動；首次寫入用 `replaceState`，初次載入不佔一筆歷史紀錄。`pushState`／`replaceState` 不觸發 `hashchange`，不會與監聽器互迴圈。
+- `hashchange` 監聽（上一頁／下一頁、手動改 hash）：hash 是檢視的來源，解析後切換 `mainView`（detail 同時帶 `selectedId`）。
+- 重新整理時 queue tab 與 project filter 不進 hash：回到預設（全部佇列、全部專案），這是既有行為，本章不改。
+
+### Hash 不是權限
+
+非 admin 開 Admin hash、非 PM／Admin 開 `#/projects`，一律 gate 回 Dashboard（`gateView`）；detail hash 沒有 ticket id 時退回 Tickets 列表。Gate 在登入態確定後執行，URL 用 `replaceState` 原地取代——不用 push，否則上一頁會回到被擋的 hash、再被擋一次。畫面渲染本來就有同一道 gate（非 admin 的 Admin 檢視會 fall through 到 Tickets 列表），gate 只是讓網址也誠實。
+
+### Detail 的處理
+
+Detail hash 同時帶 ticket id（`#/ticket/<id>`），重新整理後重新載入該工單；沒有 id 的 detail 不是一個檢視，退回列表。重新整理後「回上頁」的目的地（`ticketsReturnView`）是 React state、不進 hash，預設回到列表；從 Gantt 開的工單、重新整理後按回上頁會回到列表而非 Gantt，這是已知取捨。
+
+### 測試
+
+`server/viewHash.test.js`（8 項）：每個檢視的 hash 來回對照、無 id 的 detail 退回列表、空 hash 與未知路徑回 null、每個 Admin tab 都有 hash 對照（與 `ADMIN_TABS` 交叉檢查）、`gateView` 三種擋下情況。路由的實際重新整理／上一頁／下一頁行為沒有瀏覽器測試基礎設施，留待 Tester／Reviewer 在真機上驗。
