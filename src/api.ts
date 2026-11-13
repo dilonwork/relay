@@ -118,6 +118,31 @@ export interface LegalTransition {
   kind: string;
 }
 
+// A document filed in the platform (design doc ch. 17): title,
+// category and markdown content, stored in the database. `source`
+// records where it came from ('manual' in v1 — there is no
+// auto-generation to collect from yet). Download renders the stored
+// content as a .md file; the list carries the content too, so the
+// panel can show it without a second request.
+export interface DocumentCategory {
+  id: string;
+  name: string;
+  created_by: string | null;
+  created_at: string;
+}
+
+export interface DocumentItem {
+  id: string;
+  project_id: string | null;
+  category_id: string;
+  title: string;
+  content: string;
+  source: string;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface User {
   id: string;
   username: string;
@@ -249,6 +274,47 @@ export const api = {
   listProjects: () => request<Project[]>('/api/projects'),
   createProject: (payload: { name: string; description: string }) =>
     request<Project>('/api/projects', { method: 'POST', body: JSON.stringify(payload) }),
+  listDocumentCategories: () => request<DocumentCategory[]>('/api/document-categories'),
+  createDocumentCategory: (name: string) =>
+    request<DocumentCategory>('/api/document-categories', {
+      method: 'POST',
+      body: JSON.stringify({ name }),
+    }),
+  listDocuments: (projectId?: string, categoryId?: string) => {
+    const params = new URLSearchParams();
+    if (projectId) params.set('project_id', projectId);
+    if (categoryId) params.set('category_id', categoryId);
+    const qs = params.toString();
+    return request<DocumentItem[]>(qs ? `/api/documents?${qs}` : '/api/documents');
+  },
+  getDocument: (id: string) => request<DocumentItem>(`/api/documents/${encodeURIComponent(id)}`),
+  createDocument: (payload: { title: string; category_id: string; project_id?: string | null; content?: string }) =>
+    request<DocumentItem>('/api/documents', { method: 'POST', body: JSON.stringify(payload) }),
+  deleteDocument: (id: string) =>
+    request<DocumentItem>(`/api/documents/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  // Download is a blob, not JSON, so it does not go through the JSON
+  // request helper: the bearer token is sent the same way, and the
+  // filename comes from the Content-Disposition header the server sets
+  // (falling back to the document title).
+  downloadDocument: async (doc: DocumentItem): Promise<{ blob: Blob; filename: string }> => {
+    const headers: Record<string, string> = {};
+    const token = getToken();
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    const res = await fetch(`/api/documents/${encodeURIComponent(doc.id)}/download`, { headers });
+    if (res.status === 401) {
+      setToken(null);
+      if (unauthorizedHandler) unauthorizedHandler();
+      throw new ApiError(401, 'Session expired. Please log in again.');
+    }
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new ApiError(res.status, (data as { message?: string }).message || `Request failed: ${res.status}`);
+    }
+    const disposition = res.headers.get('Content-Disposition') || '';
+    const m = disposition.match(/filename\*=UTF-8''([^;]+)/) || disposition.match(/filename="([^"]+)"/);
+    const filename = m ? decodeURIComponent(m[1]) : `${doc.title}.md`;
+    return { blob: await res.blob(), filename };
+  },
   getProject: (id: string) => request<Project>(`/api/projects/${encodeURIComponent(id)}`),
   listWorkflows: (projectId?: string) => {
     const qs = projectId ? `?project_id=${encodeURIComponent(projectId)}` : '';
