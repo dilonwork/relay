@@ -94,6 +94,11 @@ so screenshots taken now would not match the current UI). See
   keeps the current behavior and sees all projects. One project per
   agent in v1; multi-project assignment is out of scope. See
   [Agent access](#agent-access) and design doc ch. 11–12.
+- **English-only (locked 2026-11-13):** the system is English-only —
+  UI strings, code, comments, docs and tickets are all in English. The
+  Reviewer enforces this in review: any non-English content is sent back
+  for correction. The 2026-11-13 audit translated the remaining
+  non-English content (see design doc ch. 3).
 
 ## Project structure
 
@@ -248,10 +253,16 @@ are walked end to end (including the backward move), the definition
 validator's rules are tested case by case, and the migration files are
 tested for the 001→017 sequence. The document service is tested the
 same way, including the filename slug, the project scope rules and the
-download filename.
+download filename. Document ticket payloads are tested too — the Implement
+payload is locked byte-identical and the Not OK re-planning payload carries
+the reason and a link back to the source document — and document rendering
+is covered (type detection from title extension and content, Markdown
+rendering with raw HTML escaped, the sandbox flag). Gantt helpers are
+covered as pure functions: search filtering, status-chip counts,
+grouping, the zoom window, and the 36-hour stalled rule.
 
-224 tests in total: state machine 21, tickets 32, projects 7, auth 15,
-admin 7, API keys 6, monitor 18, workflows 26, quick-create builder 11, documents 22, document tickets 10, document render 13, admin nav 5, view hash 8, migrations 19, role lists 4.
+238 tests in total: state machine 21, tickets 32, projects 7, auth 15,
+admin 7, API keys 6, monitor 18, workflows 26, quick-create builder 11, documents 22, document tickets 10, document render 13, gantt helpers 14, admin nav 5, view hash 8, migrations 19, role lists 4.
 
 ## Accounts & authentication
 

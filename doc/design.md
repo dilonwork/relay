@@ -68,7 +68,7 @@ The main line of this system is the Project development flow, not an on-call sys
 
 ## 3. Locked Decisions Overview
 
-The first three items below were confirmed and locked one by one on 2026-11-11; the fourth (accounts and authentication) and fifth (agent access) were locked and implemented the same day. They are the foundation of this document. Later chapters expand and define the implementation of these five decisions; if implementation needs to change any of them, come back to this chapter and revise the version instead of quietly drifting in code.
+The first three items below were confirmed and locked one by one on 2026-11-11; the fourth (accounts and authentication) and fifth (agent access) were locked and implemented the same day. A sixth decision, English-only, was locked on 2026-11-13 (see the table). They are the foundation of this document. Later chapters expand and define the implementation of these five decisions; if implementation needs to change any of them, come back to this chapter and revise the version instead of quietly drifting in code.
 
 | Decision | Content | Expanded in |
 | --- | --- | --- |
@@ -77,6 +77,7 @@ The first three items below were confirmed and locked one by one on 2026-11-11; 
 | Ticket storage | Independent PostgreSQL database: separate from WebTracker's database, on the same PostgreSQL server in another database. Not Jira, and not parked inside the WebTracker database. | Ch. 8 |
 | Accounts and authentication | One account holds one or more roles (including the admin role); passwords are hashed with scrypt plus a per-person random salt; login issues a Bearer session valid for 7 days; on first activation the first admin creates their own account, after which the setup flow closes permanently; admins can manage accounts and view the system overview, but cannot bypass the flow role checks in Ch. 6. | Ch. 11 |
 | Agent access | Agents log in with long-lived API keys (`rl_…`, `X-API-Key` header) and inherit the account's roles; the pickup queue and required handoff notes are trialled first on the decomposition and development stages, and whether the handoff is sufficient is judged by the next person to take the ticket. | Ch. 12 |
+| English-only | The system is English-only: UI strings, code, comments, docs, and tickets are all in English. The Reviewer enforces it in review and sends non-English content back for correction. The 2026-11-13 audit translated the remaining non-English content. | — |
 
 ---
 
