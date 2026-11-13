@@ -28,6 +28,38 @@ function cleanProjectId(projectId) {
     : String(projectId).trim();
 }
 
+// Agent upload cap: decoded content may be at most 1 MiB. Documents
+// live in a TEXT column, so an unbounded upload could bloat the
+// database with one call; 1 MiB is generous for Markdown (a long spec
+// is tens of kilobytes) while keeping any single upload small. The
+// JSON body carrying the base64 is larger (base64 inflates by 4/3), so
+// the server's JSON limit is 2 MB — see server/index.js.
+const MAX_AGENT_UPLOAD_BYTES = 1024 * 1024;
+
+// Decode a base64 content field strictly: canonical base64 only
+// (correct alphabet and padding — Buffer.from alone is lenient and
+// would silently accept garbage), and the decoded bytes must be valid
+// UTF-8 (the documents.content column is TEXT; invalid UTF-8 would
+// fail at the database instead, surfacing as a 500).
+function decodeBase64Content(value) {
+  if (typeof value !== 'string') return { ok: false };
+  const compact = value.replace(/\s+/g, '');
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(compact) || compact.length % 4 !== 0) {
+    return { ok: false };
+  }
+  const bytes = Buffer.from(compact, 'base64');
+  // Round-trip: proves the input was well-formed base64 rather than
+  // something that merely starts like it.
+  if (bytes.toString('base64') !== compact) return { ok: false };
+  let content;
+  try {
+    content = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch (err) {
+    return { ok: false };
+  }
+  return { ok: true, content, byteLength: bytes.length };
+}
+
 function requirePmOrAdmin(actorRoles) {
   return Array.isArray(actorRoles) && (actorRoles.includes('pm') || actorRoles.includes('admin'));
 }
@@ -176,6 +208,17 @@ async function getDocument(db, id, { assignedProjectId } = {}) {
   return { ok: true, status: 200, document: row };
 }
 
+// Shared insert for the two filing paths (hand-filed and agent
+// upload): same row, same columns; only the validation and the
+// permission rule in front of it differ.
+async function insertDocumentRow(db, { title, categoryId, projectId, content, source, actorId }) {
+  const { rows } = await db.query(
+    'INSERT INTO documents (title, category_id, project_id, content, source, created_by) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
+    [String(title).trim(), categoryId, projectId, content, source, String(actorId).trim()]
+  );
+  return rows[0];
+}
+
 // File a document: title, an existing category, and markdown content.
 // The project must exist when given; a null project files the
 // document as uncategorized. `source` records where the document came
@@ -210,11 +253,71 @@ async function createDocument(db, { actorId, actorRoles, title, categoryId, proj
   const cleanSource = source === undefined || source === null || !String(source).trim()
     ? 'manual'
     : String(source).trim();
-  const { rows } = await db.query(
-    'INSERT INTO documents (title, category_id, project_id, content, source, created_by) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
-    [String(title).trim(), cleanCategoryId, target, cleanContent, cleanSource, String(actorId).trim()]
-  );
-  return { ok: true, status: 201, document: rows[0] };
+  const document = await insertDocumentRow(db, {
+    title,
+    categoryId: cleanCategoryId,
+    projectId: target,
+    content: cleanContent,
+    source: cleanSource,
+    actorId,
+  });
+  return { ok: true, status: 201, document };
+}
+
+// Agent upload: file a document from a base64-encoded file body.
+// Unlike createDocument there is no PM/Admin gate — this endpoint
+// exists so agents can file their own output — but the caller must be
+// authenticated (the route sits behind requireAuth, so an invalid API
+// key never reaches here: it gets a 401) and the upload must land in
+// a project in the caller's scope: an account assigned to one project
+// may only upload to that project, exactly like the list scope.
+// The project is required here (manual filing allows uncategorized);
+// an agent upload with nowhere to show up in the Document page is a
+// caller mistake, so it is a 400 rather than a silent uncategorized
+// file. `source` is always 'agent': provenance is not caller-chosen.
+async function uploadDocument(db, { actorId, assignedProjectId, title, categoryId, projectId, contentBase64 }) {
+  if (!actorId || !String(actorId).trim()) {
+    return { ok: false, status: 400, error: 'bad_request', message: 'actor_id is required.' };
+  }
+  if (!title || !String(title).trim()) {
+    return { ok: false, status: 400, error: 'bad_request', message: 'title is required.' };
+  }
+  const cleanCategoryId = categoryId === undefined || categoryId === null || !String(categoryId).trim()
+    ? null
+    : String(categoryId).trim();
+  if (!cleanCategoryId) {
+    return { ok: false, status: 400, error: 'bad_request', message: 'category_id is required.' };
+  }
+  const category = await getCategoryRow(db, cleanCategoryId);
+  if (!category) {
+    return { ok: false, status: 400, error: 'unknown_category', message: `Unknown category: ${cleanCategoryId}.` };
+  }
+  const target = cleanProjectId(projectId);
+  if (!target) {
+    return { ok: false, status: 400, error: 'bad_request', message: 'project_id is required.' };
+  }
+  if (!(await projectExists(db, target))) {
+    return { ok: false, status: 400, error: 'unknown_project', message: `Unknown project: ${target}.` };
+  }
+  if (assignedProjectId && target !== assignedProjectId) {
+    return { ok: false, status: 403, error: 'out_of_scope', message: 'This project is not the one you are assigned to.' };
+  }
+  const decoded = decodeBase64Content(contentBase64);
+  if (!decoded.ok) {
+    return { ok: false, status: 400, error: 'invalid_content', message: 'content_base64 must be valid base64 of UTF-8 text.' };
+  }
+  if (decoded.byteLength > MAX_AGENT_UPLOAD_BYTES) {
+    return { ok: false, status: 413, error: 'content_too_large', message: `Decoded content exceeds the ${MAX_AGENT_UPLOAD_BYTES} byte limit.` };
+  }
+  const document = await insertDocumentRow(db, {
+    title,
+    categoryId: cleanCategoryId,
+    projectId: target,
+    content: decoded.content,
+    source: 'agent',
+    actorId,
+  });
+  return { ok: true, status: 201, document };
 }
 
 async function deleteDocument(db, id, { actorId, actorRoles, assignedProjectId } = {}) {
@@ -252,11 +355,13 @@ async function downloadDocument(db, id, { assignedProjectId } = {}) {
 module.exports = {
   slugifyTitle,
   documentVisibleTo,
+  MAX_AGENT_UPLOAD_BYTES,
   listDocumentCategories,
   createDocumentCategory,
   listDocuments,
   getDocument,
   createDocument,
+  uploadDocument,
   deleteDocument,
   downloadDocument,
 };

@@ -228,6 +228,138 @@ async function main() {
     assert.equal(badProject.error, 'unknown_project');
   });
 
+  await ok('uploadDocument: engineer uploads base64 content, source is agent', async () => {
+    const db = new FakeDb();
+    const content = '# 規格書\nLogin flow — step 1.\n';
+    const uploaded = await documents.uploadDocument(db, {
+      actorId: 'eng-1', actorRoles: ENGINEER,
+      title: '  Agent spec  ', categoryId: 'cat-proto', projectId: 'proj-1',
+      contentBase64: Buffer.from(content, 'utf8').toString('base64'),
+    });
+    assert.equal(uploaded.ok, true);
+    assert.equal(uploaded.status, 201);
+    assert.equal(uploaded.document.title, 'Agent spec');
+    assert.equal(uploaded.document.category_id, 'cat-proto');
+    assert.equal(uploaded.document.project_id, 'proj-1');
+    assert.equal(uploaded.document.content, content);
+    assert.equal(uploaded.document.source, 'agent');
+  });
+
+  await ok('uploadDocument: uploaded document is listed and downloads byte-identical', async () => {
+    const db = new FakeDb();
+    const content = '# A\nUnicode: 規格書 ✓\n';
+    const uploaded = await documents.uploadDocument(db, {
+      actorId: 'eng-1', actorRoles: ENGINEER,
+      title: 'Round trip', categoryId: 'cat-undef', projectId: 'proj-2',
+      contentBase64: Buffer.from(content, 'utf8').toString('base64'),
+    });
+    assert.equal(uploaded.ok, true);
+    const listed = await documents.listDocuments(db, { projectId: 'proj-2' });
+    assert.deepEqual(listed.map((d) => d.title), ['Round trip']);
+    assert.equal(listed[0].content, content);
+    const dl = await documents.downloadDocument(db, uploaded.document.id, {});
+    assert.equal(dl.ok, true);
+    assert.equal(dl.document.content, content);
+    assert.equal(dl.filename, 'round-trip.md');
+  });
+
+  await ok('uploadDocument: any role may upload, there is no PM/Admin gate', async () => {
+    const db = new FakeDb();
+    const b64 = Buffer.from('x', 'utf8').toString('base64');
+    for (const [name, roles] of [['pm', PM], ['admin', ADMIN], ['engineer', ENGINEER], ['tester', ['tester']], ['reviewer', ['reviewer']]]) {
+      const uploaded = await documents.uploadDocument(db, {
+        actorId: `${name}-1`, actorRoles: roles,
+        title: `By ${name}`, categoryId: 'cat-proto', projectId: 'proj-1', contentBase64: b64,
+      });
+      assert.equal(uploaded.ok, true, `${name} should be able to upload`);
+      assert.equal(uploaded.status, 201);
+    }
+  });
+
+  await ok('uploadDocument: missing title/category/project/content and unknown category/project are 400', async () => {
+    const db = new FakeDb();
+    const b64 = Buffer.from('x', 'utf8').toString('base64');
+    const base = { actorId: 'eng-1', actorRoles: ENGINEER, title: 'T', categoryId: 'cat-proto', projectId: 'proj-1', contentBase64: b64 };
+    const noTitle = await documents.uploadDocument(db, { ...base, title: ' ' });
+    assert.equal(noTitle.status, 400);
+    const noCategory = await documents.uploadDocument(db, { ...base, categoryId: null });
+    assert.equal(noCategory.status, 400);
+    const badCategory = await documents.uploadDocument(db, { ...base, categoryId: 'cat-nope' });
+    assert.equal(badCategory.status, 400);
+    assert.equal(badCategory.error, 'unknown_category');
+    const noProject = await documents.uploadDocument(db, { ...base, projectId: null });
+    assert.equal(noProject.status, 400);
+    const badProject = await documents.uploadDocument(db, { ...base, projectId: 'proj-nope' });
+    assert.equal(badProject.status, 400);
+    assert.equal(badProject.error, 'unknown_project');
+    const noContent = await documents.uploadDocument(db, { ...base, contentBase64: undefined });
+    assert.equal(noContent.status, 400);
+    const nonString = await documents.uploadDocument(db, { ...base, contentBase64: 123 });
+    assert.equal(nonString.status, 400);
+  });
+
+  await ok('uploadDocument: malformed base64 and non-UTF8 bytes are 400 invalid_content', async () => {
+    const db = new FakeDb();
+    const base = { actorId: 'eng-1', actorRoles: ENGINEER, title: 'T', categoryId: 'cat-proto', projectId: 'proj-1' };
+    const garbage = await documents.uploadDocument(db, { ...base, contentBase64: 'not base64!!!' });
+    assert.equal(garbage.status, 400);
+    assert.equal(garbage.error, 'invalid_content');
+    // Valid alphabet but missing padding: canonical base64 only.
+    const unpadded = await documents.uploadDocument(db, { ...base, contentBase64: 'SGVsbG8' });
+    assert.equal(unpadded.status, 400);
+    assert.equal(unpadded.error, 'invalid_content');
+    // Valid base64, but the bytes are not UTF-8 text.
+    const binary = await documents.uploadDocument(db, { ...base, contentBase64: Buffer.from([0xff, 0xfe]).toString('base64') });
+    assert.equal(binary.status, 400);
+    assert.equal(binary.error, 'invalid_content');
+    // Empty content is a valid (zero-byte) file.
+    const empty = await documents.uploadDocument(db, { ...base, contentBase64: '' });
+    assert.equal(empty.ok, true);
+    assert.equal(empty.document.content, '');
+  });
+
+  await ok('uploadDocument: content over 1 MiB is 413, exactly 1 MiB is 201', async () => {
+    const db = new FakeDb();
+    const limit = documents.MAX_AGENT_UPLOAD_BYTES;
+    assert.equal(limit, 1024 * 1024);
+    const over = await documents.uploadDocument(db, {
+      actorId: 'eng-1', actorRoles: ENGINEER,
+      title: 'Too big', categoryId: 'cat-proto', projectId: 'proj-1',
+      contentBase64: Buffer.from('a'.repeat(limit + 1), 'utf8').toString('base64'),
+    });
+    assert.equal(over.status, 413);
+    assert.equal(over.error, 'content_too_large');
+    const exact = await documents.uploadDocument(db, {
+      actorId: 'eng-1', actorRoles: ENGINEER,
+      title: 'Exactly at the cap', categoryId: 'cat-proto', projectId: 'proj-1',
+      contentBase64: Buffer.from('a'.repeat(limit), 'utf8').toString('base64'),
+    });
+    assert.equal(exact.ok, true);
+    assert.equal(exact.status, 201);
+  });
+
+  await ok('uploadDocument: an assigned caller may only upload to their own project', async () => {
+    const db = new FakeDb();
+    const b64 = Buffer.from('x', 'utf8').toString('base64');
+    const own = await documents.uploadDocument(db, {
+      actorId: 'eng-1', actorRoles: ENGINEER, assignedProjectId: 'proj-1',
+      title: 'Own', categoryId: 'cat-proto', projectId: 'proj-1', contentBase64: b64,
+    });
+    assert.equal(own.ok, true);
+    const foreign = await documents.uploadDocument(db, {
+      actorId: 'eng-1', actorRoles: ENGINEER, assignedProjectId: 'proj-1',
+      title: 'Foreign', categoryId: 'cat-proto', projectId: 'proj-2', contentBase64: b64,
+    });
+    assert.equal(foreign.status, 403);
+    assert.equal(foreign.error, 'out_of_scope');
+    // Unassigned callers may upload to any existing project.
+    const global = await documents.uploadDocument(db, {
+      actorId: 'rev-1', actorRoles: ['reviewer'],
+      title: 'Global', categoryId: 'cat-proto', projectId: 'proj-2', contentBase64: b64,
+    });
+    assert.equal(global.ok, true);
+  });
+
   await ok('listDocuments: all, by project, by category, combined, uncategorized', async () => {
     const db = new FakeDb();
     db.seedDocument({ title: 'A', project_id: 'proj-1', category_id: 'cat-proto' });

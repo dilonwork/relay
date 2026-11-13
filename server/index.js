@@ -14,7 +14,12 @@ const admin = require('./admin');
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+// 2 MB, not the 100 KB default: the agent document upload carries its
+// file content base64-encoded in JSON (1 MiB decoded is ~1.4 MB on the
+// wire), and the global parser runs before any route handler, so the
+// route cannot raise its own limit. The service still caps decoded
+// content at 1 MiB — see MAX_AGENT_UPLOAD_BYTES in documents.js.
+app.use(express.json({ limit: '2mb' }));
 
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', service: 'relay' });
@@ -476,6 +481,31 @@ app.post('/api/documents', async (req, res) => {
       projectId: req.body ? req.body.project_id : undefined,
       content: req.body ? req.body.content : undefined,
       source: req.body ? req.body.source : undefined,
+    });
+    if (!result.ok) return res.status(result.status).json({ error: result.error, message: result.message });
+    res.status(201).json(result.document);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Agent upload: file a document with an API key. Unlike POST
+// /api/documents (PM or Admin), any authenticated caller may upload —
+// agents file their own output — but the upload must land in a project
+// in the caller's scope (the service enforces it). The body is JSON
+// with the file content base64-encoded in `content_base64`: no
+// multipart parser is added, because agents already speak JSON and
+// base64 carries arbitrary bytes safely in a JSON body. An invalid API
+// key never reaches here — requireAuth answers 401 first.
+app.post('/api/documents/upload', async (req, res) => {
+  try {
+    const result = await documents.uploadDocument(db, {
+      actorId: req.user.id,
+      assignedProjectId: req.user.project_id,
+      title: req.body ? req.body.title : undefined,
+      categoryId: req.body ? req.body.category_id : undefined,
+      projectId: req.body ? req.body.project_id : undefined,
+      contentBase64: req.body ? req.body.content_base64 : undefined,
     });
     if (!result.ok) return res.status(result.status).json({ error: result.error, message: result.message });
     res.status(201).json(result.document);

@@ -251,7 +251,7 @@ same way, including the filename slug, the project scope rules and the
 download filename.
 
 183 tests in total: state machine 21, tickets 31, projects 7, auth 14,
-admin 7, API keys 6, monitor 17, workflows 25, quick-create builder 11, documents 14, admin nav 5, view hash 8, migrations 14, role lists 3.
+admin 7, API keys 6, monitor 17, workflows 25, quick-create builder 11, documents 21, admin nav 5, view hash 8, migrations 14, role lists 3.
 
 ## Accounts & authentication
 
@@ -456,6 +456,17 @@ each sub-page owns its own form state and handlers.
   still empty). Filing, adding a category and deleting a document are
   PM or Admin; anyone signed in may browse and download, within their
   project scope.
+- **Agent upload:** agents file documents with an API key via
+  `POST /api/documents/upload`: a JSON body with `title`,
+  `category_id`, `project_id` and the file content base64-encoded in
+  `content_base64`. No PM/Admin role is required — the endpoint exists
+  so agents can file their own output — but the upload must land in a
+  project in the caller's scope (an account assigned to one project
+  may only upload to that project). Decoded content is capped at
+  1 MiB (413 `content_too_large` above it); the category and the
+  project must already exist. Uploaded documents are filed with
+  `source='agent'` and show up in the Documents page like any other
+  document.
 - **Download:** each document has a Download button; the stored
   Markdown is rendered as a `.md` file whose name comes from the title
   (lowercase, dashes, Unicode letters kept, capped at 80 characters).
@@ -469,7 +480,8 @@ each sub-page owns its own form state and handlers.
   navigates to the new ticket's detail view. No workflow is named, so
   the ticket follows the built-in flow.
 - **Endpoints:** see the API table (`/api/documents`,
-  `/api/document-categories`, `/api/documents/:id/download`).
+  `/api/documents/upload`, `/api/document-categories`,
+  `/api/documents/:id/download`).
 
 ## Gantt view
 
