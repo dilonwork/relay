@@ -1,28 +1,21 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from './api';
 import type { AdminOverview, Project, User, Workflow } from './api';
+import type { AdminTab } from './adminNav';
 import AdminApiKeys from './AdminApiKeys';
 import AdminOverviewPanel from './AdminOverview';
 import AdminUsers from './AdminUsers';
 import WorkflowsPanel from './WorkflowsPanel';
 
-// Admin is split into four sub-pages, one concern each, navigated by
-// tabs (reusing the .tabs style from the ticket lists). The shell owns
+// Admin is split into four sub-pages, one concern each. The sub-page
+// is switched from the sidebar Admin group (App.tsx owns the tab, one
+// MainView value per sub-page — see src/adminNav.ts); this shell owns
 // the shared data (overview / users / projects, loaded together),
-// the shared banners and busy flag, and which sub-page is shown;
-// each sub-page owns its own form state and handlers. Default tab is
-// Overview. Only admins ever reach this component (App.tsx gates the
-// Admin nav item and view on the admin role).
-type AdminTab = 'overview' | 'users' | 'workflows' | 'keys';
-
-const ADMIN_TABS: { key: AdminTab; label: string }[] = [
-  { key: 'overview', label: 'Overview' },
-  { key: 'users', label: 'Users' },
-  { key: 'workflows', label: 'Workflows' },
-  { key: 'keys', label: 'API keys' },
-];
-
-export default function AdminPanel() {
+// the shared banners and busy flag, and renders the active sub-page;
+// each sub-page owns its own form state and handlers. Only admins
+// ever reach this component (App.tsx gates the Admin nav group and
+// views on the admin role).
+export default function AdminPanel({ tab, onTabChange }: { tab: AdminTab; onTabChange: (tab: AdminTab) => void }) {
   const [overview, setOverview] = useState<AdminOverview | null>(null);
   const [users, setUsers] = useState<User[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -30,7 +23,6 @@ export default function AdminPanel() {
   const [adminError, setAdminError] = useState('');
   const [adminNotice, setAdminNotice] = useState('');
   const [busy, setBusy] = useState(false);
-  const [adminTab, setAdminTab] = useState<AdminTab>('overview');
   // The user whose API keys the keys sub-page shows; set by the Users
   // sub-page's Keys button, or by the picker's dropdown on that page.
   const [keysUserId, setKeysUserId] = useState('');
@@ -59,26 +51,14 @@ export default function AdminPanel() {
 
   function openKeysForUser(u: User) {
     setKeysUserId(u.id);
-    setAdminTab('keys');
+    onTabChange('keys');
   }
 
   return (
     <>
-      <div className="tabs" role="tablist" aria-label="Admin sections">
-        {ADMIN_TABS.map((t) => (
-          <button
-            key={t.key}
-            type="button"
-            className={adminTab === t.key ? 'active' : ''}
-            onClick={() => setAdminTab(t.key)}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
-      {adminTab === 'overview' ? (
+      {tab === 'overview' ? (
         <AdminOverviewPanel overview={overview} adminError={adminError} adminNotice={adminNotice} />
-      ) : adminTab === 'users' ? (
+      ) : tab === 'users' ? (
         <AdminUsers
           users={users}
           projects={projects}
@@ -92,7 +72,7 @@ export default function AdminPanel() {
           onRefresh={loadAdmin}
           onOpenKeys={openKeysForUser}
         />
-      ) : adminTab === 'workflows' ? (
+      ) : tab === 'workflows' ? (
         <WorkflowsPanel projects={projects} />
       ) : (
         <AdminApiKeys

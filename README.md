@@ -112,7 +112,8 @@ relay/
 │   ├── ProjectsPanel.tsx # project list / create project
 │   ├── WorkflowsPanel.tsx # workflow list / state machine editor / set active
 │   ├── workflowQuickCreate.ts # quick-create builder: rows to a linear flow (shared with the server tests)
-│   ├── AdminPanel.tsx    # Admin shell: Overview / Users / API keys tabs
+│   ├── adminNav.ts        # Admin sub-pages: tab ↔ view mapping shared by the sidebar and AdminPanel (server-tested)
+│   ├── AdminPanel.tsx    # Admin shell: renders the active sub-page (Overview / Users / Workflows / API keys)
 │   ├── AdminOverview.tsx # system overview, tickets by status, audit
 │   ├── AdminUsers.tsx    # user list, create/edit, assign project, reset password, workflow responsibilities
 │   ├── AdminApiKeys.tsx  # per-user API key management
@@ -137,6 +138,7 @@ relay/
 │   ├── monitor.test.js
 │   ├── workflows.test.js
 │   ├── workflowQuickCreate.test.js
+│   ├── adminNav.test.js
 │   └── migrations.test.js
 ├── db/
 │   └── migrations/       # schema as SQL migrations (001-013)
@@ -191,10 +193,13 @@ account or password anywhere in the code.
 
 - **Left sidebar:** a dark sidebar holds the module navigation —
   Dashboard, Tickets, New ticket, Projects (PM or Admin only)
-  and Admin (admin only; includes Workflows) — plus a project filter, the
+  and Admin (admin only) — plus a project filter, the
   signed-in user's name, username and role badges, and Log out. Tickets is an expandable group
   with two sub-pages, All tickets and Gantt; the group stays active on
-  either sub-page and while a ticket detail is open. The active module is
+  either sub-page and while a ticket detail is open. Admin is likewise an
+  expandable group with four sub-pages — Overview, Users, Workflows and
+  API keys — switched from the sidebar; the Admin page itself has no
+  tab switcher. The active module is
   highlighted. A collapse toggle shrinks the sidebar to a 60px icon rail;
   on narrow screens (≤720px) the sidebar is hidden by default and opens
   as an overlay drawer from a hamburger button (tap the scrim or the
@@ -326,9 +331,9 @@ admin 7, API keys 6, monitor 17, workflows 23, quick-create builder 10, migratio
 ## Admin
 
 The Admin area is only visible to accounts holding the `admin` role. It
-is split into three sub-pages (tabs, defaulting to Overview); the shell
-owns the shared data load, and each sub-page owns its own form state and
-handlers.
+is split into four sub-pages, switched from the sidebar Admin group
+(defaulting to Overview); the shell owns the shared data load, and
+each sub-page owns its own form state and handlers.
 
 - **Overview:** system overview (database health, user count, ticket
   count, transition count), tickets by status, and the most recent audit
@@ -336,6 +341,9 @@ handlers.
 - **Users:** user list with create, edit (display name, roles, active
   flag), project assignment (the Agent assignment dropdown, or
   unassigned) and password reset (which revokes that user's sessions).
+- **Workflows:** workflow list and state machine editor (see
+  [Workflows](#workflows)); creating, editing, deleting and setting the
+  active workflow are admin-only.
 - **API keys:** per-user API key management — pick a user, view their
   keys, create a new one (full key shown exactly once) or revoke one.
   The Users table's Keys button jumps here with that user pre-selected.

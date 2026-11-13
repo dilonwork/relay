@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, getToken, onUnauthorized, setToken } from './api';
 import type { LegalTransition, Project, QueueEntry, Ticket, TicketWithHistory, User, Workflow } from './api';
 import { QUEUE_TABS, ROLE_LABELS, countTicketsByProject, isTerminalFor, journeyFromTransitions, stateLabelFor, statusLabel, targetsForUser } from './helpers';
+import { ADMIN_TABS, adminTabForView, adminViewForTab, isAdminView } from './adminNav';
+import type { AdminTab, AdminView } from './adminNav';
 import AdminPanel from './AdminPanel';
 import Dashboard from './Dashboard';
 import NewTicketForm from './NewTicketForm';
@@ -17,7 +19,11 @@ import TicketList from './TicketList';
 // 'dashboard' is the default landing page (project overview).
 // Tickets has two sub-pages, reached from the sidebar group:
 // 'tickets-list' (All tickets) and 'tickets-gantt' (Gantt).
-type MainView = 'dashboard' | 'tickets-list' | 'tickets-gantt' | 'new' | 'projects' | 'admin' | 'detail';
+// Admin likewise has four sub-pages, reached from the sidebar Admin
+// group: 'admin-overview', 'admin-users', 'admin-workflows' and
+// 'admin-keys' (see src/adminNav.ts); the Admin page itself has no
+// tab switcher — the sidebar is the only way to switch sub-pages.
+type MainView = 'dashboard' | 'tickets-list' | 'tickets-gantt' | 'new' | 'projects' | AdminView | 'detail';
 
 export default function App() {
   const [authState, setAuthState] = useState<'loading' | 'login' | 'setup' | 'app'>('loading');
@@ -31,6 +37,9 @@ export default function App() {
   // (including the collapse toggle) is unchanged.
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [ticketsGroupOpen, setTicketsGroupOpen] = useState(true);
+  // The Admin nav group, mirroring the Tickets group: it opens when
+  // an Admin sub-page is entered and stays open until closed.
+  const [adminGroupOpen, setAdminGroupOpen] = useState(true);
   // Which Tickets sub-page a ticket detail was opened from, so going
   // back returns there instead of always to the list.
   const [ticketsReturnView, setTicketsReturnView] = useState<'tickets-list' | 'tickets-gantt'>('tickets-list');
@@ -237,6 +246,14 @@ export default function App() {
   useEffect(() => {
     if (mainView === 'tickets-list' || mainView === 'tickets-gantt' || mainView === 'detail') {
       setTicketsGroupOpen(true);
+    }
+  }, [mainView]);
+
+  // Same for the Admin group: entering any Admin sub-page opens it,
+  // so the sub-page nav is visible.
+  useEffect(() => {
+    if (isAdminView(mainView)) {
+      setAdminGroupOpen(true);
     }
   }, [mainView]);
 
@@ -485,6 +502,20 @@ export default function App() {
     }
   }
 
+  // The sidebar Admin group header, mirroring Tickets: opening the
+  // group goes to Overview (unless already on an Admin sub-page);
+  // closing it only hides the sub-page nav.
+  function handleAdminGroupClick() {
+    if (!adminGroupOpen) {
+      setAdminGroupOpen(true);
+      if (!isAdminView(mainView)) {
+        setMainView('admin-overview');
+      }
+    } else {
+      setAdminGroupOpen(false);
+    }
+  }
+
   if (authState === 'loading') {
     return (
       <div className="container">
@@ -584,6 +615,8 @@ export default function App() {
   // while a ticket detail is open.
   const ticketsActive =
     mainView === 'tickets-list' || mainView === 'tickets-gantt' || mainView === 'detail';
+  // The Admin nav group stays active on any Admin sub-page.
+  const adminActive = isAdminView(mainView);
   const canManageProjects = isPm || isAdmin;
   // The project currently in view: a specific project (single-project
   // view), 'none' for uncategorized, or undefined for all projects.
@@ -693,14 +726,35 @@ export default function App() {
             </button>
           )}
           {isAdmin && (
-            <button
-              className={mainView === 'admin' ? 'active' : ''}
-              onClick={() => setMainView('admin')}
-              title="Admin"
-            >
-              <span className="nav-icon" aria-hidden="true">⚙</span>
-              <span className="nav-label">Admin</span>
-            </button>
+            <div className="sidebar-group">
+              <button
+                className={adminActive ? 'active' : ''}
+                onClick={handleAdminGroupClick}
+                title="Admin"
+                aria-expanded={adminGroupOpen}
+              >
+                <span className="nav-icon" aria-hidden="true">⚙</span>
+                <span className="nav-label">Admin</span>
+                <span className="nav-chevron" aria-hidden="true">
+                  {adminGroupOpen ? '▾' : '▸'}
+                </span>
+              </button>
+              {adminGroupOpen && (
+                <div className="sidebar-subnav">
+                  {ADMIN_TABS.map((t) => (
+                    <button
+                      key={t.key}
+                      className={mainView === t.view ? 'active' : ''}
+                      onClick={() => setMainView(t.view)}
+                      title={t.label}
+                    >
+                      <span className="nav-icon" aria-hidden="true">{t.icon}</span>
+                      <span className="nav-label">{t.label}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           )}
         </nav>
 
@@ -784,8 +838,11 @@ export default function App() {
           loading={dashboardLoading}
           onSelectProject={openProjectFromDashboard}
         />
-      ) : mainView === 'admin' && isAdmin ? (
-        <AdminPanel />
+      ) : adminActive && isAdmin ? (
+        <AdminPanel
+          tab={adminTabForView(mainView) || 'overview'}
+          onTabChange={(t: AdminTab) => setMainView(adminViewForTab(t))}
+        />
       ) : mainView === 'projects' && canManageProjects ? (
         <ProjectsPanel
           projects={projects}
