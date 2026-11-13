@@ -7,7 +7,7 @@
 // transitions (from -> to, role, requiresReason, requiresHandoff,
 // kind) and the roles map (state -> {role, responsibilities}).
 //
-// Roles use the six workflow roles. In these fixtures the transition
+// Roles use the seven workflow roles. In these fixtures the transition
 // role equals the from-state's role in the roles map; that is the
 // normal case (ch. 15: the roles map is the per-state assignment and
 // the server re-derives the stored transition roles from it on save).

@@ -17,7 +17,7 @@
 // in-memory fake, so no live database is needed.
 const crypto = require('crypto');
 
-const WORKFLOW_ROLES = ['pm', 'leader', 'engineer', 'reviewer', 'tester', 'deployer'];
+const WORKFLOW_ROLES = ['pm', 'leader', 'engineer', 'reviewer', 'tester', 'deployer', 'ui_ux'];
 const ALL_ROLES = [...WORKFLOW_ROLES, 'admin'];
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const MIN_PASSWORD_LENGTH = 8;

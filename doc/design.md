@@ -72,7 +72,7 @@
 | 決定 | 內容 | 展開章節 |
 | --- | --- | --- |
 | 開發鏈狀態 | 需求 → 拆解（待澄清來回）→ 開發（待開發 → 開發中）→ Review（待 Review → Review 中）→ 測試（待測試 → 測試中，驗收標準不清楚 → 待驗收澄清，PM 補充後回測試中）→ 部署（待部署 → 部署中）→ 已交付；另設已取消為終點。每個階段拆成「待接取 → 進行中」。 | 第 5 章 |
-| 誰能切狀態 | 六個角色各認自己的轉換（詳見權限矩陣）。Reviewer、Tester、Deployer 可由工程師兼任，但不能審自己的 code；待澄清由 PM 補充後切回拆解中。 | 第 4、6 章 |
+| 誰能切狀態 | 七個角色各認自己的轉換（詳見權限矩陣）。Reviewer、Tester、Deployer 可由工程師兼任，但不能審自己的 code；待澄清由 PM 補充後切回拆解中。 | 第 4、6 章 |
 | 工單存放 | PostgreSQL 獨立資料庫：與 WebTracker 的資料庫分開，部署在同一台 PostgreSQL 上另開一個 database。不採用 Jira，也不寄存在 WebTracker 資料庫內。 | 第 8 章 |
 | 帳號與認證 | 一個帳號持有一個或多個角色（含管理者角色）；密碼以 scrypt 加每人隨機鹽雜湊儲存；登入發 7 天有效的 Bearer 會話；首次啟用時由第一位管理者自行建帳號，建好後設定流程永久關閉；管理者可管理帳號與查看全系統概覽，但不能繞過第 6 章的流程角色檢查。 | 第 11 章 |
 | Agent 接入 | Agent 以長期 API 金鑰登入（`rl_…`，`X-API-Key` 標頭），繼承帳號角色；接單佇列與交接必填先在拆解與開發兩段試行，交接是否足夠由下一手判斷。 | 第 12 章 |
@@ -245,7 +245,7 @@ users
   username      帳號名稱，大小寫不區分且唯一
   password_hash scrypt 雜湊（格式 scrypt$鹽$雜湊），不存明文
   display_name  顯示名稱
-  roles         角色陣列：pm / leader / engineer / reviewer / tester / deployer / admin 的子集
+  roles         角色陣列：pm / leader / engineer / reviewer / tester / deployer / ui_ux / admin 的子集
   project_id    指派的專案（Agent 指派，第 11–12 章）：可空，未指派即看全部專案；刪專案時清空
   is_active     停用後無法登入，既有會話立即失效
   created_at / updated_at
@@ -330,7 +330,7 @@ api_keys
 ### 帳號與角色
 
 - 一個帳號有一組使用者名稱（大小寫不區分、唯一）、顯示名稱、密碼，以及一個或多個角色。
-- 角色共七種：六個流程角色（PM、Leader、工程師、Reviewer、Tester、Deployer）加一個管理者角色（`admin`）。管理者不是流程角色，不能用來切工單狀態。
+- 角色共八種：七個流程角色（PM、Leader、工程師、Reviewer、Tester、Deployer、UI&UX）加一個管理者角色（`admin`）。管理者不是流程角色，不能用來切工單狀態。
 - 一個帳號可同時持有多個角色，例如工程師兼 Reviewer。轉換時系統檢查帳號是否持有該轉換要求的角色；持有任一符合的角色即可，不需切換身分。
 - 帳號可停用：停用後無法登入，既有會話立即失效。
 
@@ -461,7 +461,7 @@ api_keys
 ### 資料模型
 
 - `workflows` 表（綱要見第 8 章，DDL 為 migration 010）：`name`、每個狀態的 `{role, responsibilities}`（`roles` JSONB）、`is_default`／`is_active` 旗標。
-- `roles` 的形狀：14 個狀態缺一不可、多餘的 key 拒絕。非終態的 `role` 必須是 6 個 workflow 角色（pm／leader／engineer／reviewer／tester／deployer）之一，`responsibilities` 是非空字串；終態（`delivered`／`cancelled`）的 `role` 必須是 `null`，`responsibilities` 是字串。驗證函式為 `server/workflows.js` 的 `validateRolesMap`。
+- `roles` 的形狀：14 個狀態缺一不可、多餘的 key 拒絕。非終態的 `role` 必須是 7 個 workflow 角色（pm／leader／engineer／reviewer／tester／deployer／ui_ux）之一，`responsibilities` 是非空字串；終態（`delivered`／`cancelled`）的 `role` 必須是 `null`，`responsibilities` 是字串。驗證函式為 `server/workflows.js` 的 `validateRolesMap`。
 - 名稱唯一：同一專案內（`project_id`，`name`）唯一，撞名回 409 `workflow_name_taken`（沿用 projects 的慣例，service 收到 23505 回 409）。
 
 ### 旗標語意
@@ -489,7 +489,7 @@ api_keys
 
 ### 角色解析的三個整合點
 
-- **轉換（`server/tickets.js` 的 `transitionTicket`）**：在交易內（用傳入的 client）先以 `getRoleMap(db, ticket.project_id)` 取角色 map，傳給 `validateTransition` 當 `roleOverrides`。`stateMachine.js` 的 `validateTransition` 與 `allowedTransitions` 各加一個可選參數 `roleOverrides`（狀態→角色的 map）：有 override 時，該條規則的 `from` 狀態之要求角色改為 override 的角色（僅當 override 是 6 個 workflow 角色之一）；回傳的 rule 其 role 亦改為 override 後的角色，稽核列才能正確記錄。Cancel 規則維持 PM-only，不接受 override。沒傳 `roleOverrides` 時行為與今天完全一致。
+- **轉換（`server/tickets.js` 的 `transitionTicket`）**：在交易內（用傳入的 client）先以 `getRoleMap(db, ticket.project_id)` 取角色 map，傳給 `validateTransition` 當 `roleOverrides`。`stateMachine.js` 的 `validateTransition` 與 `allowedTransitions` 各加一個可選參數 `roleOverrides`（狀態→角色的 map）：有 override 時，該條規則的 `from` 狀態之要求角色改為 override 的角色（僅當 override 是 7 個 workflow 角色之一）；回傳的 rule 其 role 亦改為 override 後的角色，稽核列才能正確記錄。Cancel 規則維持 PM-only，不接受 override。沒傳 `roleOverrides` 時行為與今天完全一致。
 - **接單佇列（`server/tickets.js` 的 `listClaimable`）**：不再用寫死的 CLAIMABLE 常數。先取 requirement／pending_dev 兩種等待狀態的工單，再按每張單所屬專案的 role map 決定該狀態的負責角色（同一專案的 map 快取起來，只查一次），只有呼叫者持有該角色時才列入；`next_transition` 從 TRANSITIONS 找該 from 狀態的唯一出路規則（requirement→decomposing，pending_dev→in_dev），但 role 欄位填 workflow 的角色。預設 workflow 下結果與今天完全相同。
 - **PM 監控（`server/monitor.js` 的 `listStalled`）**：每張卡住工單的 `notify_role` 與 `next_actions` 改按該單所屬專案的 role map 解析（同一專案快取一次）；`next_actions` 呼叫 `allowedTransitions` 時把該單的 role map 當 `roleOverrides` 傳入。原本的 `responsibleRole(status)`（內建推導）保留並 export，當 fallback 與既有測試用。
 
@@ -508,7 +508,7 @@ api_keys
 ### 前端
 
 - Admin → Workflows 分頁（只對 Admin 顯示），點開時載入該專案的 workflows 與 active workflow。異動（建立／更新／刪除／設為啟用）僅 Admin 可做；PM 可讀 workflow（開單選 workflow 仍需讀），不可寫。
-- Workflow 管理畫面（`src/WorkflowsPanel.tsx`，版式沿用 ProjectsPanel 的 card＋table＋form 風格）：專案篩選、workflow 列表（name、Default／Active 徽章、各狀態角色摘要）、建立表單（name＋14 個狀態各一列：角色下拉＋職責文字欄；新建時預設值從預設 workflow 的 roles 帶入）、編輯表單（同樣結構）、設為 active 按鈕、切回預設按鈕、刪除按鈕；後端錯誤訊息顯示在畫面上。角色下拉選項用 6 個 workflow 角色（不要含 admin），label 沿用 `helpers.ts` 的 `ROLE_LABELS`。
+- Workflow 管理畫面（`src/WorkflowsPanel.tsx`，版式沿用 ProjectsPanel 的 card＋table＋form 風格）：專案篩選、workflow 列表（name、Default／Active 徽章、各狀態角色摘要）、建立表單（name＋14 個狀態各一列：角色下拉＋職責文字欄；新建時預設值從預設 workflow 的 roles 帶入）、編輯表單（同樣結構）、設為 active 按鈕、切回預設按鈕、刪除按鈕；後端錯誤訊息顯示在畫面上。角色下拉選項用 7 個 workflow 角色（不要含 admin），label 沿用 `helpers.ts` 的 `ROLE_LABELS`。
 - 狀態與轉換本身的編輯（狀態機編輯器）見第 15 章：本章的表單結構已擴充為 States／Transitions／Roles 三段。
 
 ### 備註
@@ -547,7 +547,7 @@ api_keys
 
 ### 驗證規則（`workflows.validateWorkflowDefinition`）
 
-states：非空、code 為小寫 snake_case 且唯一、label 非空、恰一個起點、至少一個終態；列出的 `cancelled` 必須是終態。transitions：from／to 須為既有狀態、from ≠ to、kind 為 `forward`／`backward`／`pickup`／`clarify`／`return` 之一、requiresReason／requiresHandoff 為布林、backward／return 必須 requiresReason、role 須為 6 個 workflow 角色之一、無重複 (from, to)。roles：覆蓋恰好該 workflow 的 states（`validateRolesMap` 泛化為接受 states 參數，預設內建 14 狀態；roles 失敗沿用舊錯誤碼 `invalid_roles`，結構失敗為 `invalid_workflow`）。結構：每個非終態至少一條出路；從起點可達所有狀態（列出的 `cancelled` 視為可達）。
+states：非空、code 為小寫 snake_case 且唯一、label 非空、恰一個起點、至少一個終態；列出的 `cancelled` 必須是終態。transitions：from／to 須為既有狀態、from ≠ to、kind 為 `forward`／`backward`／`pickup`／`clarify`／`return` 之一、requiresReason／requiresHandoff 為布林、backward／return 必須 requiresReason、role 須為 7 個 workflow 角色之一、無重複 (from, to)。roles：覆蓋恰好該 workflow 的 states（`validateRolesMap` 泛化為接受 states 參數，預設內建 14 狀態；roles 失敗沿用舊錯誤碼 `invalid_roles`，結構失敗為 `invalid_workflow`）。結構：每個非終態至少一條出路；從起點可達所有狀態（列出的 `cancelled` 視為可達）。
 
 ### 隱式規則：create 與 cancel 不存入 workflow
 

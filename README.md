@@ -63,7 +63,7 @@ so screenshots taken now would not match the current UI). See
   transition attempts are logged too.
 - **Accounts & authentication (locked 2026-11-11):** every caller logs in
   as an account that holds one or more roles (`pm`, `leader`, `engineer`,
-  `reviewer`, `tester`, `deployer`, `admin`). Passwords are hashed with
+  `reviewer`, `tester`, `deployer`, `ui_ux`, `admin`). Passwords are hashed with
   scrypt and a per-user salt; sessions are opaque bearer tokens valid for
   7 days. There is no pre-seeded account: the first admin is created
   through first-run setup, which closes permanently once any account
@@ -244,14 +244,14 @@ are walked end to end (including the backward move), the definition
 validator's rules are tested case by case, and the migration files are
 tested for the 001→013 sequence.
 
-158 tests in total: state machine 21, tickets 30, projects 7, auth 13,
-admin 7, API keys 6, monitor 17, workflows 24, quick-create builder 10, admin nav 5, view hash 8, migrations 10.
+165 tests in total: state machine 21, tickets 31, projects 7, auth 14,
+admin 7, API keys 6, monitor 17, workflows 25, quick-create builder 11, admin nav 5, view hash 8, migrations 10, role lists 3.
 
 ## Accounts & authentication
 
 - **Accounts:** one account, one username (case-insensitive, unique), a
   display name, and one or more roles. Roles are `pm`, `leader`,
-  `engineer`, `reviewer`, `tester`, `deployer`, plus `admin` for account
+  `engineer`, `reviewer`, `tester`, `deployer`, `ui_ux`, plus `admin` for account
   management. An account may hold several roles at once — for example
   `engineer` + `reviewer`, matching the design doc's rule that one person
   may wear several hats but never review, test or deploy their own work.

@@ -146,7 +146,7 @@ function definitionFromRow(row) {
 }
 
 // A roles map must cover exactly the given states, no more and no
-// less. A non-terminal state needs one of the six workflow roles and
+// less. A non-terminal state needs one of the seven workflow roles and
 // a non-empty responsibilities string; a terminal state needs role
 // null and a responsibilities string. `states` defaults to the
 // built-in 14 states, which is the shape the pre-editor callers (and

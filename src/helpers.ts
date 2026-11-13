@@ -26,15 +26,16 @@ export const ROLE_LABELS: Record<string, string> = {
   reviewer: 'Reviewer',
   tester: 'Tester',
   deployer: 'Deployer',
+  ui_ux: 'UI&UX',
   admin: 'Admin',
 };
 
-export const ALL_ROLES = ['pm', 'leader', 'engineer', 'reviewer', 'tester', 'deployer', 'admin'];
+export const ALL_ROLES = ['pm', 'leader', 'engineer', 'reviewer', 'tester', 'deployer', 'ui_ux', 'admin'];
 
-// The six workflow roles a workflow may assign to a ticket state
+// The seven workflow roles a workflow may assign to a ticket state
 // (design doc ch. 14). 'admin' is an account-management role, never a
 // workflow role, so it is not listed here.
-export const WORKFLOW_ROLES = ['pm', 'leader', 'engineer', 'reviewer', 'tester', 'deployer'];
+export const WORKFLOW_ROLES = ['pm', 'leader', 'engineer', 'reviewer', 'tester', 'deployer', 'ui_ux'];
 
 // Queue tabs: every "waiting" state is its own queue; done groups the two
 // terminal states. `status` is the ?status= filter value (or null for all).

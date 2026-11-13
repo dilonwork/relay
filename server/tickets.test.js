@@ -1067,6 +1067,68 @@ async function main() {
     assert.equal(builtinQueue[0].id, builtin.ticket.id);
   });
 
+  await ok('ui_ux role: a prototype state in a custom workflow is claimable and movable only by ui_ux', async () => {
+    const db = new FakeDb();
+    // Requirement -> prototype (ui_ux) -> delivered. The prototype
+    // state's outgoing transition is a pickup, so a ticket sitting in
+    // prototype is claimable from the ui_ux queue and no other.
+    const prototypeFlow = {
+      name: 'Prototype flow',
+      states: [
+        { code: 'requirement', label: 'Requirement', sort_order: 0, is_start: true, is_terminal: false },
+        { code: 'prototype', label: 'Prototype', sort_order: 1, is_start: false, is_terminal: false },
+        { code: 'delivered', label: 'Delivered', sort_order: 2, is_start: false, is_terminal: true },
+      ],
+      transitions: [
+        { from: 'requirement', to: 'prototype', role: 'pm', requiresReason: false, requiresHandoff: false, kind: 'forward', selfCheck: false },
+        { from: 'prototype', to: 'delivered', role: 'ui_ux', requiresReason: false, requiresHandoff: false, kind: 'pickup', selfCheck: false },
+      ],
+      roles: {
+        requirement: { role: 'pm', responsibilities: 'Describe the requirement, then send it to prototyping.' },
+        prototype: { role: 'ui_ux', responsibilities: 'Build the prototype so the user can see the feature early.' },
+        delivered: { role: null, responsibilities: 'Terminal state. The work is delivered; no further action.' },
+      },
+    };
+    const wf = db.seedCustomWorkflow(prototypeFlow, 'proj-1');
+    const created = await tickets.createTicket(db, {
+      actorId: 'pm-1', actorRoles: ['pm'], title: 'Search filters prototype',
+      description: 'Prototype first, spec later.', projectId: 'proj-1', workflowId: wf.id,
+    });
+    assert.equal(created.ok, true, JSON.stringify(created));
+    assert.equal(created.ticket.status, 'requirement');
+    const id = created.ticket.id;
+    const pm = { actorId: 'pm-1', actorRoles: ['pm'] };
+    // PM sends the requirement to prototyping.
+    const toPrototype = await tickets.transitionTicket(db, id, { ...pm, toStatus: 'prototype' });
+    assert.equal(toPrototype.ok, true, JSON.stringify(toPrototype));
+    assert.equal(toPrototype.ticket.status, 'prototype');
+    // The prototype ticket waits for UI&UX: it is in the ui_ux
+    // claimable queue and in no other role's queue.
+    const uxQueue = await tickets.listClaimable(db, ['ui_ux']);
+    assert.equal(uxQueue.length, 1);
+    assert.equal(uxQueue[0].id, id);
+    assert.deepEqual(uxQueue[0].next_transition, {
+      to: 'delivered', role: 'ui_ux', kind: 'pickup',
+      requires_reason: false, requires_handoff: false,
+    });
+    assert.deepEqual(await tickets.listClaimable(db, ['engineer']), []);
+    assert.deepEqual(await tickets.listClaimable(db, ['pm']), []);
+    // An engineer may not move the prototype ticket; UI&UX may, and
+    // the pickup assigns them.
+    const refused = await tickets.transitionTicket(db, id, {
+      actorId: 'dev-1', actorRoles: ['engineer'], toStatus: 'delivered',
+    });
+    assert.equal(refused.ok, false);
+    assert.equal(refused.error, 'wrong_role');
+    assert.equal((await tickets.getTicket(db, id)).status, 'prototype');
+    const done = await tickets.transitionTicket(db, id, {
+      actorId: 'ux-1', actorRoles: ['ui_ux'], toStatus: 'delivered',
+    });
+    assert.equal(done.ok, true, JSON.stringify(done));
+    assert.equal(done.ticket.status, 'delivered');
+    assert.equal(done.ticket.assignee_id, 'ux-1');
+  });
+
   console.log(`\n${passed} ticket service tests passed.`);
 }
 
