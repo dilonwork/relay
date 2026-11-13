@@ -480,6 +480,19 @@ each sub-page owns its own form state and handlers.
   can read the prototype from the ticket itself. On success the app
   navigates to the new ticket's detail view. No workflow is named, so
   the ticket follows the built-in flow.
+- **Prototype → re-plan (Not OK):** a Prototype document also has a Not OK
+  action (PM only). It opens a form for the reason / feedback (required),
+  then opens a re-planning ticket on the Prototype flow via the existing
+  `POST /api/tickets`: the title is `Re-plan Prototype: <document title>`,
+  the description leads with the reason and carries the document reference
+  (title, category, document id, a link back to the Documents page) plus
+  the document's full content, and the reason is also passed as the ticket
+  creation reason so it shows in the ticket's history. The Prototype flow
+  is resolved by name from `GET /api/workflows` at submit time (its id is
+  generated when an admin builds it in the editor, so it is never
+  hardcoded); when no workflow named `Prototype flow` exists the action
+  reports that instead of opening a ticket on the wrong flow. On success
+  the app navigates to the new ticket's detail view.
 - **Endpoints:** see the API table (`/api/documents`,
   `/api/documents/upload`, `/api/document-categories`,
   `/api/documents/:id/download`).

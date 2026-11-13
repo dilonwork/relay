@@ -784,6 +784,7 @@ Categories are global (not per project): one shared category table, and a catego
 | File a document, add a category, delete a document | PM or Admin (same rule as creating a project: documents are flow products that need organizing) |
 | Agent upload (`POST /api/documents/upload`) | Any signed-in account (API key first; sessions also work — API keys and sessions are fully equivalent for authentication, see Ch. 12); no PM / Admin limit, but uploads must land in a project within the caller's scope, and `project_id` is required |
 | Prototype "Implement" button | PM only (because opening a ticket is itself PM-only, see below) |
+| Prototype "Not OK" action | PM only (same reason: it opens a ticket, see below) |
 
 ### Endpoints
 
@@ -825,10 +826,25 @@ A Prototype-category document has an "Implement" button in its list row (only th
 - Project: the document's owning project (a ticket opened from an uncategorized document is also uncategorized); no workflow is named, so the opened ticket follows the built-in flow, matching a New ticket opened without a workflow.
 - On success, navigate straight to the new ticket's detail page.
 
+### Prototype "Not OK" action
+
+A Prototype-category document also has a "Not OK" action in its list row, next to Implement, under the same display conditions (Prototype only, PM only; non-PM users see both buttons disabled with an explanation). It is the "not OK" half of the prototype review: Implement is the OK path, Not OK sends the prototype back for re-planning.
+
+Pressing Not OK opens a reason form in the document's expanded row — it asks what is not OK, and the reason is required: the submit button stays disabled while the reason is blank, and the submit handler guards on it, so an empty reason can never open a ticket. Submitting calls the existing `POST /api/tickets` directly to open a re-planning ticket — no separate ticket-opening logic:
+
+- Title: `Re-plan Prototype: <document title>` — so the ticket reads as a re-plan at a glance, not an implementation.
+- Description: the reviewer's reason first ("Reason / feedback:"), then the same source-document block as the Implement ticket (document title, category, document ID, Documents page link `<origin>/#/documents`, project) plus the document's full content. The ticket carries the full prototype text and the feedback, so the planner can read both from the ticket itself.
+- Reason: the reason is also passed as the ticket creation reason, so it shows in the ticket's history.
+- Workflow: the ticket follows the Prototype flow — the workflow the Gantt prototype ticket (8941c042) follows. The flow's id is generated when an admin builds it in the editor, so it is resolved by name from `GET /api/workflows` at submit time, never hardcoded (the server looks a workflow up by its full id, so the 8-character prefix in a ticket title would not work). A project-scoped flow named `Prototype flow` wins over a global one with the same name; when no such workflow exists, the action reports that and opens no ticket, instead of opening one on the wrong flow.
+- Project: the document's owning project, like Implement.
+- On success, navigate straight to the new ticket's detail page, like Implement, so the submitter sees the ticket was created. On failure the error is shown and the form stays open with the reason intact, so nothing is lost.
+
+Both payloads live in `src/documentTickets.ts`, the single source of truth for what the two tickets say: the panel builds both through it, and `server/documentTickets.test.js` requires that module directly (type stripping, like the view-hash and admin-nav tests), so the tests exercise the exact code the frontend runs. The server side needs no change: opening a ticket on a named workflow is the existing `POST /api/tickets` `workflow_id` path, and the ticket starts in the Prototype flow's start state (covered by the `tickets.test.js` prototype-flow test, which asserts a ticket opened on a `Prototype flow` workflow starts in `requirement`).
+
 ### Frontend
 
 - A Documents entry is added at the top level of the sidebar (visible to all signed-in accounts), with view `documents` and hash `#/documents` (the Ch. 16 routing table already covers it).
-- `src/DocumentsPanel.tsx`: list (category filter + project filter, click a title to expand and read the content), a + icon to add a category, a filing form (title, category, project, content; a .md / .txt file can be uploaded and read into the content field, and the title is pre-filled from the file name when still empty), Download / Implement (Prototype) / Delete buttons per row. The panel manages its own data loading (following AdminPanel's approach); the Refresh button in the App header triggers a panel reload through `refreshKey`.
+- `src/DocumentsPanel.tsx`: list (category filter + project filter, click a title to expand and read the content), a + icon to add a category, a filing form (title, category, project, content; a .md / .txt file can be uploaded and read into the content field, and the title is pre-filled from the file name when still empty), Download / Implement (Prototype) / Not OK (Prototype, opens a reason form and then a re-planning ticket) / Delete buttons per row. The panel manages its own data loading (following AdminPanel's approach); the Refresh button in the App header triggers a panel reload through `refreshKey`.
 - Category filtering is done in the frontend (the list is already loaded per project), so switching categories needs no extra API call.
 
 ### Tests
@@ -836,4 +852,5 @@ A Prototype-category document has an "Implement" button in its list row (only th
 - `server/documents.test.js` (21 items): filename slug (ASCII, Chinese, unusable, over-long truncation), category list order, adding a category (PM succeeds, duplicate name 409, engineer 403, missing name 400), filing documents (PM / Admin succeed, engineer 403, missing title / category / unknown category / unknown project all 400), list filters (project, category, combined, uncategorized) and assigned-account scoping (including the `none` filter being overridden by assignment), single document read (404, cross-project 403), delete (403, 404, cross-project 403), download filename and 404; Agent upload (engineer uploads successfully, `source='agent'`, Chinese content round-trip; visible in the list after upload, download byte-identical; any role may upload, no PM / Admin limit; missing title / category / project / content and unknown category / unknown project all 400; garbled base64, missing padding, non-UTF-8 content all 400 `invalid_content`; over 1 MiB returns 413, exactly 1 MiB succeeds; an assigned account may only upload to its own project, cross-project 403, an unassigned account may upload to any project).
 - `server/migrations.test.js` adds the 015 checks (two tables, Prototype / Undefined seeds, seeds protected by `WHERE NOT EXISTS`).
 - `server/viewHash.test.js` adds the `#/documents` round-trip mapping and `gateView` not blocking Documents.
-- The frontend editor / list has no browser test infrastructure; actual clicks (filing, upload, the + icon adding a category, download, Implement opening a ticket and navigating to the new ticket) are left for the Tester / Reviewer to verify on a real browser.
+- `server/documentTickets.test.js` (10 items): the two payload builders (Implement title / description unchanged, empty content falls back to `(No content)`; re-plan title says re-plan, description leads with the reason, links back to the source document and carries its content, the reason is trimmed in both the description and the returned reason), the reason validation (blank / whitespace-only invalid, any text valid), and the Prototype flow lookup (finds by name, project-scoped wins over global, null when absent, rows without an id skipped).
+- The frontend editor / list has no browser test infrastructure; actual clicks (filing, upload, the + icon adding a category, download, Implement opening a ticket and navigating to the new ticket, Not OK opening the reason form and then a re-planning ticket on the Prototype flow) are left for the Tester / Reviewer to verify on a real browser.

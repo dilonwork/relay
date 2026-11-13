@@ -254,7 +254,7 @@ export const api = {
     return request<Ticket[]>(qs ? `/api/tickets?${qs}` : '/api/tickets');
   },
   getTicket: (id: string) => request<TicketWithHistory>(`/api/tickets/${encodeURIComponent(id)}`),
-  createTicket: (payload: { title: string; description: string; source: string; project_id?: string | null; workflow_id?: string | null }) =>
+  createTicket: (payload: { title: string; description: string; source: string; project_id?: string | null; workflow_id?: string | null; reason?: string }) =>
     request<Ticket>('/api/tickets', { method: 'POST', body: JSON.stringify(payload) }),
   transitionTicket: (
     id: string,

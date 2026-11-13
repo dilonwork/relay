@@ -1,6 +1,12 @@
 import { Fragment, useCallback, useEffect, useState } from 'react';
 import { api } from './api';
 import type { DocumentCategory, DocumentItem, Project } from './api';
+import {
+  buildImplementTicket,
+  buildReplanTicket,
+  findPrototypeFlow,
+  isValidReplanReason,
+} from './documentTickets';
 
 // Documents (design doc ch. 17): the filing cabinet for the
 // documents the platform produces. Documents are filed here with a
@@ -8,8 +14,12 @@ import type { DocumentCategory, DocumentItem, Project } from './api';
 // content as a .md file. Categories are user-defined data — the two
 // defaults (Prototype, Undefined) are seeded by migration 015, and
 // the + icon adds more. A Prototype document has an Implement button
-// (PM only, because ticket creation is PM only): it opens a new
-// ticket from the prototype, reusing POST /api/tickets.
+// and a Not OK action (both PM only, because ticket creation is PM
+// only): Implement opens an implementation ticket from the prototype,
+// Not OK asks for the reason first and opens a re-planning ticket on
+// the Prototype flow — both reusing POST /api/tickets. The payloads
+// live in src/documentTickets.ts, the single source of truth for what
+// those tickets say.
 //
 // This panel owns its data (like AdminPanel): the list and the
 // categories load on mount, when the project filter changes, and
@@ -63,6 +73,14 @@ export default function DocumentsPanel(props: DocumentsPanelProps) {
   const [newCategoryName, setNewCategoryName] = useState('');
 
   const [implementingId, setImplementingId] = useState<string | null>(null);
+
+  // Not OK (re-planning) form: which document the form is open for,
+  // the reason the reviewer typed, and whether a submit is in flight.
+  // The form lives in the document's expanded row, so the reason
+  // stays attached to the document it is about.
+  const [notOkId, setNotOkId] = useState<string | null>(null);
+  const [notOkReason, setNotOkReason] = useState('');
+  const [notOkBusy, setNotOkBusy] = useState(false);
 
   const loadDocuments = useCallback(async () => {
     const projectId = projectFilter === 'all' ? undefined : projectFilter;
@@ -177,30 +195,26 @@ export default function DocumentsPanel(props: DocumentsPanelProps) {
   }
 
   // Open a ticket to implement this Prototype, reusing the existing
-  // ticket creation (POST /api/tickets, PM only). The ticket carries
-  // the document's reference — title, category, id and a link back to
-  // the Documents page — plus the document's full content, so the
-  // implementer can read the prototype from the ticket itself; the
-  // ticket captures the prototype as it was when implementation was
-  // requested, and the link points at the live document. No workflow
-  // is named, so the ticket follows the built-in flow, like a ticket
-  // created without a workflow from the New ticket form.
+  // ticket creation (POST /api/tickets, PM only). The payload comes
+  // from src/documentTickets.ts: the ticket carries the document's
+  // reference — title, category, id and a link back to the Documents
+  // page — plus the document's full content, so the implementer can
+  // read the prototype from the ticket itself; the ticket captures
+  // the prototype as it was when implementation was requested, and
+  // the link points at the live document. No workflow is named, so
+  // the ticket follows the built-in flow, like a ticket created
+  // without a workflow from the New ticket form.
   async function handleImplement(doc: DocumentItem) {
     if (!isPm) return;
     setImplementingId(doc.id);
-    const description = [
-      `Implement the Prototype document "${doc.title}".`,
-      '',
-      `Source document: ${doc.title} (category: Prototype, document ID: ${doc.id})`,
-      `Document page: ${window.location.origin}/#/documents`,
-      `Project: ${projectNameFor(doc.project_id)}`,
-      '',
-      'Document content:',
-      doc.content ? doc.content : '(No content)',
-    ].join('\n');
+    const { title, description } = buildImplementTicket(
+      doc,
+      projectNameFor(doc.project_id),
+      window.location.origin,
+    );
     try {
       const created = await api.createTicket({
-        title: `Implement Prototype: ${doc.title}`,
+        title,
         description,
         source: 'project',
         project_id: doc.project_id,
@@ -211,6 +225,65 @@ export default function DocumentsPanel(props: DocumentsPanelProps) {
       onError(err instanceof Error ? err.message : 'Failed to create ticket.');
     } finally {
       setImplementingId(null);
+    }
+  }
+
+  // Open the Not OK form for this Prototype: the reason is collected
+  // first, the ticket is only opened on submit.
+  function handleNotOk(doc: DocumentItem) {
+    if (!isPm) return;
+    setNotOkId(doc.id);
+    setNotOkReason('');
+    setExpandedId(doc.id);
+  }
+
+  // Open a ticket to re-plan this Prototype, reusing the existing
+  // ticket creation (POST /api/tickets, PM only). The payload comes
+  // from src/documentTickets.ts: the title says this is a re-plan,
+  // the description leads with the reviewer's reason, then the same
+  // document reference and full content as the Implement ticket. The
+  // ticket follows the Prototype flow: the flow's id is generated
+  // when an admin builds it in the editor, so it is resolved by name
+  // from GET /api/workflows at submit time, never hardcoded — the
+  // server rejects a ticket on an unknown workflow, and a missing
+  // Prototype flow is reported here instead of opening a ticket on
+  // the wrong flow. The reason is also passed as the ticket creation
+  // reason, so it shows in the ticket's history. On success the app
+  // navigates to the new ticket, like Implement does, so the
+  // submitter sees the ticket was created.
+  async function handleNotOkSubmit(doc: DocumentItem) {
+    if (!isPm) return;
+    if (!isValidReplanReason(notOkReason)) return;
+    setNotOkBusy(true);
+    try {
+      const flows = await api.listWorkflows(doc.project_id || undefined);
+      const flow = findPrototypeFlow(flows, doc.project_id);
+      if (!flow) {
+        onError('Prototype flow workflow not found. Ask an admin to create a workflow named "Prototype flow" before opening a re-planning ticket.');
+        return;
+      }
+      const { title, description, reason } = buildReplanTicket(
+        doc,
+        notOkReason,
+        projectNameFor(doc.project_id),
+        window.location.origin,
+      );
+      const created = await api.createTicket({
+        title,
+        description,
+        reason,
+        source: 'project',
+        project_id: doc.project_id,
+        workflow_id: flow.id,
+      });
+      setNotOkId(null);
+      setNotOkReason('');
+      onNotice(`Ticket created: ${created.title}`);
+      onOpenTicket(created.id);
+    } catch (err) {
+      onError(err instanceof Error ? err.message : 'Failed to create ticket.');
+    } finally {
+      setNotOkBusy(false);
     }
   }
 
@@ -234,7 +307,7 @@ export default function DocumentsPanel(props: DocumentsPanelProps) {
         <h2>Documents</h2>
         <p className="muted">
           Documents produced by the platform, filed by category. A Prototype document can be sent
-          to implementation as a new ticket.
+          to implementation as a new ticket, or marked Not OK to open a re-planning ticket.
         </p>
         <div className="form-row">
           <div>
@@ -344,6 +417,16 @@ export default function DocumentsPanel(props: DocumentsPanelProps) {
                             >
                               Implement
                             </button>
+                            {' '}
+                            <button
+                              type="button"
+                              className="link"
+                              onClick={() => handleNotOk(doc)}
+                              disabled={!isPm || notOkBusy}
+                              title={isPm ? 'Mark this prototype as not OK and open a re-planning ticket' : 'Only the PM may open a re-planning ticket'}
+                            >
+                              Not OK
+                            </button>
                           </>
                         )}
                         {canMutate && (
@@ -362,8 +445,48 @@ export default function DocumentsPanel(props: DocumentsPanelProps) {
                           <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', margin: 0 }}>
                             {doc.content || '(No content.)'}
                           </pre>
+                          {isPrototype && notOkId === doc.id && isPm && (
+                            <form
+                              onSubmit={(e) => {
+                                e.preventDefault();
+                                void handleNotOkSubmit(doc);
+                              }}
+                              style={{ marginTop: '1rem' }}
+                            >
+                              <p className="muted">
+                                This prototype is not OK: describe what needs re-planning. Submitting
+                                opens a re-planning ticket on the Prototype flow.
+                              </p>
+                              <label className="field" htmlFor={`doc-not-ok-reason-${doc.id}`}>
+                                What is not OK? (required)
+                              </label>
+                              <textarea
+                                id={`doc-not-ok-reason-${doc.id}`}
+                                value={notOkReason}
+                                onChange={(e) => setNotOkReason(e.target.value)}
+                                placeholder="What is not OK about this prototype, and what should change?"
+                              />
+                              <button
+                                className="primary"
+                                type="submit"
+                                disabled={notOkBusy || !isValidReplanReason(notOkReason)}
+                              >
+                                Open re-planning ticket
+                              </button>{' '}
+                              <button
+                                type="button"
+                                className="link"
+                                onClick={() => {
+                                  setNotOkId(null);
+                                  setNotOkReason('');
+                                }}
+                              >
+                                Cancel
+                              </button>
+                            </form>
+                          )}
                           {isPrototype && !isPm && (
-                            <p className="muted">Only accounts holding the PM role may open an implementation ticket.</p>
+                            <p className="muted">Only accounts holding the PM role may open an implementation or re-planning ticket.</p>
                           )}
                         </td>
                       </tr>
