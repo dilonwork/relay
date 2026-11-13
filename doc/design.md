@@ -68,7 +68,7 @@ The main line of this system is the Project development flow, not an on-call sys
 
 ## 3. Locked Decisions Overview
 
-The first three items below were confirmed and locked one by one on 2026-11-11; the fourth (accounts and authentication) and fifth (agent access) were locked and implemented the same day. A sixth decision, English-only, was locked on 2026-11-13 (see the table). They are the foundation of this document. Later chapters expand and define the implementation of these five decisions; if implementation needs to change any of them, come back to this chapter and revise the version instead of quietly drifting in code.
+The first three items below were confirmed and locked one by one on 2026-11-11; the fourth (accounts and authentication) and fifth (agent access) were locked and implemented the same day. A sixth decision, English-only, was locked on 2026-11-13 (see the table). They are the foundation of this document. Later chapters expand and define the implementation of these decisions; if implementation needs to change any of them, come back to this chapter and revise the version instead of quietly drifting in code.
 
 | Decision | Content | Expanded in |
 | --- | --- | --- |
