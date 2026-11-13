@@ -94,6 +94,11 @@ so screenshots taken now would not match the current UI). See
   keeps the current behavior and sees all projects. One project per
   agent in v1; multi-project assignment is out of scope. See
   [Agent access](#agent-access) and design doc ch. 11–12.
+- **English-only (locked 2026-11-13):** the system is English-only —
+  UI strings, code, comments, docs and tickets are all in English. The
+  Reviewer enforces this in review: any non-English content is sent back
+  for correction. The 2026-11-13 audit translated the remaining
+  non-English content (see design doc ch. 3).
 
 ## Project structure
 
@@ -248,10 +253,16 @@ are walked end to end (including the backward move), the definition
 validator's rules are tested case by case, and the migration files are
 tested for the 001→017 sequence. The document service is tested the
 same way, including the filename slug, the project scope rules and the
-download filename.
+download filename. Document ticket payloads are tested too — the Implement
+payload is locked byte-identical and the Not OK re-planning payload carries
+the reason and a link back to the source document — and document rendering
+is covered (type detection from title extension and content, Markdown
+rendering with raw HTML escaped, the sandbox flag). Gantt helpers are
+covered as pure functions: search filtering, status-chip counts,
+grouping, the zoom window, and the 36-hour stalled rule.
 
-201 tests in total: state machine 21, tickets 32, projects 7, auth 15,
-admin 7, API keys 6, monitor 18, workflows 26, quick-create builder 11, documents 22, admin nav 5, view hash 8, migrations 19, role lists 4.
+243 tests in total: state machine 21, tickets 32, projects 7, auth 15,
+admin 7, API keys 6, monitor 18, workflows 26, quick-create builder 11, documents 22, document tickets 10, document render 18, gantt helpers 14, admin nav 5, view hash 8, migrations 19, role lists 4.
 
 ## Accounts & authentication
 
@@ -471,6 +482,17 @@ each sub-page owns its own form state and handlers.
 - **Download:** each document has a Download button; the stored
   Markdown is rendered as a `.md` file whose name comes from the title
   (lowercase, dashes, Unicode letters kept, capped at 80 characters).
+- **Prototype inline rendering:** expanding a Prototype document
+  renders it by type — an HTML prototype shows as the working page
+  in a sandboxed iframe (`sandbox="allow-scripts"`: scripts run, but
+  the frame cannot touch the parent page or navigate it away), a
+  Markdown document shows as formatted text (rendered with `marked`;
+  raw HTML in the source is escaped, never executed). Other types,
+  and every non-Prototype document, keep the plain-text view;
+  Download, Implement and Not OK are unchanged. The type is decided
+  from the title's extension first, then from the content (a leading
+  doctype / `<html>` tag, a Markdown heading, a fenced code block or
+  a link); when it cannot be decided the plain-text view is used.
 - **Prototype → implement:** a Prototype document has an Implement button
   (PM only, because ticket creation is PM only). It opens a new ticket
   from the prototype via the existing `POST /api/tickets`: the title is
