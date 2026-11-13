@@ -6,6 +6,11 @@
 -- (ticket baebf8b7, design doc ch. 15): states are custom per workflow,
 -- so the application validates statuses against the ticket's workflow
 -- definition instead of the database enforcing a fixed list.
+-- The actor_role CHECK was widened by migration 017 (ticket 16763904)
+-- to include ui_ux: the UI&UX role was in the JS role lists but not
+-- in the CHECK, so any transition by a ui_ux account failed with 500
+-- on the live database. Guest and admin are deliberately not in the
+-- list: guest is read-only and admin does not transition.
 -- Idempotent: safe to run on every server startup.
 
 CREATE TABLE IF NOT EXISTS ticket_transitions (
@@ -13,7 +18,7 @@ CREATE TABLE IF NOT EXISTS ticket_transitions (
   ticket_id UUID NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
   actor_id TEXT NOT NULL,
   actor_role TEXT NOT NULL
-    CHECK (actor_role IN ('pm', 'leader', 'engineer', 'reviewer', 'tester', 'deployer')),
+    CHECK (actor_role IN ('pm', 'leader', 'engineer', 'reviewer', 'tester', 'deployer', 'ui_ux')),
   from_status TEXT,
   to_status TEXT NOT NULL,
   reason TEXT NOT NULL DEFAULT '',

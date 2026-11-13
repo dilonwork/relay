@@ -23,6 +23,14 @@
 // existing database, guarded the same way as 011. Migration 016 adds
 // guest the same way (ticket 5519e03c): 9 roles in total, 003 updated
 // in place again, 014 left untouched as the historical 8-role step.
+// Migration 017 adds ui_ux to the ticket_transitions actor_role CHECK
+// (ticket 16763904): the UI&UX role was in the JS role lists but not
+// in the CHECK, so any transition by a ui_ux account failed with 500
+// on the live database. 002 is updated in place with the full 7-role
+// list and 017 drops and re-adds the CHECK on an existing database,
+// guarded the same way as 011/014/016. Guest and admin are
+// deliberately not in the actor_role list: guest is read-only and
+// admin does not transition.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -86,6 +94,34 @@ function rolesCheckLists(sql) {
 // that were current then; 003 (updated in place) and 016 list 9.
 const { ALL_ROLES } = require('./auth.js');
 const ROLES_BEFORE_GUEST = [...ROLES, 'admin'];
+
+// The actor_role CHECK list: ticket_transitions.actor_role must be
+// one of the 7 workflow roles (stateMachine.js ROLES). Guest and
+// admin are deliberately excluded: guest is read-only, admin does
+// not transition. The guard's `actor_role NOT IN (...)` does not
+// match this pattern (NOT sits between the column and IN), so only
+// the CHECK lists are collected.
+function actorRoleCheckLists(sql) {
+  const lists = [];
+  const re = /actor_role\s+IN\s*\(([^)]*)\)/g;
+  let m;
+  while ((m = re.exec(sql)) !== null) {
+    lists.push(m[1].split(',').map((s) => s.trim().replace(/^'|'$/g, '')).filter(Boolean));
+  }
+  return lists;
+}
+
+function assertExactActorRoles(name, sql, expected) {
+  const lists = actorRoleCheckLists(sql);
+  assert.ok(lists.length >= 1, `${name}: expected at least one actor_role CHECK list, found none`);
+  for (const list of lists) {
+    assert.deepEqual(
+      [...list].sort(),
+      [...expected].sort(),
+      `${name}: actor_role CHECK list is not exactly the ${expected.length} flow roles`
+    );
+  }
+}
 
 function assertExactRoles(name, sql, expected) {
   const lists = rolesCheckLists(sql);
@@ -253,6 +289,46 @@ async function main() {
     assert.ok(dropAt > guardAt, '016: DROP must be inside the guard (after DO $$)');
     assert.ok(addAt > dropAt, '016: ADD must come after DROP');
     assert.ok(sql.includes('END IF;'), '016: guard must close with END IF');
+  });
+
+  await ok('migration 002 creates ticket_transitions with actor_role CHECK of all 7 flow roles', async () => {
+    assert.equal(ROLES.length, 7);
+    assert.ok(ROLES.includes('ui_ux'), 'expected ui_ux in the 7 flow roles');
+    assert.ok(!ROLES.includes('guest'), 'guest is read-only and must not be a flow role');
+    assert.ok(!ROLES.includes('admin'), 'admin does not transition and must not be a flow role');
+    assertExactActorRoles('002', readMigration('002_create_ticket_transitions.sql'), ROLES);
+  });
+
+  await ok('migration 017 drops ticket_transitions_actor_role_check and re-adds it with all 7 flow roles', async () => {
+    const sql = readMigration('017_add_ui_ux_to_ticket_transitions_actor_role_check.sql');
+    assert.ok(sql.includes('DROP CONSTRAINT IF EXISTS ticket_transitions_actor_role_check'), '017: missing DROP for ticket_transitions_actor_role_check');
+    assert.ok(sql.includes('ADD CONSTRAINT ticket_transitions_actor_role_check CHECK'), '017: missing ADD for ticket_transitions_actor_role_check');
+    assertExactActorRoles('017', sql, ROLES);
+  });
+
+  await ok('migration 017 guards the ADD: skips it when a stored actor_role is outside the 7 roles', async () => {
+    const sql = readMigration('017_add_ui_ux_to_ticket_transitions_actor_role_check.sql');
+    // Same lesson as 011/014/016: the server re-runs every migration
+    // on each startup. Widening the list cannot break rows that
+    // satisfied the old 6-role CHECK, and a ui_ux row already
+    // satisfies the new list — but if the constraint was ever dropped
+    // and a row with a role outside the 7 was written, an
+    // unconditional ADD would fail on every startup and stop the run
+    // before any later migration. The guard must check stored
+    // actor_role values before any DROP/ADD runs, and the DROP must
+    // be inside the guard too: dropping first and then skipping the
+    // ADD would leave the table with no constraint at all.
+    assert.ok(sql.includes('DO $$'), '017: DROP+ADD must be inside a DO block guard');
+    assert.ok(
+      sql.includes('FROM ticket_transitions WHERE actor_role NOT IN ('),
+      '017: guard must check stored actor_role values against the 7-role list'
+    );
+    const guardAt = sql.indexOf('DO $$');
+    const dropAt = sql.indexOf('DROP CONSTRAINT IF EXISTS ticket_transitions_actor_role_check');
+    const addAt = sql.indexOf('ADD CONSTRAINT ticket_transitions_actor_role_check CHECK');
+    assert.ok(dropAt > guardAt, '017: DROP must be inside the guard (after DO $$)');
+    assert.ok(addAt > dropAt, '017: ADD must come after DROP');
+    assert.ok(sql.includes('END IF;'), '017: guard must close with END IF');
   });
 
   await ok('migration 015 creates documents and document_categories, seeded with Prototype and Undefined', async () => {
