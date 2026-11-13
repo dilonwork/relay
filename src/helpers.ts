@@ -39,6 +39,15 @@ export const ALL_ROLES = ['pm', 'leader', 'engineer', 'reviewer', 'tester', 'dep
 // guest reads with PM's visibility but takes no transition.
 export const WORKFLOW_ROLES = ['pm', 'leader', 'engineer', 'reviewer', 'tester', 'deployer', 'ui_ux'];
 
+// The chat room for a role agent: "<Project> <Role>", e.g. "Acme
+// Support Engineer" (ticket 0f26169c). A display label only — Relay
+// has no chat system, so this string never creates or joins anything.
+// An unassigned agent has no project to name, so the label says so.
+export function chatRoomFor(projectName: string | null | undefined, role: string): string {
+  const label = ROLE_LABELS[role] || role;
+  return projectName ? `${projectName} ${label}` : `${label} (unassigned)`;
+}
+
 // Queue tabs: every "waiting" state is its own queue; done groups the two
 // terminal states. `status` is the ?status= filter value (or null for all).
 // The claimable tab is different: it calls /api/queue, which returns only

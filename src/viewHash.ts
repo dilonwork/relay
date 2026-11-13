@@ -6,7 +6,7 @@
 //
 // Hash format: '#/dashboard', '#/tickets/list', '#/tickets/gantt',
 // '#/new', '#/projects', '#/documents',
-// '#/admin/overview|users|workflows|keys',
+// '#/admin/overview|users|onboarding|workflows|keys',
 // '#/ticket/<id>' for the ticket detail. Anything else (empty hash,
 // unknown segments) parses to null and the caller falls back to
 // Dashboard.
@@ -32,7 +32,7 @@ export type MainView =
 // The Admin tab keys, mirroring ADMIN_TABS in src/adminNav.ts (which
 // owns the list). Keep in sync — the tests fail if a tab is missing
 // here, because a tab with no hash mapping would parse to Dashboard.
-const ADMIN_HASH_TABS = ['overview', 'users', 'workflows', 'keys'] as const;
+const ADMIN_HASH_TABS = ['overview', 'users', 'onboarding', 'workflows', 'keys'] as const;
 
 export function viewToHash(view: MainView, selectedId?: string | null): string {
   switch (view) {

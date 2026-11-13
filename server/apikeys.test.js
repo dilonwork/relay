@@ -51,6 +51,8 @@ class FakeDb {
         password_hash: params[1],
         display_name: params[2],
         roles: [...params[3]],
+        kind: params[4],
+        project_id: params[5] || null,
         is_active: true,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
@@ -59,11 +61,12 @@ class FakeDb {
       return { rows: [{ ...u, roles: [...u.roles] }] };
     }
     if (sql.startsWith('UPDATE users SET display_name')) {
-      const u = this.users.find((x) => x.id === params[3]);
+      const u = this.users.find((x) => x.id === params[4]);
       if (!u) return { rows: [] };
       u.display_name = params[0];
       u.roles = [...params[1]];
       u.is_active = params[2];
+      u.kind = params[3];
       u.updated_at = new Date().toISOString();
       return { rows: [{ ...u, roles: [...u.roles] }] };
     }
@@ -169,7 +172,7 @@ async function main() {
   await ok('create returns the full key once; only a scrypt hash is stored', async () => {
     const db = new FakeDb();
     const user = await auth.createUser(db, {
-      username: 'agent-1', password: PASSWORD, displayName: 'Agent One', roles: ['engineer'],
+      username: 'agent-1', displayName: 'Agent One', roles: ['engineer'], kind: 'agent',
     });
     const created = await auth.createApiKey(db, { userId: user.user.id, name: 'decomposer' });
     assert.equal(created.ok, true);
@@ -195,7 +198,7 @@ async function main() {
   await ok('a valid key authenticates and inherits the account roles', async () => {
     const db = new FakeDb();
     const user = await auth.createUser(db, {
-      username: 'agent-1', password: PASSWORD, displayName: 'Agent One', roles: ['engineer', 'reviewer'],
+      username: 'agent-1', displayName: 'Agent One', roles: ['engineer', 'reviewer'], kind: 'agent',
     });
     const created = await auth.createApiKey(db, { userId: user.user.id, name: '' });
     const who = await auth.authenticateApiKey(db, created.key.key);
@@ -212,14 +215,20 @@ async function main() {
     assert.equal(req.user.username, 'agent-1');
     assert.equal(req.authType, 'api_key');
     assert.equal(req.token, null);
-    // A session still authenticates the same way, marked as a session.
-    const logged = await auth.login(db, { username: 'agent-1', password: PASSWORD });
+    // A session still authenticates the same way, marked as a session —
+    // sessions belong to humans, so this login uses a human account.
+    const human = await auth.createUser(db, {
+      username: 'dev-1', password: PASSWORD, displayName: 'Dev One', roles: ['engineer'],
+    });
+    const logged = await auth.login(db, { username: 'dev-1', password: PASSWORD });
+    assert.equal(logged.ok, true);
     const sessionReq = fakeReq({ bearer: logged.token });
     const sessionRes = fakeRes();
     nextCalled = false;
     await middleware(sessionReq, sessionRes, () => { nextCalled = true; });
     assert.equal(nextCalled, true);
     assert.equal(sessionReq.authType, 'session');
+    assert.equal(human.user.kind, 'human');
     // last_used_at was recorded on the key use.
     assert.ok(db.apiKeys[0].last_used_at, 'last use recorded');
   });
@@ -227,7 +236,7 @@ async function main() {
   await ok('a revoked key authenticates nothing; revocation is idempotent', async () => {
     const db = new FakeDb();
     const user = await auth.createUser(db, {
-      username: 'agent-1', password: PASSWORD, displayName: 'Agent One', roles: ['engineer'],
+      username: 'agent-1', displayName: 'Agent One', roles: ['engineer'], kind: 'agent',
     });
     const created = await auth.createApiKey(db, { userId: user.user.id, name: '' });
     const revoked = await auth.revokeApiKey(db, created.key.id);
@@ -250,12 +259,16 @@ async function main() {
 
   await ok('a key cannot use admin endpoints unless its account is admin', async () => {
     const db = new FakeDb();
-    const admin = await auth.createFirstAdmin(db, {
-      username: 'dylan', password: PASSWORD, displayName: 'Dylan',
+    // The admin key belongs to an agent account holding the admin
+    // role: human accounts (like the first admin from setup) cannot
+    // have API keys at all, so their keys cannot reach admin
+    // endpoints either — the role check below is the same either way.
+    const admin = await auth.createUser(db, {
+      username: 'admin-agent', displayName: 'Admin Agent', roles: ['admin', 'pm'], kind: 'agent',
     });
     assert.equal(admin.ok, true);
     const dev = await auth.createUser(db, {
-      username: 'agent-1', password: PASSWORD, displayName: 'Agent One', roles: ['engineer'],
+      username: 'agent-1', displayName: 'Agent One', roles: ['engineer'], kind: 'agent',
     });
     const devKey = await auth.createApiKey(db, { userId: dev.user.id, name: '' });
     const adminKey = await auth.createApiKey(db, { userId: admin.user.id, name: '' });
@@ -284,7 +297,7 @@ async function main() {
   await ok('wrong keys and deactivated accounts authenticate nothing', async () => {
     const db = new FakeDb();
     const user = await auth.createUser(db, {
-      username: 'agent-1', password: PASSWORD, displayName: 'Agent One', roles: ['engineer'],
+      username: 'agent-1', displayName: 'Agent One', roles: ['engineer'], kind: 'agent',
     });
     const created = await auth.createApiKey(db, { userId: user.user.id, name: '' });
     const full = created.key.key;
@@ -309,7 +322,7 @@ async function main() {
     const missingList = await auth.listApiKeys(db, 'no-such-user');
     assert.equal(missingList.status, 404);
     const user = await auth.createUser(db, {
-      username: 'agent-1', password: PASSWORD, displayName: 'Agent One', roles: ['engineer'],
+      username: 'agent-1', displayName: 'Agent One', roles: ['engineer'], kind: 'agent',
     });
     const longName = await auth.createApiKey(db, { userId: user.user.id, name: 'x'.repeat(65) });
     assert.equal(longName.status, 400);
@@ -317,6 +330,47 @@ async function main() {
     const unnamed = await auth.createApiKey(db, { userId: user.user.id, name: undefined });
     assert.equal(unnamed.ok, true);
     assert.equal(unnamed.key.name, '');
+  });
+
+  await ok('human accounts cannot create API keys', async () => {
+    const db = new FakeDb();
+    const human = await auth.createUser(db, {
+      username: 'dev-1', password: PASSWORD, displayName: 'Dev One', roles: ['engineer'],
+    });
+    assert.equal(human.user.kind, 'human');
+    const refused = await auth.createApiKey(db, { userId: human.user.id, name: '' });
+    assert.equal(refused.ok, false);
+    assert.equal(refused.status, 403);
+    assert.equal(refused.error, 'human_no_api_key');
+    assert.equal(db.apiKeys.length, 0);
+  });
+
+  await ok('a key belonging to a human account authenticates nothing', async () => {
+    const db = new FakeDb();
+    const human = await auth.createUser(db, {
+      username: 'dev-1', password: PASSWORD, displayName: 'Dev One', roles: ['engineer'],
+    });
+    // A key row for a human, planted directly: createApiKey would
+    // refuse, so this is the backstop path in authenticateApiKey —
+    // a key created for a human by mistake must not work.
+    const fullKey = `rl_${'b'.repeat(32)}`;
+    db.apiKeys.push({
+      id: 'test-key-planted',
+      user_id: human.user.id,
+      name: 'planted',
+      key_hash: auth.hashPassword(fullKey),
+      key_prefix: fullKey.slice(0, 7),
+      created_at: new Date().toISOString(),
+      last_used_at: null,
+      revoked_at: null,
+    });
+    assert.equal(await auth.authenticateApiKey(db, fullKey), null);
+    const middleware = auth.requireAuth(db);
+    const res = fakeRes();
+    let nextCalled = false;
+    await middleware(fakeReq({ apiKey: fullKey }), res, () => { nextCalled = true; });
+    assert.equal(res.statusCode, 401);
+    assert.equal(nextCalled, false);
   });
 
   console.log(`\n${passed} API key tests passed.`);

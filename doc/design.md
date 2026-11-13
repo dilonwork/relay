@@ -37,6 +37,7 @@ Tickets carry project development work through a pipeline: the PM creates a requ
 15. Custom Workflows: State Machine Editor
 16. URL Hash Routing (Refresh and Deep Links)
 17. Documents (Filing Cabinet)
+18. Users Split: Humans and Agents + Onboarding
 - Appendix A State Code Reference
 - Appendix B Ticket Lifecycle Example
 
@@ -265,7 +266,8 @@ Accounts and sessions have two more tables (Ch. 11):
 users
   id            UUID / primary key
   username      Account name, case-insensitive and unique
-  password_hash scrypt hash (format scrypt$salt$hash), never plaintext
+  kind          human | agent (Ch. 18; default human; agents have no password and use API keys)
+  password_hash scrypt hash (format scrypt$salt$hash), never plaintext; nullable — agents have no password (Ch. 18)
   display_name  Display name
   roles         Role array: a subset of pm / leader / engineer / reviewer / tester / deployer / ui_ux / guest / admin
   project_id    Assigned project (agent assignment, Ch. 11–12): nullable, unassigned means all projects; cleared when the project is deleted
@@ -276,6 +278,7 @@ projects
   id            UUID / primary key
   name          Project name, unique
   description   Project description
+  type          internal | external (Ch. 18; default internal; external creation auto-creates one role agent per flow role)
   created_by    Creating account ID
   created_at / updated_at
 
@@ -353,6 +356,7 @@ At first launch, requests carried a self-declared identity from the caller and t
 ### Accounts and roles
 
 - An account has a username (case-insensitive, unique), a display name, a password, and one or more roles.
+- An account also has a kind: `human` or `agent` (Ch. 18). Humans log in with a password; agents have no password and authenticate with an API key. The kind is set at creation and corrected by an admin in the Edit form when the backfill got it wrong.
 - Nine roles in total: seven flow roles (PM, Leader, Engineer, Reviewer, Tester, Deployer, UI&UX) plus two account roles: `guest` (read-only, with the PM's visibility, no writes at all) and admin (`admin`). Neither of the two is a flow role and neither can switch ticket states.
 - One account may hold multiple roles at once, for example engineer plus Reviewer. At transition time the system checks whether the account holds the role that transition requires; holding any matching role is enough, no identity switching needed.
 - Accounts can be deactivated: once deactivated, login is impossible and existing sessions become invalid immediately.
@@ -362,6 +366,7 @@ At first launch, requests carried a self-declared identity from the caller and t
 
 - Passwords are stored hashed with Node's built-in `crypto.scrypt` plus a per-person random salt, in the format `scrypt$salt$hash`; no hashing library is introduced, and no plaintext is stored.
 - Passwords are at least 8 characters. On login failure — account does not exist, wrong password, or deactivated account — the same generic error is always returned, without revealing which case it was.
+- Agent accounts have no password (`password_hash` is NULL) and cannot log in with one: a password login for an agent account is rejected with the same generic error as a wrong password, so the failure does not reveal the account kind (Ch. 18).
 
 ### Sessions
 
@@ -402,6 +407,7 @@ At first launch, requests carried a self-declared identity from the caller and t
 ### API keys
 
 - Agent programs do not log in with passwords: in the admin UI, an admin issues a long-lived API key for an account, in the format `rl_` plus 32 random hexadecimal characters, sent with the `X-API-Key` header.
+- Keys are only for agent accounts (Ch. 18): creating a key for a human account is refused (403 `human_no_api_key`), and a key whose account is human — for example because the kind was corrected after the key was issued — does not authenticate. An agent account created by an admin gets its first key at creation; a human account never gets one.
 - Only the hash is stored: keys are stored hashed with scrypt plus a random salt (same format as passwords), and the full key appears only once, in the response at creation time — never shown again, never logged, never stored in plaintext. Listings only show the name and the prefix (`rl_` plus the first 4 characters), for identification and lookup.
 - Keys inherit the account's roles: key login and password login are the same account; flow role checks, the no-self-review rule, and audit records are exactly the same. The server cannot tell whether the caller used a session or a key, and does not need to. A key cannot use admin endpoints unless its account holds the `admin` role.
 - Revocation takes effect immediately: an admin can revoke a key at any time, and it cannot authenticate afterwards; deactivating an account also invalidates all of that account's keys. Each successful use updates the key's last-used time (informational; a failed update does not affect that request).
@@ -872,3 +878,97 @@ Both payloads live in `src/documentTickets.ts`, the single source of truth for w
 - `server/documentTickets.test.js` (12 items): the two payload builders (Implement title / description unchanged, empty content falls back to `(No content)`; re-plan title says re-plan, description leads with the reason, links back to the source document and carries its content, the reason is trimmed in both the description and the returned reason), the Implement ticket payload inherits the document's project (and a document with no project opens a ticket with no project), the reason validation (blank / whitespace-only invalid, any text valid), and the Prototype flow lookup (finds by name, project-scoped wins over global, null when absent, rows without an id skipped).
 - `server/documentRender.test.js` (18 items): kind detection (HTML / Markdown / plain text by title extension and by content, extension wins, an HTML fragment inside Markdown does not flip the kind, undeterminable falls back to text), the Markdown renderer (headings / bold / links / lists, tables and fenced code, raw HTML escaped, dangerous link hrefs neutralized — javascript: / vbscript: / data:text/html including case, leading-space and entity-encoded variants, autolinks, safe hrefs still work, image data:image allowed but javascript: blocked, empty input), and the sandbox flags (`allow-scripts` only — no `allow-same-origin` / `allow-top-navigation` / `allow-forms` / `allow-popups` / `allow-modals`).
 - The frontend editor / list has no browser test infrastructure; actual clicks (filing, upload, the + icon adding a category, download, Implement opening a ticket and navigating to the new ticket, Not OK opening the reason form and then a re-planning ticket on the Prototype flow) are left for the Tester / Reviewer to verify on a real browser.
+
+## 18. Users Split: Humans and Agents + Onboarding
+
+> This chapter implements ticket 0f26169c (users split — humans/agents — plus onboarding, from the interactive prototype in Document a7fb04dd).
+
+### Why split users
+
+Until now every account was the same shape: a username, a password, and roles, with an API key optionally added on top. Humans and agents use the system differently — a human logs in with a password and works in the browser, an agent authenticates with a long-lived key and polls a queue from a duty chat — and the old shape let the two leak into each other: a human account could hold a key, an agent account could hold a password. This chapter separates them: `kind` says which one an account is, and each kind can only use its own credential. The split also makes onboarding concrete: an external project (a client project, not one of ours) is staffed by a fresh set of role agents, one per role in the project's flow, each handed a live onboarding package when it is created.
+
+### Data model (migration 019)
+
+Migration 019 (`db/migrations/019_users_split_humans_agents.sql`, idempotent, DO-block guards for the CHECK changes):
+
+- `users.kind` — `human | agent`, default `human`, CHECK `users_kind_check`.
+- `users.password_hash` becomes nullable (`ALTER TABLE ... DROP NOT NULL`): agent accounts have no password. Human accounts keep the existing hash; the minimum-8-characters rule (Ch. 11) is unchanged.
+- `projects.type` — `internal | external`, default `internal`, CHECK `projects_type_check`.
+- `003_create_users.sql` and `007_create_projects.sql` are updated in place to the same final shape, so a fresh database and a migrated one agree (the migrations test locks both).
+- Backfill rule: `UPDATE users SET kind = 'agent' WHERE id IN (SELECT DISTINCT user_id FROM api_keys)` — an existing account is an agent when it already has an API key (revoked keys count: the account was an agent account even if its key is gone), otherwise it is human. An admin corrects a wrong backfill in the Users screen (see Kind correction below).
+
+### Kind rules
+
+- **Password login rejects agent accounts.** `auth.login` loads the account and, when `kind = 'agent'`, returns the same generic 401 `invalid_credentials` as a wrong password (and as an unknown username): the failure does not reveal that the account exists, or that it is an agent. An agent account that still carries a leftover `password_hash` from before the split is rejected the same way — the kind, not the hash, decides.
+- **API keys are agent-only.** `auth.createApiKey` refuses a human account (403 `human_no_api_key`); `auth.authenticateApiKey` returns null for a key whose account is human (for example a key issued before the kind was corrected). The two credential paths are now disjoint: password for humans, key for agents.
+- **Service-level role restriction: none by kind.** An agent account may hold any valid role, including `admin` — the existing rule "a key cannot use admin endpoints unless its account is admin" still applies unchanged, and no endpoint gains a kind check beyond the credential checks above. The create-agent form only offers the seven workflow roles (that is the form's choice, not a service rule), and the Edit form offers the workflow roles for agents and all nine roles for humans.
+- **Kind correction.** The Edit form has a Kind selector. Human → agent: the password is cleared (set NULL) and all of the account's sessions are revoked — the account's keys keep working, because keys are the agent's credential. Agent → human: the password stays empty until an admin resets it, so the account cannot log in by password until then (the safe direction: a login that should work is blocked rather than a login that should not work being allowed). A password reset for an agent account is refused (400 `agent_no_password`); creating an agent with a password is refused (400); creating a human account still requires a password of at least 8 characters.
+
+### Users screen split (`src/AdminUsers.tsx`)
+
+The Users sub-page has two subtabs, Humans and Agents, sharing the same component and the same data load (`GET /api/admin/users` now returns one row per account with `kind` plus, for agents, `key_status`: whether any key is active and the latest `last_used_at` across the account's keys — one grouped query over `api_keys`, not one query per account).
+
+| Tab | Columns | Actions |
+| --- | --- | --- |
+| Humans | Username, Display name, Roles, Assigned project, Active | Edit, Project, Reset password, Responsibilities |
+| Agents | Username, Role, Assigned project, API key, Last seen, Chat room | Edit, Keys, Project, Deactivate / Activate, Responsibilities |
+
+- **Humans have no key actions and no key column; agents have no password actions** (no Reset password on the Agents tab, and the service refuses it too). The acceptance test for the split is at this level: the tab action sets are disjoint.
+- **Edit is offered on both tabs.** The Leader's decomposition lists Edit only for humans, but the kind correction above needs an Edit form on the Agents tab too — an agent whose kind was backfilled wrongly can only be fixed by editing it. The deviation is deliberate and documented here; the action separation the acceptance criteria check (no key actions for humans, no password actions for agents) still holds.
+- **Create-human form:** username, display name, password (min 8 characters), role checkboxes (all nine roles), project assignment. No key is created.
+- **Create-agent form:** username, role (workflow roles only), project (internal projects only, or Assign later — an agent with no project sees all projects, like any unassigned account). The form creates the account and its first API key in one call (`POST /api/admin/users/agents` returns `{user, key}`) and shows the full key **exactly once**, in a notice banner with a Copy button; closing the banner discards it — the server never stored it and cannot show it again. The key is never stored or logged in plaintext, same as Ch. 12.
+- **Last seen** reuses `api_keys.last_used_at`, already updated on every key use — no new tracking column.
+- **Chat room** is a display label only, derived from role + project (`"<Project> <Role>"`, e.g. "Acme Support Engineer"; `"<Role> (unassigned)"` when the agent has no project). Relay has no chat system and this chapter builds none: the label tells the operator which chat room the agent belongs in, nothing more. The same label is computed in `src/helpers.ts` (`chatRoomFor`) for the frontend and in `server/onboarding.js` (`chatRoomLabel`) for the package, from the same rule.
+
+### Project types and external creation (`src/ProjectsPanel.tsx`, `server/projects.js`)
+
+- The project create form gains an Internal / External radio. The project list shows Type (Internal / External badge) and Agents (count of agent accounts assigned to the project; `listProjects` carries `agent_count` per project).
+- **Internal creation creates no agents.** The response is `{project, agents: []}`.
+- **External creation auto-creates one role agent per role in the configured flow**, each with its own API key and onboarding package. The response is `{project, agents: [{user, key, onboarding}]}` and the frontend shows the one-time keys in a banner after creation (per-agent key + Copy button + chat room), with a note to copy them now.
+- **"Configured flow" — the interpretation.** A brand-new project has no workflows yet, so the configured flow is the default flow: `workflows.getDefaultWorkflowDefinition` reads the seeded default workflow row, or falls back to the built-in 14-state definition when no default row exists. The roles are the distinct non-null roles from the workflow's roles map, in the workflow's state order (`workflows.flowRolesFromDefinition`). For the default flow that is **six roles: leader, pm, engineer, reviewer, tester, deployer** — in that order, because the roles map assigns each state the role of its first outgoing transition (`requirement` belongs to the Leader, who takes requirement → decomposing; the PM owns the two clarification states). The prototype's sample role list has five roles and omits the deployer; the Leader's decomposition ("one role agent per role in the configured flow") governs, so the deployer gets an agent. No workflow selector was added to the create form: the default is the only configured flow at creation time.
+- **Agent usernames:** `<project-slug>-<role>`, where the slug is the lowercased project name with runs of non-alphanumeric characters merged into one `-`, leading/trailing hyphens trimmed, falling back to `project` when nothing is left (`Acme Support` + `engineer` → `acme-support-engineer`). A collision appends `-2`, `-3`, … up to `-10`; when all ten are taken the whole creation fails with 409 `username_taken` and nothing is created (see Atomicity below).
+- **Display names:** `"<Project name> <Role label>"` (`Acme Support Engineer`).
+- **Atomicity:** the project and all its agents are created in one transaction (`projects.createProject` runs inside `withTransaction` and calls the transactional `auth.createAgentTx` per role; a mid-transaction failure throws an error carrying the service result so the transaction rolls back instead of committing partial state). A failed external creation leaves no project, no agents, and no keys behind.
+- **Nested transactions, one rule:** a service function that opens its own transaction must have a transactional core that accepts a client (`createAgent` wraps `createAgentTx`), because a pg transaction client has no `withTransaction` method — a nested service call that opened its own transaction would pass the FakeDb tests and fail on live pg.
+
+### Onboarding package (external projects, admin-only)
+
+The package lives on a new Admin sub-page, Onboarding (the fifth Admin tab: Overview / Users / Onboarding / Workflows / API keys), not in the Projects panel — the package is admin-only and the Projects panel is visible to PMs too. The endpoint is `GET /api/admin/projects/:id/onboarding/:role`, under `/api/admin`, so the `requireAdmin` middleware enforces admin-only. The panel picks an external project, then a role agent, and shows the package.
+
+The package has three parts (`server/onboarding.js`, `getOnboardingPackage`):
+
+1. **API key (masked).** The agent's latest active key, shown as `key_prefix + "…"`. The full key is **not** returned here: the server never stores it, so it cannot be revealed later. The full key's only showing is the handoff at creation time — the one-time key banner in the create-agent form, or the one-time keys box after external project creation. That is the secure reading of the prototype's "full key shown here as the handoff": the handoff *is* the creation response.
+2. **Live onboarding document.** Generated on every request from the project's *live* workflow and role definitions — never a frozen snapshot. The document (`buildOnboardingDocument`) carries a `Generated:` timestamp, the role and project, the flow name, the chat-room recommendation, the work-mode bullets (check the queue every 5 minutes; one ticket at a time; clarify instead of guessing; test locally first, then deploy; never print an API key), and "What you own in this flow": the states the role owns in the active workflow, each with its responsibilities sentence from the workflow's roles map. A **Regenerate** button re-fetches the package; because generation re-reads the live definitions each time, a workflow edit shows up in the regenerated document — the onboarding test proves this by editing a responsibilities sentence through the workflow service and asserting the new text appears and the old text is gone. The document itself never contains a token, for internal agents or external ones.
+3. **Chat-room recommendation.** The same `"<Project> <Role>"` display label, with the steps to join it. Display only — no chat system exists.
+
+The endpoint answers 400 `not_external` for an internal project, 400 `unknown_project` / `unknown_role` for a missing project or role, and 404 `agent_not_found` when the project has no agent holding that role. The onboarding document generation is also reused at external creation time: each created agent's package document is built inside the creation transaction, from the same live definitions.
+
+### Cadences: no scheduler
+
+The prototype's Cadences tab (5-minute ticket check, 12-hour rules sync) is **not** a Relay feature: no scheduler, cron, or background job is added. The 5-minute queue check and the 12-hour rules sync are duty-chat operating rules — how the on-call agents use Relay — not something Relay runs. They appear in Relay only as text in the onboarding document's work-mode section. The only live-definition requirement is the doc generation in the section above.
+
+### Endpoints
+
+| Method | Endpoint | Notes |
+| --- | --- | --- |
+| `POST` | `/api/admin/users/agents` | Create an agent account + first API key (admin only). Body: username, displayName, role (workflow role), optional projectId. Returns 201 `{user, key}` — the key appears only here. Duplicate username 409 `username_taken`; unknown role 400; unknown project 400 `unknown_project`. |
+| `GET` | `/api/admin/users` | User list now returns `kind` per account and, for agents, `key_status` (`has_active_key`, `last_used_at`); humans get `key_status: null`. |
+| `POST` | `/api/admin/users` | Create a user; now accepts `kind` (default human). Agent + password 400; human password still min 8. |
+| `PATCH` | `/api/admin/users/:id` | Update a user; now accepts `kind` (see Kind correction above). |
+| `POST` | `/api/projects` | Create a project; now accepts `type` (`internal` default, `external`). External creation returns `{project, agents: [{user, key, onboarding}]}`; internal returns `{project, agents: []}`. |
+| `GET` | `/api/admin/projects/:id/onboarding/:role` | Onboarding package (admin only). Returns `{agent, role, role_label, key: {masked, key_prefix, last_used_at}, document: {markdown, generated_at}, chat_room}`. 400 `not_external` / `unknown_project` / `unknown_role`; 404 `agent_not_found`. |
+
+### Compatibility
+
+Existing users, keys, and projects keep working through the defaults: existing accounts backfill to `agent` only when they already have a key, existing projects are `internal` and gain no agents, existing keys keep authenticating for agent accounts, and password login is unchanged for human accounts. The only behavior change for an existing setup is that an account backfilled as `agent` can no longer log in by password — by design, and an admin corrects the kind in the Users screen when the backfill got it wrong.
+
+### Tests
+
+- `server/migrations.test.js` (28 items, was 21): migration 019 checks — the `kind` column and its CHECK with the human default, the backfill UPDATE (agent where a key exists), the kind CHECK guard, `password_hash` nullable, the `projects.type` column and its CHECK with the internal default, the type CHECK guard, and the in-place updates to 003 (kind column + CHECK, `password_hash` nullable) and 007 (type column + CHECK).
+- `server/auth.test.js` (21 items, was 15): kind defaults to human on creation; an agent account is created without a password; password login rejects agent accounts, including one with a leftover hash; resetting an agent's password is refused; a human → agent kind change clears the password and revokes sessions, and agent → human leaves the password empty until a reset; agent creation returns the key exactly once, with a bad role / unknown project / duplicate username refused; `listUsersWithKeyStatus` shapes (agent rows carry `key_status`, human rows `null`).
+- `server/apikeys.test.js` (8 items, was 6): creating a key for a human account is refused (403 `human_no_api_key`); a key planted on a human account does not authenticate. The existing key tests now use agent accounts (the admin-endpoint test uses an agent holding the admin role).
+- `server/projects.test.js` (13 items, was 7): internal creation creates no agents and an omitted type defaults to internal; external creation creates exactly six agents for the default flow (usernames `acme-support-leader/pm/engineer/reviewer/tester/deployer`, kind agent, one role each, distinct `rl_` keys, onboarding documents naming the project with a generated-at timestamp and no token, and listing the role's states); a taken agent username gets a numeric suffix; a fully blocked role (all ten username candidates taken) fails with 409 `username_taken` and rolls the whole creation back (no project, no agents, no keys); an invalid type is 400; the list carries `type` and `agent_count`.
+- `server/onboarding.test.js` (6 items, new file): the chat-room label (project + role, unassigned variant); `flowRolesFromDefinition` (default flow → six roles in state order; a custom definition with repeated and null roles; empty input → `[]`); the live document (role states + responsibilities, generated-at, chat room, no token); the package shape (agent, masked key, no full key anywhere, live doc); Regenerate reflects a workflow edit (create a project workflow, set it active, build the doc, edit a responsibilities sentence through the workflow service, build again — the new text appears, the old text is gone); internal / unknown project / unknown role rejections and the 404 when the role has no agent.
+- `server/adminNav.test.js` (5 items): the Admin area now has five sub-pages (Overview, Users, Onboarding, Workflows, API keys), in that order.
+- `server/viewHash.test.js` (8 items): `#/admin/onboarding` round-trips to the `admin-onboarding` view, and the cross-check over `ADMIN_TABS` covers the new tab.
+- The frontend tab split has no browser test infrastructure; actual clicks (switching tabs, the create-human / create-agent forms, the one-time key banner, the external creation keys box, the Onboarding panel and its Regenerate button) are left for the Tester / Reviewer to verify on a real browser.

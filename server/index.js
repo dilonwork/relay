@@ -8,6 +8,7 @@ const tickets = require('./tickets');
 const documents = require('./documents');
 const monitor = require('./monitor');
 const projects = require('./projects');
+const onboarding = require('./onboarding');
 const workflows = require('./workflows');
 const auth = require('./auth');
 const admin = require('./admin');
@@ -264,9 +265,12 @@ app.post('/api/projects', async (req, res) => {
       actorRoles: req.user.roles,
       name: req.body ? req.body.name : undefined,
       description: req.body ? req.body.description : undefined,
+      type: req.body ? req.body.type : undefined,
     });
     if (!result.ok) return res.status(result.status).json({ error: result.error, message: result.message });
-    res.status(201).json(result.project);
+    // External creation returns the role agents too, each with its
+    // API key (shown exactly once, here) and onboarding package.
+    res.status(201).json({ project: result.project, agents: result.agents });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -577,7 +581,7 @@ app.get('/api/admin/overview', async (req, res) => {
 
 app.get('/api/admin/users', async (req, res) => {
   try {
-    res.json(await auth.listUsers(db));
+    res.json(await auth.listUsersWithKeyStatus(db));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -590,9 +594,27 @@ app.post('/api/admin/users', async (req, res) => {
       password: req.body ? req.body.password : undefined,
       displayName: req.body ? req.body.display_name : undefined,
       roles: req.body ? req.body.roles : undefined,
+      kind: req.body ? req.body.kind : undefined,
     });
     if (!result.ok) return res.status(result.status).json({ error: result.error, message: result.message });
     res.status(201).json(result.user);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Create an agent account with its first API key. The full key is
+// returned exactly once, in this response.
+app.post('/api/admin/users/agents', async (req, res) => {
+  try {
+    const result = await auth.createAgent(db, {
+      username: req.body ? req.body.username : undefined,
+      displayName: req.body ? req.body.display_name : undefined,
+      role: req.body ? req.body.role : undefined,
+      projectId: req.body ? req.body.project_id : undefined,
+    });
+    if (!result.ok) return res.status(result.status).json({ error: result.error, message: result.message });
+    res.status(201).json({ user: result.user, key: result.key });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -604,6 +626,7 @@ app.patch('/api/admin/users/:id', async (req, res) => {
       displayName: req.body ? req.body.display_name : undefined,
       roles: req.body ? req.body.roles : undefined,
       isActive: req.body && req.body.is_active !== undefined ? req.body.is_active : undefined,
+      kind: req.body ? req.body.kind : undefined,
     });
     if (!result.ok) return res.status(result.status).json({ error: result.error, message: result.message });
     res.json(result.user);
@@ -667,6 +690,27 @@ app.post('/api/admin/api-keys/:id/revoke', async (req, res) => {
     const result = await auth.revokeApiKey(db, req.params.id);
     if (!result.ok) return res.status(result.status).json({ error: result.error, message: result.message });
     res.json(result.key);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- Admin onboarding package (design doc ch. 18) ---
+// The handoff for one role agent of an external project: the agent,
+// its active API key (masked — the full key was shown exactly once
+// when the agent was created and is never stored), the live
+// onboarding document, and the chat-room recommendation. Admin only
+// (the /api/admin router enforces it); the service checks the
+// project is external and the role agent exists.
+app.get('/api/admin/projects/:id/onboarding/:role', async (req, res) => {
+  try {
+    const result = await onboarding.getOnboardingPackage(db, {
+      projectId: req.params.id,
+      role: req.params.role,
+    });
+    if (!result.ok) return res.status(result.status).json({ error: result.error, message: result.message });
+    const { ok: _ok, status: _status, ...pkg } = result;
+    res.json(pkg);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

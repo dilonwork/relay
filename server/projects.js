@@ -13,8 +13,53 @@
 //
 // A project name is unique: the database index is the final authority,
 // and a collision answers 409 (same convention as auth.js usernames).
+//
+// A project is internal or external (ticket 0f26169c, migration 019).
+// Internal projects use internal agents, assigned later. External
+// projects are created together with one role agent per role in the
+// configured flow — a brand-new project has no active workflow yet,
+// so the configured flow is the default flow — each with its own API
+// key and onboarding package, all inside one transaction with the
+// project itself.
+const auth = require('./auth');
+const onboarding = require('./onboarding');
+const workflows = require('./workflows');
 
-async function createProject(db, { actorId, actorRoles, name, description }) {
+const PROJECT_TYPES = ['internal', 'external'];
+
+// The project-name slug used for auto-created role agents:
+// lowercase, non-alphanumerics become one hyphen, no leading or
+// trailing hyphen. A name with no alphanumerics at all falls back to
+// 'project' (the username check below still applies).
+function slugifyProjectName(name) {
+  const slug = String(name || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  return slug || 'project';
+}
+
+// A free username for a role agent: <slug>-<role>, with a numeric
+// suffix when the plain form is taken (two different project names
+// can slug to the same string). Returns null when all ten tries are
+// taken — the caller aborts the creation rather than guessing.
+async function uniqueAgentUsername(db, base) {
+  for (let i = 1; i <= 10; i++) {
+    const candidate = i === 1 ? base : `${base}-${i}`;
+    const existing = await auth.findUserByUsername(db, candidate);
+    if (!existing) return candidate;
+  }
+  return null;
+}
+
+// Abort the creation transaction, carrying the service result out:
+// returning an error object from inside withTransaction would commit
+// the partial state (the project without its agents), so a failed
+// step throws and the outer catch turns it back into the result.
+function abort(result) {
+  const err = new Error(result.message || result.error);
+  err.result = result;
+  throw err;
+}
+
+async function createProject(db, { actorId, actorRoles, name, description, type }) {
   if (!actorRoles || (!actorRoles.includes('pm') && !actorRoles.includes('admin'))) {
     return { ok: false, status: 403, error: 'wrong_role', message: 'Only the PM or an Admin may create a project.' };
   }
@@ -26,13 +71,53 @@ async function createProject(db, { actorId, actorRoles, name, description }) {
   }
   const cleanName = String(name).trim();
   const cleanDescription = description === undefined || description === null ? '' : String(description).trim();
+  const cleanType = type === undefined || type === null || type === '' ? 'internal' : type;
+  if (!PROJECT_TYPES.includes(cleanType)) {
+    return { ok: false, status: 400, error: 'bad_request', message: `Type must be one of: ${PROJECT_TYPES.join(', ')}.` };
+  }
   try {
-    const { rows } = await db.query(
-      'INSERT INTO projects (name, description, created_by) VALUES ($1, $2, $3) RETURNING *',
-      [cleanName, cleanDescription, String(actorId).trim()]
-    );
-    return { ok: true, status: 201, project: rows[0] };
+    return await db.withTransaction(async (client) => {
+      const { rows } = await client.query(
+        'INSERT INTO projects (name, description, type, created_by) VALUES ($1, $2, $3, $4) RETURNING *',
+        [cleanName, cleanDescription, cleanType, String(actorId).trim()]
+      );
+      const project = rows[0];
+      if (cleanType === 'internal') {
+        return { ok: true, status: 201, project, agents: [] };
+      }
+      const definition = await workflows.getDefaultWorkflowDefinition(client);
+      const roles = workflows.flowRolesFromDefinition(definition);
+      const slug = slugifyProjectName(cleanName);
+      const agents = [];
+      for (const role of roles) {
+        const base = `${slug}-${role}`;
+        const username = await uniqueAgentUsername(client, base);
+        if (!username) {
+          abort({ ok: false, status: 409, error: 'username_taken', message: `No free username for role agent ${base}.` });
+        }
+        const created = await auth.createAgentTx(client, {
+          username,
+          displayName: `${cleanName} ${onboarding.roleLabel(role)}`,
+          role,
+          projectId: project.id,
+        });
+        if (!created.ok) abort(created);
+        const doc = await onboarding.buildOnboardingDocument(client, { projectId: project.id, role });
+        if (!doc.ok) abort(doc);
+        agents.push({
+          user: created.user,
+          key: created.key,
+          onboarding: {
+            markdown: doc.document.markdown,
+            generated_at: doc.document.generated_at,
+            chat_room: doc.chat_room,
+          },
+        });
+      }
+      return { ok: true, status: 201, project, agents };
+    });
   } catch (err) {
+    if (err.result) return err.result;
     if (err.code === '23505') {
       return { ok: false, status: 409, error: 'project_name_taken', message: `Project name ${cleanName} is already taken.` };
     }
@@ -40,11 +125,15 @@ async function createProject(db, { actorId, actorRoles, name, description }) {
   }
 }
 
-// Every project with its ticket count, oldest first. The count is cast to
-// int so the JSON carries a number, not a pg bigint string.
+// Every project with its ticket count and its agent count, oldest
+// first. The counts are cast to int so the JSON carries numbers, not
+// pg bigint strings. agent_count counts agent-kind accounts assigned
+// to the project (the role agents of an external project, plus any
+// agent assigned later).
 async function listProjects(db) {
   const { rows } = await db.query(
-    `SELECT p.*, COUNT(t.id)::int AS ticket_count
+    `SELECT p.*, COUNT(t.id)::int AS ticket_count,
+            (SELECT COUNT(*)::int FROM users u WHERE u.project_id = p.id AND u.kind = 'agent') AS agent_count
      FROM projects p LEFT JOIN tickets t ON t.project_id = p.id
      GROUP BY p.id ORDER BY p.created_at ASC, p.id ASC`
   );
@@ -98,6 +187,8 @@ async function assignTicketProject(db, { actorId, actorRoles, ticketId, projectI
 }
 
 module.exports = {
+  PROJECT_TYPES,
+  slugifyProjectName,
   createProject,
   listProjects,
   getProject,

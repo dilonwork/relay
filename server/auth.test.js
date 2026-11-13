@@ -19,6 +19,7 @@ class FakeDb {
   constructor() {
     this.users = [];
     this.sessions = [];
+    this.apiKeys = [];
     this.seq = 0;
   }
 
@@ -50,7 +51,9 @@ class FakeDb {
         password_hash: params[1],
         display_name: params[2],
         roles: [...params[3]],
-        is_active: true, // SQL sets is_active to the literal TRUE; params has no 5th value.
+        kind: params[4],
+        project_id: params[5] || null,
+        is_active: true, // SQL sets is_active to the literal TRUE; params has no 7th value.
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       };
@@ -58,13 +61,63 @@ class FakeDb {
       return { rows: [{ ...u, roles: [...u.roles] }] };
     }
     if (sql.startsWith('UPDATE users SET display_name')) {
-      const u = this.users.find((x) => x.id === params[3]);
+      const u = this.users.find((x) => x.id === params[4]);
       if (!u) return { rows: [] };
       u.display_name = params[0];
       u.roles = [...params[1]];
       u.is_active = params[2];
+      u.kind = params[3];
       u.updated_at = new Date().toISOString();
       return { rows: [{ ...u, roles: [...u.roles] }] };
+    }
+    // The kind-to-agent correction clears the password in its own
+    // statement (exact match first: the generic password_hash handler
+    // below would read the wrong parameter positions).
+    if (sql === 'UPDATE users SET password_hash = NULL WHERE id = $1') {
+      const u = this.users.find((x) => x.id === params[0]);
+      if (!u) return { rows: [] };
+      u.password_hash = null;
+      u.updated_at = new Date().toISOString();
+      return { rows: [{ ...u, roles: [...u.roles] }] };
+    }
+    if (sql.startsWith('INSERT INTO api_keys')) {
+      const k = {
+        id: `test-key-${++this.seq}`,
+        user_id: params[0],
+        name: params[1],
+        key_hash: params[2],
+        key_prefix: params[3],
+        created_at: new Date().toISOString(),
+        last_used_at: null,
+        revoked_at: null,
+      };
+      this.apiKeys.push(k);
+      return { rows: [{ ...k }] };
+    }
+    if (sql.startsWith('SELECT * FROM api_keys WHERE key_prefix = $1 AND revoked_at IS NULL')) {
+      const matches = this.apiKeys.filter(
+        (k) => k.key_prefix === params[0] && !k.revoked_at
+      );
+      return { rows: matches.map((k) => ({ ...k })) };
+    }
+    if (sql.startsWith('SELECT * FROM api_keys WHERE user_id = $1')) {
+      const matches = this.apiKeys
+        .filter((k) => k.user_id === params[0])
+        .sort((a, b) => (a.created_at < b.created_at ? -1 : 1));
+      return { rows: matches.map((k) => ({ ...k })) };
+    }
+    if (sql.startsWith('SELECT user_id, MAX(last_used_at)')) {
+      const byUser = new Map();
+      for (const k of this.apiKeys) {
+        const cur = byUser.get(k.user_id) || { user_id: k.user_id, last_used_at: null, has_active_key: false };
+        if (k.last_used_at && (!cur.last_used_at || k.last_used_at > cur.last_used_at)) cur.last_used_at = k.last_used_at;
+        if (!k.revoked_at) cur.has_active_key = true;
+        byUser.set(k.user_id, cur);
+      }
+      return { rows: [...byUser.values()] };
+    }
+    if (sql.startsWith('SELECT * FROM projects WHERE id = $1')) {
+      return { rows: [] };
     }
     if (sql.startsWith('UPDATE users SET password_hash')) {
       const u = this.users.find((x) => x.id === params[1]);
@@ -104,13 +157,14 @@ class FakeDb {
   }
 
   async withTransaction(fn) {
-    const snap = JSON.stringify({ users: this.users, sessions: this.sessions });
+    const snap = JSON.stringify({ users: this.users, sessions: this.sessions, apiKeys: this.apiKeys });
     try {
       return await fn(this);
     } catch (err) {
       const restored = JSON.parse(snap);
       this.users = restored.users;
       this.sessions = restored.sessions;
+      this.apiKeys = restored.apiKeys;
       throw err;
     }
   }
@@ -395,6 +449,163 @@ async function main() {
     nextCalled = false;
     auth.requireAdmin({ user: { roles: ['admin', 'pm'] } }, adminRes, () => { nextCalled = true; });
     assert.equal(nextCalled, true);
+  });
+
+  await ok('humans are created with kind human by default; agents are created without a password', async () => {
+    const db = new FakeDb();
+    const human = await auth.createUser(db, {
+      username: 'dev', password: 'correct horse battery staple', displayName: 'Dev', roles: ['engineer'],
+    });
+    assert.equal(human.ok, true);
+    assert.equal(human.user.kind, 'human');
+    const rawHuman = await auth.findUserByUsername(db, 'dev');
+    assert.ok(rawHuman.password_hash.startsWith('scrypt$'));
+    // An agent with a password is a caller mistake, not a value to store.
+    const withPassword = await auth.createUser(db, {
+      username: 'bot', password: 'correct horse battery staple', displayName: 'Bot', roles: ['engineer'], kind: 'agent',
+    });
+    assert.equal(withPassword.ok, false);
+    assert.equal(withPassword.status, 400);
+    const agent = await auth.createUser(db, {
+      username: 'bot', displayName: 'Bot', roles: ['engineer'], kind: 'agent',
+    });
+    assert.equal(agent.ok, true, JSON.stringify(agent));
+    assert.equal(agent.user.kind, 'agent');
+    const rawAgent = await auth.findUserByUsername(db, 'bot');
+    assert.equal(rawAgent.password_hash, null);
+    assert.equal(agent.user.password_hash, undefined);
+    const badKind = await auth.createUser(db, {
+      username: 'bot2', displayName: 'Bot', roles: ['engineer'], kind: 'robot',
+    });
+    assert.equal(badKind.ok, false);
+    assert.equal(badKind.status, 400);
+    assert.equal(await auth.countUsers(db), 2);
+  });
+
+  await ok('agent accounts cannot log in by password', async () => {
+    const db = new FakeDb();
+    const agent = await auth.createUser(db, {
+      username: 'bot', displayName: 'Bot', roles: ['engineer'], kind: 'agent',
+    });
+    assert.equal(agent.ok, true);
+    const attempt = await auth.login(db, { username: 'bot', password: 'anything at all' });
+    assert.equal(attempt.ok, false);
+    assert.equal(attempt.status, 401);
+    assert.equal(attempt.error, 'invalid_credentials');
+    // Even a password hash left on the row must not let an agent in:
+    // the kind check is the rule, not the missing hash.
+    db.users[0].password_hash = auth.hashPassword('correct horse battery staple');
+    const withHash = await auth.login(db, { username: 'bot', password: 'correct horse battery staple' });
+    assert.equal(withHash.ok, false);
+    assert.equal(withHash.status, 401);
+  });
+
+  await ok('password reset is refused for agent accounts', async () => {
+    const db = new FakeDb();
+    const agent = await auth.createUser(db, {
+      username: 'bot', displayName: 'Bot', roles: ['engineer'], kind: 'agent',
+    });
+    const refused = await auth.resetPassword(db, agent.user.id, 'new password here');
+    assert.equal(refused.ok, false);
+    assert.equal(refused.status, 400);
+    assert.equal(refused.error, 'agent_no_password');
+  });
+
+  await ok('changing kind to agent clears the password and sessions; back to human needs a reset', async () => {
+    const db = new FakeDb();
+    const created = await auth.createUser(db, {
+      username: 'dev', password: 'old password here', displayName: 'Dev', roles: ['engineer'],
+    });
+    const logged = await auth.login(db, { username: 'dev', password: 'old password here' });
+    assert.equal(logged.ok, true);
+    const toAgent = await auth.updateUser(db, created.user.id, { kind: 'agent' });
+    assert.equal(toAgent.ok, true);
+    assert.equal(toAgent.user.kind, 'agent');
+    const raw = await auth.findUserByUsername(db, 'dev');
+    assert.equal(raw.password_hash, null);
+    assert.equal(await auth.authenticate(db, logged.token), null);
+    assert.equal((await auth.login(db, { username: 'dev', password: 'old password here' })).ok, false);
+    // Back to human: the account still has no password until reset.
+    const toHuman = await auth.updateUser(db, created.user.id, { kind: 'human' });
+    assert.equal(toHuman.ok, true);
+    assert.equal(toHuman.user.kind, 'human');
+    assert.equal((await auth.login(db, { username: 'dev', password: 'old password here' })).ok, false);
+    const reset = await auth.resetPassword(db, created.user.id, 'new password here');
+    assert.equal(reset.ok, true);
+    assert.equal((await auth.login(db, { username: 'dev', password: 'new password here' })).ok, true);
+    const badKind = await auth.updateUser(db, created.user.id, { kind: 'robot' });
+    assert.equal(badKind.ok, false);
+    assert.equal(badKind.status, 400);
+  });
+
+  await ok('createAgent creates an agent with its first key, shown once', async () => {
+    const db = new FakeDb();
+    const created = await auth.createAgent(db, {
+      username: 'worker-1', displayName: 'Worker One', role: 'engineer',
+    });
+    assert.equal(created.ok, true, JSON.stringify(created));
+    assert.equal(created.status, 201);
+    assert.equal(created.user.kind, 'agent');
+    assert.deepEqual(created.user.roles, ['engineer']);
+    assert.equal(created.user.project_id, null);
+    assert.ok(created.key.startsWith('rl_'), 'key has the rl_ prefix');
+    assert.equal(created.key.length, 35, 'rl_ + 32 hex chars');
+    const raw = await auth.findUserByUsername(db, 'worker-1');
+    assert.equal(raw.password_hash, null);
+    // The key is stored hashed, and the list never shows the full key.
+    const stored = db.apiKeys[0];
+    assert.ok(stored.key_hash.startsWith('scrypt$'));
+    assert.ok(!stored.key_hash.includes(created.key));
+    const listed = await auth.listApiKeys(db, created.user.id);
+    assert.equal(listed.keys.length, 1);
+    assert.equal('key' in listed.keys[0], false);
+    // The agent cannot log in by password.
+    assert.equal((await auth.login(db, { username: 'worker-1', password: 'anything at all' })).ok, false);
+    // Bad role, unknown project and duplicate username are rejected.
+    const badRole = await auth.createAgent(db, { username: 'worker-2', displayName: 'W', role: 'admin' });
+    assert.equal(badRole.ok, false);
+    assert.equal(badRole.status, 400);
+    const unknownProject = await auth.createAgent(db, {
+      username: 'worker-3', displayName: 'W', role: 'engineer', projectId: 'no-such-project',
+    });
+    assert.equal(unknownProject.ok, false);
+    assert.equal(unknownProject.status, 400);
+    assert.equal(unknownProject.error, 'unknown_project');
+    const duplicate = await auth.createAgent(db, {
+      username: 'WORKER-1', displayName: 'W', role: 'tester',
+    });
+    assert.equal(duplicate.ok, false);
+    assert.equal(duplicate.status, 409);
+    assert.equal(duplicate.error, 'username_taken');
+    assert.equal(await auth.countUsers(db), 1);
+  });
+
+  await ok('listUsersWithKeyStatus reports key status for agents only', async () => {
+    const db = new FakeDb();
+    const human = await auth.createUser(db, {
+      username: 'dylan', password: 'correct horse battery staple', displayName: 'Dylan', roles: ['admin', 'pm'],
+    });
+    const withKey = await auth.createAgent(db, { username: 'eng-1', displayName: 'Eng', role: 'engineer' });
+    const revokedOnly = await auth.createAgent(db, { username: 'eng-2', displayName: 'Eng', role: 'engineer' });
+    // An agent with no key at all: created directly, not via
+    // createAgent (which always issues a first key).
+    const noKey = await auth.createUser(db, {
+      username: 'eng-3', displayName: 'Eng', roles: ['engineer'], kind: 'agent',
+    });
+    // Mark the first agent's key as used; revoke the second agent's key.
+    db.apiKeys[0].last_used_at = '2026-11-13T10:00:00.000Z';
+    db.apiKeys[1].revoked_at = '2026-11-13T11:00:00.000Z';
+    const list = await auth.listUsersWithKeyStatus(db);
+    assert.equal(list.length, 4);
+    const byName = Object.fromEntries(list.map((u) => [u.username, u]));
+    assert.equal(byName.dylan.key_status, null);
+    assert.deepEqual(byName['eng-1'].key_status, { has_active_key: true, last_used_at: '2026-11-13T10:00:00.000Z' });
+    assert.deepEqual(byName['eng-2'].key_status, { has_active_key: false, last_used_at: null });
+    assert.deepEqual(byName['eng-3'].key_status, { has_active_key: false, last_used_at: null });
+    assert.equal(human.user.kind, 'human');
+    assert.equal(withKey.user.kind, 'agent');
+    assert.equal(noKey.user.kind, 'agent');
+    assert.equal(revokedOnly.user.kind, 'agent');
   });
 
   console.log(`\n${passed} auth service tests passed.`);

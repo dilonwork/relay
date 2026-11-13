@@ -26,6 +26,7 @@ function ok(name, fn) {
     assert.equal(viewToHash('projects'), '#/projects');
     assert.equal(viewToHash('admin-overview'), '#/admin/overview');
     assert.equal(viewToHash('admin-users'), '#/admin/users');
+    assert.equal(viewToHash('admin-onboarding'), '#/admin/onboarding');
     assert.equal(viewToHash('admin-workflows'), '#/admin/workflows');
     assert.equal(viewToHash('admin-keys'), '#/admin/keys');
     assert.equal(viewToHash('documents'), '#/documents');
@@ -47,6 +48,7 @@ function ok(name, fn) {
       ['#/projects', 'projects', null],
       ['#/admin/overview', 'admin-overview', null],
       ['#/admin/users', 'admin-users', null],
+      ['#/admin/onboarding', 'admin-onboarding', null],
       ['#/admin/workflows', 'admin-workflows', null],
       ['#/admin/keys', 'admin-keys', null],
       ['#/documents', 'documents', null],

@@ -16,16 +16,20 @@ export interface Ticket {
 }
 
 // A project (Project view): a formal list every ticket belongs to, or
-// null on a ticket means uncategorized. ticket_count is present on the
-// list response only.
+// null on a ticket means uncategorized. ticket_count and agent_count
+// are present on the list response only. type is 'internal' or
+// 'external' (ticket 0f26169c): external projects are created together
+// with one role agent per role in the configured flow.
 export interface Project {
   id: string;
   name: string;
   description: string;
+  type: string;
   created_by: string;
   created_at: string;
   updated_at: string;
   ticket_count?: number;
+  agent_count?: number;
 }
 
 // A workflow (design doc ch. 14/15): a named mapping of every ticket
@@ -148,12 +152,58 @@ export interface User {
   username: string;
   display_name: string;
   roles: string[];
+  // 'human' or 'agent' (ticket 0f26169c): humans sign in with a
+  // password and never have an API key; agents sign in with an API
+  // key only and have no password.
+  kind: string;
   // The project the account is assigned to (Agent assignment): null
   // means unassigned, i.e. the account sees all projects.
   project_id: string | null;
+  // API key status, for agent accounts only (null for humans):
+  // whether an active key exists, and when a key was last used.
+  key_status?: { has_active_key: boolean; last_used_at: string | null } | null;
   is_active: boolean;
   created_at: string;
   updated_at: string;
+}
+
+// One role agent created with an external project: the account, its
+// API key (full key, shown exactly once, here) and its onboarding
+// package (live document plus chat-room recommendation).
+export interface RoleAgent {
+  user: User;
+  key: string;
+  onboarding: { markdown: string; generated_at: string; chat_room: string };
+}
+
+export interface ProjectCreation {
+  project: Project;
+  agents: RoleAgent[];
+}
+
+// The onboarding package for one role agent of an external project
+// (ticket 0f26169c): the agent, its active API key masked (the full
+// key was shown exactly once at creation and is never stored), the
+// live onboarding document, and the chat-room recommendation.
+export interface OnboardingPackage {
+  project: { id: string; name: string; type: string };
+  role: string;
+  role_label: string;
+  workflow_name: string;
+  agent: User;
+  key: {
+    id: string;
+    user_id: string;
+    name: string;
+    key_prefix: string;
+    masked: string;
+    created_at: string;
+    last_used_at: string | null;
+    revoked_at: string | null;
+  } | null;
+  document: { markdown: string; generated_at: string };
+  chat_room: string;
+  states: { code: string; label: string; responsibilities: string }[];
 }
 
 export interface AuthStatus {
@@ -272,8 +322,8 @@ export const api = {
   getQueue: (projectId?: string) =>
     request<QueueEntry[]>(projectId ? `/api/queue?project_id=${encodeURIComponent(projectId)}` : '/api/queue'),
   listProjects: () => request<Project[]>('/api/projects'),
-  createProject: (payload: { name: string; description: string }) =>
-    request<Project>('/api/projects', { method: 'POST', body: JSON.stringify(payload) }),
+  createProject: (payload: { name: string; description: string; type?: string }) =>
+    request<ProjectCreation>('/api/projects', { method: 'POST', body: JSON.stringify(payload) }),
   listDocumentCategories: () => request<DocumentCategory[]>('/api/document-categories'),
   createDocumentCategory: (name: string) =>
     request<DocumentCategory>('/api/document-categories', {
@@ -342,9 +392,13 @@ export const api = {
     ),
   adminOverview: () => request<AdminOverview>('/api/admin/overview'),
   adminListUsers: () => request<User[]>('/api/admin/users'),
-  adminCreateUser: (payload: { username: string; password: string; display_name: string; roles: string[] }) =>
+  adminCreateUser: (payload: { username: string; password?: string; display_name: string; roles: string[]; kind?: string }) =>
     request<User>('/api/admin/users', { method: 'POST', body: JSON.stringify(payload) }),
-  adminUpdateUser: (id: string, payload: { display_name?: string; roles?: string[]; is_active?: boolean }) =>
+  // Create an agent account with its first API key. The response
+  // carries the full key exactly once — copy it now.
+  adminCreateAgent: (payload: { username: string; display_name: string; role: string; project_id?: string | null }) =>
+    request<{ user: User; key: string }>('/api/admin/users/agents', { method: 'POST', body: JSON.stringify(payload) }),
+  adminUpdateUser: (id: string, payload: { display_name?: string; roles?: string[]; is_active?: boolean; kind?: string }) =>
     request<User>(`/api/admin/users/${encodeURIComponent(id)}`, {
       method: 'PATCH',
       body: JSON.stringify(payload),
@@ -372,4 +426,8 @@ export const api = {
     request<ApiKey>(`/api/admin/api-keys/${encodeURIComponent(keyId)}/revoke`, {
       method: 'POST',
     }),
+  getOnboardingPackage: (projectId: string, role: string) =>
+    request<OnboardingPackage>(
+      `/api/admin/projects/${encodeURIComponent(projectId)}/onboarding/${encodeURIComponent(role)}`
+    ),
 };

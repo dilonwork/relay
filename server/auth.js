@@ -18,6 +18,10 @@
 const crypto = require('crypto');
 
 const WORKFLOW_ROLES = ['pm', 'leader', 'engineer', 'reviewer', 'tester', 'deployer', 'ui_ux'];
+// Account kinds (ticket 0f26169c): 'human' accounts sign in with a
+// password and never have an API key; 'agent' accounts sign in with
+// an API key only and have no password (password_hash NULL).
+const USER_KINDS = ['human', 'agent'];
 // 'guest' is an account role like 'admin', never a workflow role: a
 // guest account reads with PM's visibility but may not take any
 // transition, so no workflow may name guest as the role responsible
@@ -70,7 +74,8 @@ function validRoles(roles) {
 // The user as the API and the frontend ever see it: no password hash.
 // project_id is the project the account is assigned to (Agent
 // assignment): null means unassigned, i.e. the account sees all
-// projects, as before.
+// projects, as before. kind defaults to 'human' for rows written
+// before migration 019 added the column.
 function publicUser(row) {
   if (!row) return null;
   return {
@@ -78,6 +83,7 @@ function publicUser(row) {
     username: row.username,
     display_name: row.display_name,
     roles: [...(row.roles || [])],
+    kind: row.kind || 'human',
     project_id: row.project_id || null,
     is_active: row.is_active,
     created_at: row.created_at,
@@ -112,30 +118,70 @@ async function listUsers(db) {
   return rows.map(publicUser);
 }
 
-function validateNewAccount({ username, password, roles }) {
+// The admin Users screen lists agents with their API key status and
+// last use; humans never have keys, so their key_status is null.
+// One grouped query, merged in memory: the key columns come from the
+// api_keys table, whose last_used_at is updated on every key use.
+async function listUsersWithKeyStatus(db) {
+  const users = await listUsers(db);
+  const { rows } = await db.query(
+    `SELECT user_id, MAX(last_used_at) AS last_used_at,
+            BOOL_OR(revoked_at IS NULL) AS has_active_key
+     FROM api_keys GROUP BY user_id`
+  );
+  const byUser = new Map(rows.map((r) => [r.user_id, r]));
+  return users.map((u) => {
+    if (u.kind !== 'agent') return { ...u, key_status: null };
+    const k = byUser.get(u.id);
+    return {
+      ...u,
+      key_status: {
+        has_active_key: k ? !!k.has_active_key : false,
+        last_used_at: k && k.last_used_at ? k.last_used_at : null,
+      },
+    };
+  });
+}
+
+function validateNewAccount({ username, password, roles, kind }) {
   if (!validUsername(username)) {
     return { ok: false, status: 400, error: 'bad_request', message: 'Username must be 2-64 characters of letters, digits, dot, underscore or hyphen.' };
   }
-  if (typeof password !== 'string' || password.length < MIN_PASSWORD_LENGTH) {
+  const cleanKind = kind === undefined || kind === null ? 'human' : kind;
+  if (!USER_KINDS.includes(cleanKind)) {
+    return { ok: false, status: 400, error: 'bad_request', message: `Kind must be one of: ${USER_KINDS.join(', ')}.` };
+  }
+  if (cleanKind === 'agent') {
+    // Agents have no password: they sign in with an API key only.
+    // A password supplied for an agent is a caller mistake, not a
+    // value to store — reject it rather than silently dropping it.
+    if (password !== undefined && password !== null && password !== '') {
+      return { ok: false, status: 400, error: 'bad_request', message: 'Agent accounts have no password.' };
+    }
+  } else if (typeof password !== 'string' || password.length < MIN_PASSWORD_LENGTH) {
     return { ok: false, status: 400, error: 'bad_request', message: `Password must be at least ${MIN_PASSWORD_LENGTH} characters.` };
   }
   if (!validRoles(roles)) {
     return { ok: false, status: 400, error: 'bad_request', message: `Roles must be a subset of: ${ALL_ROLES.join(', ')}.` };
   }
-  return { ok: true };
+  return { ok: true, kind: cleanKind };
 }
 
-async function insertUser(db, { username, password, displayName, roles }) {
+async function insertUser(db, { username, password, displayName, roles, kind, projectId }) {
   const name = normalizeUsername(username);
   const existing = await findUserByUsername(db, name);
   if (existing) {
     return { ok: false, status: 409, error: 'username_taken', message: `Username ${name} is already taken.` };
   }
+  const cleanKind = kind === undefined || kind === null ? 'human' : kind;
+  const cleanProjectId = projectId === undefined || projectId === null || !String(projectId).trim()
+    ? null
+    : String(projectId).trim();
   try {
     const { rows } = await db.query(
-      `INSERT INTO users (username, password_hash, display_name, roles, is_active)
-       VALUES ($1, $2, $3, $4, TRUE) RETURNING *`,
-      [name, hashPassword(password), String(displayName || '').trim(), [...new Set(roles)]]
+      `INSERT INTO users (username, password_hash, display_name, roles, kind, project_id, is_active)
+       VALUES ($1, $2, $3, $4, $5, $6, TRUE) RETURNING *`,
+      [name, cleanKind === 'agent' ? null : hashPassword(password), String(displayName || '').trim(), [...new Set(roles)], cleanKind, cleanProjectId]
     );
     return { ok: true, status: 201, user: publicUser(rows[0]) };
   } catch (err) {
@@ -148,10 +194,51 @@ async function insertUser(db, { username, password, displayName, roles }) {
   }
 }
 
-async function createUser(db, { username, password, displayName, roles }) {
-  const check = validateNewAccount({ username, password, roles });
+async function createUser(db, { username, password, displayName, roles, kind, projectId }) {
+  const check = validateNewAccount({ username, password, roles, kind });
   if (!check.ok) return check;
-  return insertUser(db, { username, password, displayName, roles });
+  return insertUser(db, { username, password, displayName, roles, kind: check.kind, projectId });
+}
+
+// The transactional core of agent creation: insert the agent user
+// and its first API key. Takes a transaction client, so external
+// project creation can create its role agents inside the same
+// transaction as the project itself (the project and its agents
+// commit together, or neither does). No validation here: the caller
+// (createAgent, or a flow that supplies valid roles by construction)
+// is responsible for it.
+async function createAgentTx(client, { username, displayName, role, projectId }) {
+  const created = await insertUser(client, {
+    username, password: null, displayName, roles: [role], kind: 'agent', projectId,
+  });
+  if (!created.ok) return created;
+  const key = await createApiKey(client, { userId: created.user.id, name: `${created.user.username} key` });
+  if (!key.ok) return key;
+  return { ok: true, status: 201, user: created.user, key: key.key.key };
+}
+
+// Create an agent account with its first API key, in one call: the
+// create-agent form shows the key exactly once, and the external
+// project creation hands each role agent its key the same way. The
+// caller supplies no password (agents have none); the project, when
+// given, must exist — the foreign key is the backstop, this check is
+// the readable error. The full key is returned exactly once, here.
+async function createAgent(db, { username, displayName, role, projectId }) {
+  if (!WORKFLOW_ROLES.includes(role)) {
+    return { ok: false, status: 400, error: 'bad_request', message: `Role must be one of: ${WORKFLOW_ROLES.join(', ')}.` };
+  }
+  const cleanProjectId = projectId === undefined || projectId === null || !String(projectId).trim()
+    ? null
+    : String(projectId).trim();
+  if (cleanProjectId) {
+    const { rows: projectRows } = await db.query('SELECT * FROM projects WHERE id = $1', [cleanProjectId]);
+    if (!projectRows[0]) {
+      return { ok: false, status: 400, error: 'unknown_project', message: `Unknown project: ${cleanProjectId}.` };
+    }
+  }
+  return db.withTransaction(async (client) => createAgentTx(client, {
+    username, displayName, role, projectId: cleanProjectId,
+  }));
 }
 
 // First-run setup: only when the users table is empty. Creates the first
@@ -165,7 +252,7 @@ async function createFirstAdmin(db, { username, password, displayName }) {
   return insertUser(db, { username, password, displayName, roles: ['admin', 'pm'] });
 }
 
-async function updateUser(db, id, { displayName, roles, isActive }) {
+async function updateUser(db, id, { displayName, roles, isActive, kind }) {
   const current = await findUserById(db, id);
   if (!current) {
     return { ok: false, status: 404, error: 'user_not_found', message: 'User not found.' };
@@ -173,8 +260,12 @@ async function updateUser(db, id, { displayName, roles, isActive }) {
   const nextDisplayName = displayName === undefined ? current.display_name : String(displayName).trim();
   const nextRoles = roles === undefined ? current.roles : roles;
   const nextActive = isActive === undefined ? current.is_active : Boolean(isActive);
+  const nextKind = kind === undefined || kind === null ? (current.kind || 'human') : kind;
   if (roles !== undefined && !validRoles(roles)) {
     return { ok: false, status: 400, error: 'bad_request', message: `Roles must be a subset of: ${ALL_ROLES.join(', ')}.` };
+  }
+  if (!USER_KINDS.includes(nextKind)) {
+    return { ok: false, status: 400, error: 'bad_request', message: `Kind must be one of: ${USER_KINDS.join(', ')}.` };
   }
   // Never strand the system without an admin: refuse to deactivate the
   // last active admin, or to strip the admin role from them.
@@ -188,19 +279,35 @@ async function updateUser(db, id, { displayName, roles, isActive }) {
     }
   }
   const { rows } = await db.query(
-    `UPDATE users SET display_name = $1, roles = $2, is_active = $3, updated_at = CURRENT_TIMESTAMP
-     WHERE id = $4 RETURNING *`,
-    [nextDisplayName, [...new Set(nextRoles)], nextActive, id]
+    `UPDATE users SET display_name = $1, roles = $2, is_active = $3, kind = $4, updated_at = CURRENT_TIMESTAMP
+     WHERE id = $5 RETURNING *`,
+    [nextDisplayName, [...new Set(nextRoles)], nextActive, nextKind, id]
   );
+  // Correcting an account to agent clears its password: agents have
+  // none and sign in with an API key only. Any sessions die with it,
+  // like a password reset. Correcting an agent to human leaves the
+  // password empty until an admin resets it — login fails until then,
+  // which is the safe direction.
+  if (nextKind === 'agent' && (current.kind || 'human') !== 'agent') {
+    await db.query('UPDATE users SET password_hash = NULL WHERE id = $1', [id]);
+    await db.query('DELETE FROM sessions WHERE user_id = $1', [id]);
+    const { rows: cleared } = await db.query('SELECT * FROM users WHERE id = $1', [id]);
+    return { ok: true, status: 200, user: publicUser(cleared[0]) };
+  }
   return { ok: true, status: 200, user: publicUser(rows[0]) };
 }
 
 // Admin sets a new password. All of the user's sessions are revoked, so
-// the reset also signs them out everywhere.
+// the reset also signs them out everywhere. Agent accounts have no
+// password, so resetting one is refused (the Users screen never
+// offers it for agents; this is the server-side backstop).
 async function resetPassword(db, id, newPassword) {
   const user = await findUserById(db, id);
   if (!user) {
     return { ok: false, status: 404, error: 'user_not_found', message: 'User not found.' };
+  }
+  if ((user.kind || 'human') === 'agent') {
+    return { ok: false, status: 400, error: 'agent_no_password', message: 'Agent accounts have no password.' };
   }
   if (typeof newPassword !== 'string' || newPassword.length < MIN_PASSWORD_LENGTH) {
     return { ok: false, status: 400, error: 'bad_request', message: `Password must be at least ${MIN_PASSWORD_LENGTH} characters.` };
@@ -221,7 +328,10 @@ async function login(db, { username, password }) {
   const user = await findUserByUsername(db, username);
   // Same work and same error whether the account exists or not.
   const passwordOk = verifyPassword(password || '', user ? user.password_hash : DUMMY_HASH);
-  if (!user || !user.is_active || !passwordOk) {
+  // Agent accounts have no password and never log in this way, even if
+  // a password hash was somehow left on the row: the kind check is the
+  // rule, not the missing hash. The error stays generic either way.
+  if (!user || !user.is_active || (user.kind || 'human') === 'agent' || !passwordOk) {
     return { ok: false, status: 401, error: 'invalid_credentials', message: 'Invalid username or password.' };
   }
   const token = newSessionToken();
@@ -308,6 +418,12 @@ async function createApiKey(db, { userId, name }) {
   if (!user) {
     return { ok: false, status: 404, error: 'user_not_found', message: 'User not found.' };
   }
+  // API keys are for agent accounts only: humans sign in with a
+  // password and never need one. (Rows written before migration 019
+  // carry kind 'human' by default, so a missing kind is human.)
+  if ((user.kind || 'human') !== 'agent') {
+    return { ok: false, status: 403, error: 'human_no_api_key', message: 'Only agent accounts can have API keys.' };
+  }
   const cleanName = typeof name === 'string' ? name.trim() : '';
   if (cleanName.length > MAX_API_KEY_NAME_LENGTH) {
     return { ok: false, status: 400, error: 'bad_request', message: `Key name must be at most ${MAX_API_KEY_NAME_LENGTH} characters.` };
@@ -373,6 +489,11 @@ async function authenticateApiKey(db, key) {
   }
   const user = await findUserById(db, matched.user_id);
   if (!user || !user.is_active) return null;
+  // A key belonging to a human account authenticates nothing: keys are
+  // for agents only. This is the backstop for a key row that predates
+  // the kind split (migration 019 backfills such accounts to agent,
+  // but a key created for a human by mistake must not work).
+  if ((user.kind || 'human') !== 'agent') return null;
   // Best-effort: record last use. It must never break the request.
   try {
     await db.query('UPDATE api_keys SET last_used_at = CURRENT_TIMESTAMP WHERE id = $1', [matched.id]);
@@ -433,6 +554,7 @@ function requireAdmin(req, res, next) {
 module.exports = {
   WORKFLOW_ROLES,
   ALL_ROLES,
+  USER_KINDS,
   SESSION_TTL_MS,
   MIN_PASSWORD_LENGTH,
   hashPassword,
@@ -446,7 +568,10 @@ module.exports = {
   findUserByUsername,
   findUserById,
   listUsers,
+  listUsersWithKeyStatus,
   createUser,
+  createAgent,
+  createAgentTx,
   createFirstAdmin,
   updateUser,
   resetPassword,

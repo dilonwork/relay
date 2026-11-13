@@ -5,9 +5,10 @@ import type { AdminTab } from './adminNav';
 import AdminApiKeys from './AdminApiKeys';
 import AdminOverviewPanel from './AdminOverview';
 import AdminUsers from './AdminUsers';
+import OnboardingPanel from './OnboardingPanel';
 import WorkflowsPanel from './WorkflowsPanel';
 
-// Admin is split into four sub-pages, one concern each. The sub-page
+// Admin is split into five sub-pages, one concern each. The sub-page
 // is switched from the sidebar Admin group (App.tsx owns the tab, one
 // MainView value per sub-page — see src/adminNav.ts); this shell owns
 // the shared data (overview / users / projects, loaded together),
@@ -72,6 +73,8 @@ export default function AdminPanel({ tab, onTabChange }: { tab: AdminTab; onTabC
           onRefresh={loadAdmin}
           onOpenKeys={openKeysForUser}
         />
+      ) : tab === 'onboarding' ? (
+        <OnboardingPanel users={users} projects={projects} />
       ) : tab === 'workflows' ? (
         <WorkflowsPanel projects={projects} />
       ) : (
