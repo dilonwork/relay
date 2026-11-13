@@ -59,11 +59,11 @@ function ownedStates(definition, role) {
 }
 
 // Build the onboarding document for one role in one project, from
-// the live definitions: the project's active workflow (or the
-// default flow when the project has none) and the role definitions.
-// Returns the Markdown plus the metadata the frontend shows next to
-// it. Every call re-reads the definitions, so the result always
-// reflects the latest workflow edit.
+// the live definitions: the project's chosen workflow (or the
+// built-in flow when the project has chosen none) and the role
+// definitions. Returns the Markdown plus the metadata the frontend
+// shows next to it. Every call re-reads the definitions, so the result
+// always reflects the latest workflow edit.
 async function buildOnboardingDocument(db, { projectId, role }) {
   if (!auth.WORKFLOW_ROLES.includes(role)) {
     return { ok: false, status: 400, error: 'bad_request', message: `Role must be one of: ${auth.WORKFLOW_ROLES.join(', ')}.` };
@@ -79,11 +79,14 @@ async function buildOnboardingDocument(db, { projectId, role }) {
   const active = await workflows.getActiveWorkflow(db, project.id);
   if (!active.ok) return active;
   const workflow = active.workflow;
-  const definition = {
-    states: workflow.states || [],
-    transitions: workflow.transitions || [],
-    roles: workflow.roles || {},
-  };
+  const definition = workflow
+    ? {
+        states: workflow.states || [],
+        transitions: workflow.transitions || [],
+        roles: workflow.roles || {},
+      }
+    : workflows.builtinDefinition();
+  const flowName = workflow ? workflow.name : 'Built-in flow';
   const label = roleLabel(role);
   const room = chatRoomLabel(project.name, role);
   const states = ownedStates(definition, role);
@@ -93,7 +96,7 @@ async function buildOnboardingDocument(db, { projectId, role }) {
     '',
     `- **Role:** ${label}`,
     `- **Project:** ${project.name}`,
-    `- **Flow:** ${workflow.name}`,
+    `- **Flow:** ${flowName}`,
     `- **Generated:** ${generatedAt}`,
     `- **Chat room:** ${room}`,
     '',
@@ -132,7 +135,7 @@ async function buildOnboardingDocument(db, { projectId, role }) {
     project: { id: project.id, name: project.name, type: project.type },
     role,
     role_label: label,
-    workflow_name: workflow.name,
+    workflow_name: flowName,
     chat_room: room,
     states,
   };

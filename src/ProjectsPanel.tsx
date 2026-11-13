@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api } from './api';
 import type { Project, RoleAgent, Workflow } from './api';
 import { ROLE_LABELS } from './helpers';
@@ -9,6 +9,7 @@ interface ProjectsPanelProps {
   newProjectName: string;
   newProjectDescription: string;
   newProjectType: string;
+  newProjectWorkflowId: string;
   // The role agents created with an external project, with each key
   // shown exactly once. Null when no external project was just
   // created (or after the admin closes the box).
@@ -17,6 +18,7 @@ interface ProjectsPanelProps {
   onNewProjectNameChange: (value: string) => void;
   onNewProjectDescriptionChange: (value: string) => void;
   onNewProjectTypeChange: (value: string) => void;
+  onNewProjectWorkflowIdChange: (value: string) => void;
   onCreateProject: (e: React.FormEvent) => void;
   onClearCreatedAgents: () => void;
   // Clicking a project filters the ticket list to it and switches to the
@@ -25,21 +27,25 @@ interface ProjectsPanelProps {
   onSelectProject: (id: string) => void;
 }
 
-// The roles the default flow assigns, in state order: the role agents
-// an external project is created with. A brand-new project has no
-// active workflow yet, so the configured flow is the default flow
-// (design doc ch. 18); the server derives the same list from the
-// live default workflow. When the default workflow is not in the
-// loaded list, the preview is omitted rather than guessed.
-function defaultFlowRoles(workflows: Workflow[]): string[] {
-  const def = workflows.find((w) => w.is_default);
-  if (!def) return [];
+// The roles one workflow assigns, in state order: the role agents an
+// external project is created with.
+function flowRoles(workflow: Workflow): string[] {
   const seen: string[] = [];
-  for (const s of def.states || []) {
-    const role = def.roles[s.code]?.role;
+  for (const s of workflow.states || []) {
+    const role = workflow.roles[s.code]?.role;
     if (role && !seen.includes(role)) seen.push(role);
   }
   return seen;
+}
+
+// The roles of the built-in 14-state flow, read from the Global
+// workflow that carries it (the former Default row, now an ordinary
+// Global workflow named 'Default', migration 020). When that row is
+// gone the preview is omitted rather than guessed — the server still
+// derives the same list from the built-in definition itself.
+function builtinFlowRoles(workflows: Workflow[]): string[] {
+  const builtin = workflows.find((w) => !w.project_id && w.name === 'Default');
+  return builtin ? flowRoles(builtin) : [];
 }
 
 // Project slug preview: the same rule the server uses for role agent
@@ -56,11 +62,13 @@ export default function ProjectsPanel(props: ProjectsPanelProps) {
     newProjectName,
     newProjectDescription,
     newProjectType,
+    newProjectWorkflowId,
     createdAgents,
     busy,
     onNewProjectNameChange,
     onNewProjectDescriptionChange,
     onNewProjectTypeChange,
+    onNewProjectWorkflowIdChange,
     onCreateProject,
     onClearCreatedAgents,
     onSelectProject,
@@ -68,8 +76,9 @@ export default function ProjectsPanel(props: ProjectsPanelProps) {
   const [workflows, setWorkflows] = useState<Workflow[]>([]);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
-  // The workflows list is loaded lazily, only while the external
-  // preview is shown: ProjectsPanel otherwise needs no workflow data.
+  // The workflows list is loaded when the panel mounts: the project
+  // table shows each project's chosen workflow, and the create form
+  // offers the Global workflows to choose from.
   const [workflowsLoaded, setWorkflowsLoaded] = useState(false);
   async function ensureWorkflows() {
     if (workflowsLoaded) return;
@@ -80,9 +89,23 @@ export default function ProjectsPanel(props: ProjectsPanelProps) {
       setWorkflows([]);
     }
   }
+  useEffect(() => {
+    void ensureWorkflows();
+    // Load once on mount; the list is small and the panel needs it
+    // for the table and the create form.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const isExternal = newProjectType === 'external';
-  const previewRoles = isExternal ? defaultFlowRoles(workflows) : [];
+  // Only Global workflows can be chosen at creation — the project
+  // does not exist yet, so no workflow can belong to it.
+  const globalWorkflows = workflows.filter((w) => !w.project_id);
+  const chosenWorkflow = workflows.find((w) => w.id === newProjectWorkflowId) || null;
+  const previewRoles = isExternal
+    ? chosenWorkflow
+      ? flowRoles(chosenWorkflow)
+      : builtinFlowRoles(workflows)
+    : [];
 
   async function handleCopyKey(username: string, key: string) {
     try {
@@ -107,6 +130,7 @@ export default function ProjectsPanel(props: ProjectsPanelProps) {
               <th>Name</th>
               <th>Type</th>
               <th>Description</th>
+              <th>Workflow</th>
               <th>Tickets</th>
               <th>Agents</th>
             </tr>
@@ -127,6 +151,11 @@ export default function ProjectsPanel(props: ProjectsPanelProps) {
                   )}
                 </td>
                 <td>{p.description || '—'}</td>
+                <td>
+                  {p.workflow_id
+                    ? workflows.find((w) => w.id === p.workflow_id)?.name || '—'
+                    : 'None'}
+                </td>
                 <td>{p.ticket_count ?? 0}</td>
                 <td>{p.agent_count ?? 0}</td>
               </tr>
@@ -175,20 +204,38 @@ export default function ProjectsPanel(props: ProjectsPanelProps) {
               name="new-project-type"
               value="external"
               checked={isExternal}
-              onChange={() => {
-                onNewProjectTypeChange('external');
-                void ensureWorkflows();
-              }}
+              onChange={() => onNewProjectTypeChange('external')}
             />
             External — created together with one role agent per role in the configured flow, plus an onboarding package for each role agent.
           </label>
         </div>
+        <div className="form-row">
+          <div>
+            <label className="field" htmlFor="new-project-workflow">Workflow</label>
+            <select
+              id="new-project-workflow"
+              value={newProjectWorkflowId}
+              onChange={(e) => onNewProjectWorkflowIdChange(e.target.value)}
+            >
+              <option value="">No workflow chosen (built-in 14-state flow)</option>
+              {globalWorkflows.map((w) => (
+                <option key={w.id || `global-${w.name}`} value={w.id || ''}>
+                  {w.name} ({(w.states || []).length} states)
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+        <p className="muted">
+          New tickets on this project follow the chosen workflow unless they name another one.
+          Without a chosen workflow, new tickets need an explicit workflow.
+        </p>
         {isExternal && (
           <div style={{ marginTop: 12 }}>
             <h2>Role agents that will be created</h2>
             <p className="muted">One agent per role in the flow. Each gets its own API key and onboarding package.</p>
             {previewRoles.length === 0 ? (
-              <p className="muted">Role agents will be created from the default flow.</p>
+              <p className="muted">Role agents will be created from the built-in 14-state flow.</p>
             ) : (
               <table>
                 <thead>

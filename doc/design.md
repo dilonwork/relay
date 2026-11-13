@@ -38,6 +38,7 @@ Tickets carry project development work through a pipeline: the PM creates a requ
 16. URL Hash Routing (Refresh and Deep Links)
 17. Documents (Filing Cabinet)
 18. Users Split: Humans and Agents + Onboarding
+19. Global Workflows, Project Workflow Choice, Removal of the Default Concept
 - Appendix A State Code Reference
 - Appendix B Ticket Lifecycle Example
 
@@ -156,7 +157,7 @@ The table below is the complete list of legal transitions. Any transition not in
 
 > **Enforced checks:** before executing each transition the system checks four things in order — project scope (an assigned account may only touch tickets in its own project, see Ch. 12), whether the current state allows this transition, whether the actor's role is in the table above, and whether it violates "must not handle a ticket you developed yourself". If any check fails, the transition does not happen.
 
-> **Custom workflows (Ch. 14):** the check "is the actor's role in the table above" follows the project's active workflow instead: the role a transition requires is the role the active workflow assigns to that state, not the role hard-coded in the table above; with no active workflow it falls back to the default workflow, and then to the built-in mapping (which matches the table above). Cancel stays PM-only and cannot be rewritten by a workflow.
+> **Custom workflows (Ch. 14):** the check "is the actor's role in the table above" follows the project's chosen workflow instead: the role a transition requires is the role the chosen workflow assigns to that state, not the role hard-coded in the table above. A ticket on a custom workflow follows that workflow's own roles map (Ch. 15); with no chosen workflow the built-in mapping applies (which matches the table above). Cancel stays PM-only and cannot be rewritten by a workflow.
 
 ---
 
@@ -229,11 +230,11 @@ Custom workflows have one more table (Ch. 14):
 ```
 workflows
   id            UUID / primary key
-  project_id    Owning project; nullable, null means the global default workflow (only one default)
-  name          Workflow name; unique within a project
-  roles         JSONB: one {role, responsibilities} entry per each of the 14 states
-  is_default    Whether it is the global default workflow (read-only)
-  is_active     Whether it is the project's currently active workflow (at most one per project)
+  project_id    Owning project; nullable, null means a Global workflow, visible to every project
+  name          Workflow name; unique within a project (NULL project_id values are distinct in Postgres, so same-name Global workflows are possible)
+  roles         JSONB: one {role, responsibilities} entry per state
+  states        JSONB: the workflow's states (Ch. 15)
+  transitions   JSONB: the workflow's transitions (Ch. 15)
   created_by    Creating account ID
   created_at / updated_at
 ```
@@ -279,6 +280,7 @@ projects
   name          Project name, unique
   description   Project description
   type          internal | external (Ch. 18; default internal; external creation auto-creates one role agent per flow role)
+  workflow_id   The project's chosen workflow (Ch. 19); NULL means no workflow chosen
   created_by    Creating account ID
   created_at / updated_at
 
@@ -490,75 +492,75 @@ At first launch, requests carried a self-declared identity from the caller and t
 
 ## 14. Custom Workflows
 
-> This chapter implements ticket 3269ec1c: a project can customize which role owns each state, replacing the hard-coded built-in mapping; the default workflow behaves exactly as it does today.
+> This chapter implements ticket 3269ec1c: a project can customize which role owns each state, replacing the hard-coded built-in mapping; the built-in flow behaves exactly as it does today. Ticket 7c2fefc5 (Ch. 19) later removed the Default concept: there is no default workflow anymore — a project chooses its workflow, and a project with no chosen workflow has none.
 
 ### Motivation
 
-The Ch. 5/6 state machine and role mapping are hard-coded in the program: pending dev always waits for the engineer, in test is always the Tester. When a different project wants different staffing (for example, a project's pending dev is first picked up by the Tester to write the test plan), the only option used to be changing the code. Custom workflows move the "state → role" mapping into the database: each project can have a named workflow, and ticket routing, pickup queues, and stall reminders all follow the project's active workflow.
+The Ch. 5/6 state machine and role mapping are hard-coded in the program: pending dev always waits for the engineer, in test is always the Tester. When a different project wants different staffing (for example, a project's pending dev is first picked up by the Tester to write the test plan), the only option used to be changing the code. Custom workflows move the "state → role" mapping into the database: each project can have a named workflow, and ticket routing, pickup queues, and stall reminders all follow the project's chosen workflow.
 
 ### Data model
 
-- The `workflows` table (outline in Ch. 8, DDL in migration 010): `name`, one `{role, responsibilities}` per state (`roles` JSONB), `is_default` / `is_active` flags.
+- The `workflows` table (outline in Ch. 8, DDL in migration 010): `name`, one `{role, responsibilities}` per state (`roles` JSONB), `states` / `transitions` JSONB (Ch. 15). Since migration 020 there are no `is_default` / `is_active` flags: the project's chosen workflow is `projects.workflow_id`.
 - The shape of `roles`: all 14 states are required, extra keys are rejected. For a non-terminal state, `role` must be one of the 7 workflow roles (pm / leader / engineer / reviewer / tester / deployer / ui_ux), and `responsibilities` must be a non-empty string; for a terminal state (`delivered` / `cancelled`), `role` must be `null` and `responsibilities` a string. The validator is `validateRolesMap` in `server/workflows.js`.
-- Name uniqueness: (`project_id`, `name`) is unique within a project; a collision returns 409 `workflow_name_taken` (following the projects convention: the service turns 23505 into 409).
+- Name uniqueness: (`project_id`, `name`) is unique within a project; a collision returns 409 `workflow_name_taken` (following the projects convention: the service turns 23505 into 409). Postgres treats NULL `project_id` values as distinct, so same-name Global workflows are technically possible.
 
-### Flag semantics
+### Scope and the project's chosen workflow
 
-- `is_default`: there is only one global default workflow (`project_id` NULL), the fallback for all projects. **Read-only**: update, delete, and set-active are all refused (400 `default_workflow_readonly`).
-- `is_active`: at most one per project. Setting one active clears `is_active` on the other workflows in the same project (in the same transaction). Switching back to the default = clearing the project's active workflows entirely (pass `workflow_id` as `null`).
-- Deletion rules: the default workflow can never be deleted; an active workflow cannot be deleted when the project has no other non-default workflow to fall back to (400 `active_workflow_no_alternative`); when another non-default workflow exists it can be deleted, and the project falls back to the default workflow afterwards. A non-active workflow can be deleted directly.
+- **Global workflows**: a workflow with `project_id` NULL is Global — visible to every project and usable by any of them. Multiple Global workflows are allowed; there is no single default.
+- **A project chooses its workflow**: `projects.workflow_id` names the project's chosen (primary) workflow. It is set at project creation (`POST /api/projects` accepts an optional `workflow_id`, which must be a Global workflow) or later through the active-workflow endpoints (`GET` / `POST /api/projects/:id/active-workflow`; the endpoint names are kept, they now read and write `projects.workflow_id`). Passing `workflow_id` null clears the choice — the project then has no workflow.
+- **A workflow's project is re-assignable**: `PATCH /api/workflows/:id` accepts `project_id` — move the workflow to another project, or set it NULL to make it Global. The target project must exist (400 `unknown_project`). A workflow that is any project's chosen workflow cannot be moved (400 `workflow_in_use` — change that project's workflow first), or the project would point at a workflow belonging to another project.
+- **Deletion rules**: a workflow with tickets cannot be deleted (400 `workflow_in_use`); a workflow that is any project's chosen workflow cannot be deleted either (400 `workflow_used_by_project` — change that project's workflow first). The tickets keep working because the tickets guard refuses the delete. A workflow neither referenced by tickets nor chosen by a project can be deleted directly.
 
-### Seed and default workflow
+### Seed — historical (pre-020)
 
-- Migration 010 writes one default workflow named `Default` with `INSERT ... SELECT ... WHERE NOT EXISTS (SELECT 1 FROM workflows WHERE is_default)`, its content equal to the current built-in flow, so existing behavior is completely unchanged.
-- The default workflow's role mapping is derived from the `TRANSITIONS` in `server/stateMachine.js` (each state takes the role of the first rule whose `from` is that state): requirement→leader, decomposing→leader, needs_clarification→pm, pending_dev→engineer, in_dev→engineer, pending_review→reviewer, in_review→reviewer, pending_test→tester, in_test→tester, needs_acceptance_clarification→pm, pending_deploy→deployer, deploying→deployer, delivered / cancelled→null.
-- **The responsibilities text is mine**: no existing document or program had ready-made wording, so I wrote the responsibility sentence for each state of the default workflow fresh for this ticket (see `DEFAULT_RESPONSIBILITIES` in `server/workflows.js`); it was not copied from an existing document.
-- The seed JSON and `DEFAULT_WORKFLOW_ROLES` in `server/workflows.js` are exactly the same: generate it from the program (node reads workflows.js and prints the JSON, then write it into the SQL) — never hand-copy two copies.
+- Migration 010 wrote one workflow named `Default` with `INSERT ... SELECT ... WHERE NOT EXISTS (SELECT 1 FROM workflows WHERE is_default)`, its content equal to the current built-in flow, so existing behavior was completely unchanged at the time. Migration 020 turned that row into an ordinary Global workflow (same name, no longer the default) and assigned it to every project that had no chosen workflow.
+- The built-in flow's role mapping is derived from the `TRANSITIONS` in `server/stateMachine.js` (each state takes the role of the first rule whose `from` is that state): requirement→leader, decomposing→leader, needs_clarification→pm, pending_dev→engineer, in_dev→engineer, pending_review→reviewer, in_review→reviewer, pending_test→tester, in_test→tester, needs_acceptance_clarification→pm, pending_deploy→deployer, deploying→deployer, delivered / cancelled→null.
+- **The responsibilities text is mine**: no existing document or program had ready-made wording, so I wrote the responsibility sentence for each state of the built-in flow fresh for this ticket (see `BUILTIN_RESPONSIBILITIES` in `server/workflows.js`); it was not copied from an existing document.
+- The seed JSON and `BUILTIN_WORKFLOW_ROLES` in `server/workflows.js` are exactly the same: generate it from the program (node reads workflows.js and prints the JSON, then write it into the SQL) — never hand-copy two copies.
 
-### Role resolution: three-layer fallback
+### Role resolution: two layers
 
 `workflows.getRoleMap(db, projectId)` returns the roles map in effect for that project:
 
-1. The project's active workflow;
-2. Otherwise the `is_default` workflow in the DB;
-3. Otherwise the built-in `DEFAULT_WORKFLOW_ROLES` constant in the program (derived from TRANSITIONS, see above).
+1. The project's chosen workflow's roles map (`projects.workflow_id` → that workflow row);
+2. Otherwise the built-in `BUILTIN_WORKFLOW_ROLES` constant in the program (derived from TRANSITIONS, see above).
 
-A null `projectId` (uncategorized tickets) goes straight to the default. This three-layer fallback guarantees unchanged existing behavior even before the seed has run. Both queries are written in fixed form so the test fake can handle them: `SELECT * FROM workflows WHERE project_id = $1 AND is_active = true LIMIT 1`, and `SELECT * FROM workflows WHERE is_default = true LIMIT 1`.
+A null `projectId` (uncategorized tickets) goes straight to the built-in map. Both queries are written in fixed form so the test fake can handle them: `SELECT * FROM projects WHERE id = $1`, and `SELECT * FROM workflows WHERE id = $1`.
 
 ### Three integration points for role resolution
 
 - **Transitions (`transitionTicket` in `server/tickets.js`)**: inside the transaction (using the passed-in client), first fetch the role map with `getRoleMap(db, ticket.project_id)` and pass it to `validateTransition` as `roleOverrides`. `validateTransition` and `allowedTransitions` in `stateMachine.js` each take an optional `roleOverrides` parameter (a state→role map): when an override exists, the required role for that rule's `from` state becomes the override's role (only when the override is one of the 7 workflow roles); the returned rule's role also becomes the overridden role, so the audit row records it correctly. The cancel rule stays PM-only and takes no override. Without `roleOverrides` the behavior is exactly as today.
-- **Pickup queue (`listClaimable` in `server/tickets.js`)**: no longer uses the hard-coded CLAIMABLE constant. First fetch tickets in the two waiting states, requirement and pending_dev, then decide each ticket's responsible role from its own project's role map (cached once per project); a ticket is only listed when the caller holds that role. `next_transition` takes the single exit rule for that `from` state from TRANSITIONS (requirement→decomposing, pending_dev→in_dev), but the role field is filled with the workflow's role. Under the default workflow the result is exactly the same as today.
+- **Pickup queue (`listClaimable` in `server/tickets.js`)**: no longer uses the hard-coded CLAIMABLE constant. First fetch tickets in the two waiting states, requirement and pending_dev, then decide each ticket's responsible role from its own project's role map (cached once per project); a ticket is only listed when the caller holds that role. `next_transition` takes the single exit rule for that `from` state from TRANSITIONS (requirement→decomposing, pending_dev→in_dev), but the role field is filled with the workflow's role. Under the built-in flow the result is exactly the same as today. (Ch. 19: the queue follows the ticket's definition — a ticket on a workflow carrying the built-in definition keeps this built-in queue, with the role from the ticket's own roles map when it has one; a ticket on a genuinely custom definition is claimable only from a pickup state.)
 - **PM monitoring (`listStalled` in `server/monitor.js`)**: each stalled ticket's `notify_role` and `next_actions` are resolved from that ticket's own project role map (cached once per project); `next_actions` passes the ticket's role map to `allowedTransitions` as `roleOverrides`. The original `responsibleRole(status)` (built-in derivation) is kept and exported, as the fallback and for existing tests.
 
 ### Endpoints
 
 | Method | Endpoint | Notes |
 | --- | --- | --- |
-| `GET` | `/api/workflows?project_id=` | List; an assigned account only sees its own project's workflows plus the global default; cross-project returns 403 `out_of_scope` |
+| `GET` | `/api/workflows?project_id=` | List; an assigned account only sees its own project's workflows plus the global ones; cross-project returns 403 `out_of_scope` |
 | `GET` | `/api/workflows/:id` | One workflow; same scope check (a workflow with `project_id` null is global and visible to everyone) |
-| `POST` | `/api/workflows` | Create (Admin only; name required, unknown project 400, duplicate name 409, roles validation 400) |
-| `PATCH` | `/api/workflows/:id` | Update name / roles (Admin only; default is read-only) |
+| `POST` | `/api/workflows` | Create (Admin only; name required, unknown project 400, duplicate name 409, roles validation 400). `project_id` null = Global; multiple Global workflows are allowed |
+| `PATCH` | `/api/workflows/:id` | Update name / roles / `project_id` (Admin only; moving to another project or to Global — unknown project 400; a workflow chosen by a project cannot be moved, 400 `workflow_in_use`) |
 | `DELETE` | `/api/workflows/:id` | Delete (Admin only; see deletion rules) |
-| `GET` | `/api/projects/:id/active-workflow` | Returns `{workflow, is_default}`: the active workflow when there is one, otherwise the default workflow marked `is_default: true` |
-| `POST` | `/api/projects/:id/active-workflow` | Body `{workflow_id: string \| null}`, null = switch back to default (Admin only) |
+| `GET` | `/api/projects/:id/active-workflow` | Returns `{workflow}`: the project's chosen workflow, or `null` when none is chosen |
+| `POST` | `/api/projects/:id/active-workflow` | Body `{workflow_id: string \| null}`, null = clear the project's chosen workflow (Admin only) |
 
 ### Frontend
 
 - Admin → Workflows tab (only shown to Admins), loading the project's workflows and active workflow when opened. Changes (create / update / delete / set active) are Admin only; the PM can read workflows (opening a ticket still needs to read them) but cannot write.
-- The workflow admin screen (`src/WorkflowsPanel.tsx`, layout follows the card+table+form style of ProjectsPanel): project filter, workflow list (name, Default / Active badges, per-state role summary), create form (name + one row per each of the 14 states: role dropdown + responsibilities text field; a new workflow's initial values come from the default workflow's roles), edit form (same structure), set-active button, switch-back-to-default button, delete button; backend error messages show on the screen. Role dropdown options use the 7 workflow roles (not admin), with labels from `ROLE_LABELS` in `helpers.ts`.
+- The workflow admin screen (`src/WorkflowsPanel.tsx`, layout follows the card+table+form style of ProjectsPanel): project filter, workflow list (name, Active badge for the selected project's chosen workflow, per-state role summary), create form (name + project selector with a Global option + one row per each of the 14 states: role dropdown + responsibilities text field; a new workflow's initial values come from the built-in flow's roles), edit form (same structure, including the project selector), set-active button, clear-workflow button, delete button; backend error messages show on the screen. Role dropdown options use the 7 workflow roles (not admin), with labels from `ROLE_LABELS` in `helpers.ts`.
 - Editing the states and transitions themselves (the state machine editor) is Ch. 15: this chapter's form structure has been extended into three sections, States / Transitions / Roles.
 
 ### Notes
 
-- Not verified: the migration 010 SQL has not actually run on a live PostgreSQL instance (no database on this machine); before merging and deploying, confirm on a develop preview environment that the default workflow is written correctly and that existing tickets' transitions, queues, and monitoring behave unchanged.
+- Historical (pre-020): the migration 010 SQL had not actually run on a live PostgreSQL instance when this chapter was written (no database on this machine); the note asked to confirm on a develop preview environment that the Default workflow was written correctly and that existing tickets' transitions, queues, and monitoring behaved unchanged. That verification happened when 010 shipped.
 - The live DB CHECK constraint missing the 14th state is handled by migration 011 (ticket 16f227ff, not this ticket's concern).
 
 ---
 
 ## 15. Custom Workflows: State Machine Editor
 
-> This chapter implements ticket baebf8b7: a workflow is no longer just a role mapping — the states and transitions themselves can be customized; choose the workflow when opening a ticket, defaulting to the current 14-state development flow.
+> This chapter implements ticket baebf8b7: a workflow is no longer just a role mapping — the states and transitions themselves can be customized; choose the workflow when opening a ticket; a ticket with no workflow follows the project's chosen workflow, or the built-in 14-state flow when the project has chosen none (Ch. 19).
 
 ### Motivation
 
@@ -573,14 +575,14 @@ This chapter turns the state machine into data: each workflow carries its own st
 ### Core decision: each ticket follows one workflow definition
 
 - A ticket picks a workflow when it is opened and never changes it afterwards (`tickets.workflow_id`, `ON DELETE SET NULL`).
-- A ticket with no `workflow_id` follows the built-in 14-state flow (Ch. 5); the built-in flow is just the default definition, not a special code path — the state machine functions became definition-driven (`validateTransitionFor` / `allowedTransitionsFor` / `legalTransitionsFor` / `isTerminalFor` / `startStateFor`), and the old functions (`validateTransition` and friends) are now wrappers around the built-in definition, behavior unchanged.
+- A ticket with no `workflow_id` follows the built-in 14-state flow (Ch. 5); the built-in flow is the fallback definition, not a special code path — the state machine functions became definition-driven (`validateTransitionFor` / `allowedTransitionsFor` / `legalTransitionsFor` / `isTerminalFor` / `startStateFor`), and the old functions (`validateTransition` and friends) are now wrappers around the built-in definition, behavior unchanged.
 - Definition resolution order (`workflows.definitionForTicket`): the ticket's `workflow_id` → that workflow's states / transitions / roles; no workflow → the built-in definition. When a ticket points at a workflow row that does not exist, return `missing: true` and the caller treats it as an internal error (500) — **do not silently fall back to the built-in flow**, because a fallback would leave the ticket in an unknown state. The deletion rule (a workflow with tickets cannot be deleted) and the foreign key make this unreachable in practice.
-- A project's active workflow role map (the Ch. 14 three-layer fallback) **only applies to built-in flow tickets**. A custom-flow ticket's roles always come from its own workflow's roles map. Reason: the active workflow is "which role mapping this project's development flow uses", and a custom-flow ticket is not in the development flow at all — covering its own mapping with the project's mapping would be wrong.
+- A project's chosen-workflow role map (Ch. 14) **only applies to tickets with no workflow of their own**. A ticket on a workflow — including one carrying the built-in definition — follows that workflow's own roles map. Reason: the chosen workflow is "which role mapping this project's development flow uses", and a ticket on its own workflow is not governed by the project's mapping.
 
 ### Data model
 
 - The `workflows` table gains `states` JSONB and `transitions` JSONB (migration 013). State: `{code, label, sort_order, is_start, is_terminal}`; transition: `{from, to, role, requiresReason, requiresHandoff, kind, selfCheck}`. The field formats match the existing `TRANSITIONS` constant: transitions use camelCase (`requiresReason` / `requiresHandoff` / `selfCheck`), states use snake_case (`sort_order` / `is_start` / `is_terminal`).
-- The `tickets` table gains `workflow_id UUID REFERENCES workflows(id) ON DELETE SET NULL` plus the index `idx_tickets_workflow` (migration 013). The default workflow row's states / transitions are generated by node from `stateMachine.js` (14 states, 18 non-create transitions) and filled in only when states is empty.
+- The `tickets` table gains `workflow_id UUID REFERENCES workflows(id) ON DELETE SET NULL` plus the index `idx_tickets_workflow` (migration 013). Historical: the Default workflow row's states / transitions were generated by node from `stateMachine.js` (14 states, 18 non-create transitions) and filled in only when states was empty; after migration 020 that row is an ordinary Global workflow.
 - **DB state CHECK removal (migration 012)**: the three constraints `tickets_status_check`, `ticket_transitions_from_status_check`, and `ticket_transitions_to_status_check` are all DROPPED (all `IF EXISTS`, not re-added). State legality is now validated by the application layer against the ticket's workflow; the database layer can no longer spell out every workflow's state list. Migrations 001/002 were updated in place (state CHECKs removed, source / actor_role / result CHECKs kept, with a note in the file header that 012 removed them). Migration 011 adds a guard (DO block): the CHECK is only re-added when all stored states are within the 14 built-in states — because the server re-runs all migrations on every startup, an unconditional re-add after 012 ships would fail on every startup once a custom-state ticket exists, and block migrations 012/013 and later. Migration 011's own purpose is unaffected: when it first applies, all stored states are built-in states, so the guard always passes.
 
 ### Validation rules (`workflows.validateWorkflowDefinition`)
@@ -601,29 +603,29 @@ States: non-empty; code is lowercase snake_case and unique; label is non-empty; 
 
 ### Transition validation, queue, monitoring, ownership
 
-- **Transitions (`transitionTicket`)**: validated against the ticket's definition; a custom-flow ticket's roleOverrides is its own workflow's roles map, while a built-in flow ticket keeps the project active workflow's role map. Returns (`kind=backward` / `return`) require a reason, enforced by the state machine's requiresReason.
-- **Queue (`listClaimable`)**: the built-in flow keeps the trial scope (only requirement / pending_dev, roles from the project role map); custom flows switch to "the current state has a `pickup`-kind transition, and the caller holds the state's effective role (roles map first)" to be claimable. A state waiting for pickup is exactly a state with a pickup exit — the definition itself says where the queue is.
+- **Transitions (`transitionTicket`)**: validated against the ticket's definition; a custom-flow ticket's roleOverrides is its own workflow's roles map, while a built-in flow ticket keeps the project's chosen-workflow role map. Returns (`kind=backward` / `return`) require a reason, enforced by the state machine's requiresReason.
+- **Queue (`listClaimable`)**: the queue follows the ticket's definition, not whether it carries a workflow id. A ticket whose definition is the built-in definition keeps the trial scope (only requirement / pending_dev; the role comes from the ticket's own roles map when it has one, otherwise the project role map); a ticket on a genuinely custom definition is claimable only from a state with a `pickup`-kind transition, and the caller must hold the state's effective role (roles map first). A state waiting for pickup is exactly a state with a pickup exit — the definition itself says where the queue is.
 - **Monitoring stalled (`listStalled` / `isStalledState`)**: the built-in flow keeps the Ch. 13 `STALLED_STATES` list (`pending_deploy` is included as an established exception: deployment is the last step, and it is not worth deriving it from transition kinds); custom flows use the general rule: **non-terminal, and not a waiting-for-pickup queue state (no exit pickup transition), with no transition for over 30 minutes**. Reason: a ticket waiting for pickup is not stuck, it is waiting for someone to take it; any other in-progress state with no movement for over 30 minutes is stuck, consistent with the 30-minute threshold in Ch. 13. `notify_role` and `next_actions` are resolved from the ticket's own workflow (custom: roles map or the first exit transition's role; built-in: project role map + `responsibleRole` fallback). In practice the candidate set can no longer be pre-filtered by state; it reads all tickets in scope and filters them in JS by definition (each workflow's / project's definition and role map cached once).
 - **Ownership (custom flows, `nextOwnershipForCustom`)**: pickup / cancel are claimed by the actor; everything else hands off, clearing the assignee and waiting for the next role to pick it up. `developer_id` is untouched; custom flows have no self-check (self-check is a Review / testing / deployment rule of the development flow).
 
 ### Opening a ticket with a workflow
 
-- `POST /api/tickets` accepts `workflow_id` (omitted = built-in flow). An unknown workflow returns 404; a project workflow may only be used for tickets in its own project, otherwise 400 `workflow_project_mismatch`; a global workflow (`project_id` NULL) may be used for any project. A new ticket's state is that workflow's start state.
+- `POST /api/tickets` accepts `workflow_id`. Omitted, the ticket follows the project's chosen workflow; on a project with no chosen workflow and no explicit workflow the creation is refused (400 `no_workflow`) — nothing is silently fallen back to. An uncategorized ticket (no project) with no explicit workflow follows the built-in flow. An unknown workflow returns 404; a project workflow may only be used for tickets in its own project, otherwise 400 `workflow_project_mismatch`; a global workflow (`project_id` NULL) may be used for any project. A new ticket's state is that workflow's start state.
 - `GET /api/meta/transitions?workflow_id=` returns that workflow's legal transitions (no parameter = the built-in table, unchanged).
-- The frontend New ticket form adds a workflow dropdown: default "Default development flow (14 states)" → `workflow_id` null, the rest are the usable workflows (that project's or global ones, excluding the Default row itself — the null option already represents it; other projects' workflows do not appear).
+- The frontend New ticket form adds a workflow dropdown: with a project selected the empty option reads "Project's chosen workflow"; with no project it reads "Built-in flow (14 states)". The rest are the usable workflows (that project's or global ones). The row named `Default` is an ordinary Global workflow now and appears in the list like any other.
 
 ### Workflow editor (Admin / PM)
 
 - `src/WorkflowsPanel.tsx` heavily revised: states editor (label, code, move up/down, start radio, terminal checkbox, add / delete; renaming a code automatically re-points every transition that references it; deleting a state also deletes its transitions and roles entries), transitions editor (from / to dropdowns, kind dropdown forward / backward / pickup / clarify / return, requiresReason / requiresHandoff checkboxes, role shown as derived read-only from the from-state), roles table driven by that workflow's own states (no longer the hard-coded 14 states).
-- New workflows start blank (0 states) instead of copying the Default workflow's full definition; one-click templates and quick create are in the next section. The Default workflow is read-only view (View opens the same form, everything disabled, no submit).
+- New workflows start blank (0 states) instead of copying the built-in flow's full definition; one-click templates and quick create are in the next section.
 - The frontend first does the same lightweight validation as the server (exactly one start, at least one terminal, code format and uniqueness, backward / return require a reason, every non-terminal state has an exit, and so on), and the server validates again; the backend message wins. Cancel is not listed in the editor (implicit rule, see above).
-- Rules: a state with tickets still in it cannot be deleted (400 `state_in_use`); a workflow with tickets cannot be deleted (400 `workflow_in_use`). The Ch. 14 deletion rules (default is read-only, active needs an alternative) stay unchanged.
+- Rules: a state with tickets still in it cannot be deleted (400 `state_in_use`); a workflow with tickets cannot be deleted (400 `workflow_in_use`). The Ch. 14 deletion rules stay unchanged (a workflow chosen by a project cannot be deleted either, 400 `workflow_used_by_project`).
 
 ### Simplifying creation: blank start, templates, quick create
 
-> Ticket ecf671fb: the editor copied the default's full definition (14 states) when creating a workflow, so building a short flow meant deleting a pile of unwanted states first. Dylan reported that creating a flow was too complicated.
+> Ticket ecf671fb: the editor copied the built-in flow's full definition (14 states) when creating a workflow, so building a short flow meant deleting a pile of unwanted states first. Dylan reported that creating a flow was too complicated.
 
-- **Blank start**: a new workflow's form starts with 0 states, 0 transitions, and an empty roles map (`WorkflowsPanel.openCreate` no longer copies the Default workflow). The Default workflow itself is untouched, and existing workflows are unaffected.
+- **Blank start**: a new workflow's form starts with 0 states, 0 transitions, and an empty roles map (`WorkflowsPanel.openCreate` no longer copies the built-in flow). Existing workflows are unaffected.
 - **One-click templates**: the create form's "Start from" section lists the three built-in templates; one click fills the form with that template's states / transitions / roles, then tweak and save. The single source of the templates is still `server/workflowExamples.js`, read by the frontend through `GET /api/workflow-examples` (read-only reference data, not per project, readable by any signed-in user) — no second copy. When the form already has content, applying a template asks for confirmation before overwriting.
 - **Quick create**: the same section's Quick create: enter a list of state names, pick an owner per state, and Generate chains them into a linear flow automatically (the first state is the start, the last is terminal; the first transition is kind `pickup`, the rest `forward`; each state's owner goes into the roles map; responsibilities get a default sentence automatically, editable in the Roles table). Return, reason, and other advanced settings live in the "Advanced" section (add one backward transition, from/to freely chosen, reason automatically required) and are not needed by default. The generation logic is the shared pure function `buildLinearFlow` in `src/workflowQuickCreate.ts` (no React, no DOM), shared by the editor and the server tests; labels that cannot be slugified, such as Chinese, fall back to `state_N` codes, with a numeric suffix on collision.
 - **Validation rules unchanged**: a 0-state draft only lives in the browser form; on save it still has to satisfy the existing rules (exactly one start, at least one terminal, every non-terminal state has an exit, and so on). The frontend `validateForm` blocks submitting with 0 states (`Add at least one state.`), and the backend `createWorkflow` also returns 400 `invalid_workflow` for explicitly passed empty states / transitions (locked by a test). The old behavior when `createWorkflow` omits states / transitions — defaulting to the built-in definition — is unchanged (roles-only creation still takes that path).
@@ -638,7 +640,7 @@ States: non-empty; code is lowercase snake_case and unique; label is non-empty; 
 | B: without confirmation | User requirement → Feature planning → Generate spec → Delivered | requirement→planning pickup (leader); planning→spec forward (leader); spec→delivered forward (engineer) | Same as A without confirmation |
 | C: incident | System event → Create incident → Closed | event→incident pickup (pm); incident→closed forward (engineer) | event: pm, incident: engineer (the incident is opened by PM pickup and closed by the engineer) |
 
-Acceptance: all three flows can be built in the editor, picked when opening a ticket, walked through in order, and user confirmation can return to feature planning; the default development flow behaves unchanged (existing tests all pass).
+Acceptance: all three flows can be built in the editor, picked when opening a ticket, walked through in order, and user confirmation can return to feature planning; the built-in development flow behaves unchanged (existing tests all pass).
 
 ### Endpoints (new / changed)
 
@@ -925,7 +927,7 @@ The Users sub-page has two subtabs, Humans and Agents, sharing the same componen
 - The project create form gains an Internal / External radio. The project list shows Type (Internal / External badge) and Agents (count of agent accounts assigned to the project; `listProjects` carries `agent_count` per project).
 - **Internal creation creates no agents.** The response is `{project, agents: []}`.
 - **External creation auto-creates one role agent per role in the configured flow**, each with its own API key and onboarding package. The response is `{project, agents: [{user, key, onboarding}]}` and the frontend shows the one-time keys in a banner after creation (per-agent key + Copy button + chat room), with a note to copy them now.
-- **"Configured flow" — the interpretation.** A brand-new project has no workflows yet, so the configured flow is the default flow: `workflows.getDefaultWorkflowDefinition` reads the seeded default workflow row, or falls back to the built-in 14-state definition when no default row exists. The roles are the distinct non-null roles from the workflow's roles map, in the workflow's state order (`workflows.flowRolesFromDefinition`). For the default flow that is **six roles: leader, pm, engineer, reviewer, tester, deployer** — in that order, because the roles map assigns each state the role of its first outgoing transition (`requirement` belongs to the Leader, who takes requirement → decomposing; the PM owns the two clarification states). The prototype's sample role list has five roles and omits the deployer; the Leader's decomposition ("one role agent per role in the configured flow") governs, so the deployer gets an agent. No workflow selector was added to the create form: the default is the only configured flow at creation time.
+- **"Configured flow" — the interpretation.** The configured flow is the workflow the project chooses at creation: `POST /api/projects` accepts an optional `workflow_id`, which must be a Global workflow (the project does not exist yet, so no workflow can belong to it). When no workflow is chosen, the configured flow is the built-in 14-state definition (`workflows.builtinDefinition`). The roles are the distinct non-null roles from the workflow's roles map, in the workflow's state order (`workflows.flowRolesFromDefinition`). For the built-in flow that is **six roles: leader, pm, engineer, reviewer, tester, deployer** — in that order, because the roles map assigns each state the role of its first outgoing transition (`requirement` belongs to the Leader, who takes requirement → decomposing; the PM owns the two clarification states). The prototype's sample role list has five roles and omits the deployer; the Leader's decomposition ("one role agent per role in the configured flow") governs, so the deployer gets an agent. The create form has a Workflow selector (Global workflows only, plus "No workflow chosen (built-in 14-state flow)").
 - **Agent usernames:** `<project-slug>-<role>`, where the slug is the lowercased project name with runs of non-alphanumeric characters merged into one `-`, leading/trailing hyphens trimmed, falling back to `project` when nothing is left (`Acme Support` + `engineer` → `acme-support-engineer`). A collision appends `-2`, `-3`, … up to `-10`; when all ten are taken the whole creation fails with 409 `username_taken` and nothing is created (see Atomicity below).
 - **Display names:** `"<Project name> <Role label>"` (`Acme Support Engineer`).
 - **Atomicity:** the project and all its agents are created in one transaction (`projects.createProject` runs inside `withTransaction` and calls the transactional `auth.createAgentTx` per role; a mid-transaction failure throws an error carrying the service result so the transaction rolls back instead of committing partial state). A failed external creation leaves no project, no agents, and no keys behind.
@@ -938,7 +940,7 @@ The package lives on a new Admin sub-page, Onboarding (the fifth Admin tab: Over
 The package has three parts (`server/onboarding.js`, `getOnboardingPackage`):
 
 1. **API key (masked).** The agent's latest active key, shown as `key_prefix + "…"`. The full key is **not** returned here: the server never stores it, so it cannot be revealed later. The full key's only showing is the handoff at creation time — the one-time key banner in the create-agent form, or the one-time keys box after external project creation. That is the secure reading of the prototype's "full key shown here as the handoff": the handoff *is* the creation response.
-2. **Live onboarding document.** Generated on every request from the project's *live* workflow and role definitions — never a frozen snapshot. The document (`buildOnboardingDocument`) carries a `Generated:` timestamp, the role and project, the flow name, the chat-room recommendation, the work-mode bullets (check the queue every 5 minutes; one ticket at a time; clarify instead of guessing; test locally first, then deploy; never print an API key), and "What you own in this flow": the states the role owns in the active workflow, each with its responsibilities sentence from the workflow's roles map. A **Regenerate** button re-fetches the package; because generation re-reads the live definitions each time, a workflow edit shows up in the regenerated document — the onboarding test proves this by editing a responsibilities sentence through the workflow service and asserting the new text appears and the old text is gone. The document itself never contains a token, for internal agents or external ones.
+2. **Live onboarding document.** Generated on every request from the project's *live* workflow and role definitions — never a frozen snapshot. The document (`buildOnboardingDocument`) carries a `Generated:` timestamp, the role and project, the flow name, the chat-room recommendation, the work-mode bullets (check the queue every 5 minutes; one ticket at a time; clarify instead of guessing; test locally first, then deploy; never print an API key), and "What you own in this flow": the states the role owns in the project's chosen workflow (or the built-in flow when none is chosen), each with its responsibilities sentence from the workflow's roles map. A **Regenerate** button re-fetches the package; because generation re-reads the live definitions each time, a workflow edit shows up in the regenerated document — the onboarding test proves this by editing a responsibilities sentence through the workflow service and asserting the new text appears and the old text is gone. The document itself never contains a token, for internal agents or external ones.
 3. **Chat-room recommendation.** The same `"<Project> <Role>"` display label, with the steps to join it. Display only — no chat system exists.
 
 The endpoint answers 400 `not_external` for an internal project, 400 `unknown_project` / `unknown_role` for a missing project or role, and 404 `agent_not_found` when the project has no agent holding that role. The onboarding document generation is also reused at external creation time: each created agent's package document is built inside the creation transaction, from the same live definitions.
@@ -964,11 +966,81 @@ Existing users, keys, and projects keep working through the defaults: existing a
 
 ### Tests
 
-- `server/migrations.test.js` (28 items, was 21): migration 019 checks — the `kind` column and its CHECK with the human default, the backfill UPDATE (agent where a key exists), the kind CHECK guard, `password_hash` nullable, the `projects.type` column and its CHECK with the internal default, the type CHECK guard, and the in-place updates to 003 (kind column + CHECK, `password_hash` nullable) and 007 (type column + CHECK).
+- `server/migrations.test.js` (31 items, was 21): migration 019 checks — the `kind` column and its CHECK with the human default, the backfill UPDATE (agent where a key exists), the kind CHECK guard, `password_hash` nullable, the `projects.type` column and its CHECK with the internal default, the type CHECK guard, and the in-place updates to 003 (kind column + CHECK, `password_hash` nullable) and 007 (type column + CHECK).
 - `server/auth.test.js` (21 items, was 15): kind defaults to human on creation; an agent account is created without a password; password login rejects agent accounts, including one with a leftover hash; resetting an agent's password is refused; a human → agent kind change clears the password and revokes sessions, and agent → human leaves the password empty until a reset; agent creation returns the key exactly once, with a bad role / unknown project / duplicate username refused; `listUsersWithKeyStatus` shapes (agent rows carry `key_status`, human rows `null`).
 - `server/apikeys.test.js` (8 items, was 6): creating a key for a human account is refused (403 `human_no_api_key`); a key planted on a human account does not authenticate. The existing key tests now use agent accounts (the admin-endpoint test uses an agent holding the admin role).
-- `server/projects.test.js` (13 items, was 7): internal creation creates no agents and an omitted type defaults to internal; external creation creates exactly six agents for the default flow (usernames `acme-support-leader/pm/engineer/reviewer/tester/deployer`, kind agent, one role each, distinct `rl_` keys, onboarding documents naming the project with a generated-at timestamp and no token, and listing the role's states); a taken agent username gets a numeric suffix; a fully blocked role (all ten username candidates taken) fails with 409 `username_taken` and rolls the whole creation back (no project, no agents, no keys); an invalid type is 400; the list carries `type` and `agent_count`.
-- `server/onboarding.test.js` (6 items, new file): the chat-room label (project + role, unassigned variant); `flowRolesFromDefinition` (default flow → six roles in state order; a custom definition with repeated and null roles; empty input → `[]`); the live document (role states + responsibilities, generated-at, chat room, no token); the package shape (agent, masked key, no full key anywhere, live doc); Regenerate reflects a workflow edit (create a project workflow, set it active, build the doc, edit a responsibilities sentence through the workflow service, build again — the new text appears, the old text is gone); internal / unknown project / unknown role rejections and the 404 when the role has no agent.
+- `server/projects.test.js` (15 items, was 7): internal creation creates no agents and an omitted type defaults to internal; external creation creates exactly six agents for the built-in flow (usernames `acme-support-leader/pm/engineer/reviewer/tester/deployer`, kind agent, one role each, distinct `rl_` keys, onboarding documents naming the project with a generated-at timestamp and no token, and listing the role's states); a taken agent username gets a numeric suffix; a fully blocked role (all ten username candidates taken) fails with 409 `username_taken` and rolls the whole creation back (no project, no agents, no keys); an invalid type is 400; the list carries `type` and `agent_count`.
+- `server/onboarding.test.js` (7 items, new file): the chat-room label (project + role, unassigned variant); `flowRolesFromDefinition` (built-in flow → six roles in state order; a custom definition with repeated and null roles; empty input → `[]`); the live document (role states + responsibilities, generated-at, chat room, no token); a project with no chosen workflow gets the built-in flow doc; the package shape (agent, masked key, no full key anywhere, live doc); Regenerate reflects a workflow edit (create a project workflow, set it active, build the doc, edit a responsibilities sentence through the workflow service, build again — the new text appears, the old text is gone); internal / unknown project / unknown role rejections and the 404 when the role has no agent.
 - `server/adminNav.test.js` (5 items): the Admin area now has five sub-pages (Overview, Users, Onboarding, Workflows, API keys), in that order.
 - `server/viewHash.test.js` (8 items): `#/admin/onboarding` round-trips to the `admin-onboarding` view, and the cross-check over `ADMIN_TABS` covers the new tab.
 - The frontend tab split has no browser test infrastructure; actual clicks (switching tabs, the create-human / create-agent forms, the one-time key banner, the external creation keys box, the Onboarding panel and its Regenerate button) are left for the Tester / Reviewer to verify on a real browser.
+
+---
+
+## 19. Global Workflows, Project Workflow Choice, Removal of the Default Concept
+
+> This chapter implements ticket 7c2fefc5: workflows become Global or project-scoped with a re-assignable project, a project chooses its workflow at creation, and the Default concept is removed entirely. No "default workflow" remains anywhere in the code, UI, or docs — the name `Default` survives only as an ordinary workflow row's name.
+
+### What changed
+
+1. **Global workflows on create.** `POST /api/workflows` accepts `project_id` NULL: a Global workflow, visible to every project and usable by any of them. Multiple Global workflows are allowed; the single-Default assumption is gone.
+2. **Re-assignable workflow project.** `PATCH /api/workflows/:id` accepts `project_id`: move a workflow to another project, or set NULL to make it Global. The target project must exist (400 `unknown_project`). A workflow that is any project's chosen workflow cannot be moved (400 `workflow_in_use`).
+3. **Project chooses its workflow at creation.** `POST /api/projects` accepts an optional `workflow_id`, stored as `projects.workflow_id`. Only a Global workflow may be chosen (the project does not exist yet, so no workflow can belong to it); a project-scoped workflow is refused (400 `workflow_project_mismatch`), an unknown one 404 `workflow_not_found`.
+4. **The Default concept is gone.** Migration 020 drops `workflows.is_default` and `workflows.is_active`, and removes every implicit Default fallback.
+5. **Migration / compatibility.** The existing Default 14-state dev flow becomes an ordinary Global workflow (same name, no longer the default); every project without a chosen workflow is assigned it, so existing projects keep working.
+6. **Delete rules.** A workflow currently used by a project cannot be deleted directly — change the project's workflow first.
+
+### Migration 020
+
+- `projects` gains `workflow_id UUID` with foreign key `projects_workflow_id_fkey` (`REFERENCES workflows(id) ON DELETE SET NULL`, guarded the 018 way: only added when every stored `workflow_id` references an existing workflow) and index `idx_projects_workflow`.
+- Backfill, before the flags are dropped: a project whose workflow was active (`is_active`) keeps that workflow as its chosen one; every project still without one is assigned the former Default workflow (`is_default`). A project whose workflow was neither keeps `workflow_id` NULL — a legitimate state. When no Default row exists (a database whose seed never ran), the second backfill writes NULL and the project keeps no chosen workflow.
+- `workflows` loses `is_default` and `is_active`. `is_active` was the old representation of exactly "the project's workflow"; keeping it would leave two mechanisms for one fact. The single source of truth is `projects.workflow_id`.
+- Migration 020 does everything; 007 and 010 are NOT updated in place. 007 cannot carry the foreign key inline (the `workflows` table does not exist at migration 007 time), and 010 must keep `is_active` / `is_default` so 020's backfill can read them — a fresh database runs 010 then 020 and converges on the same final schema. (This is a deliberate deviation from the 019 convention of updating the earlier migration in place; the reason is recorded in `server/migrations.test.js`.)
+- Idempotent: the backfills only touch rows with `workflow_id IS NULL` and are guarded on the columns existing (`is_active` / `is_default` are dropped below, so an unguarded backfill would fail on the second run — the server re-runs every migration on startup, and the guarded UPDATE is only planned when its branch runs); the FK is guarded, the drops use `IF EXISTS`.
+
+### The project's chosen workflow (single source of truth)
+
+- `getActiveWorkflow` / `setActiveWorkflow` keep their names and endpoints but now mean "the project's chosen workflow": they read and write `projects.workflow_id`. `GET /api/projects/:id/active-workflow` returns `{workflow}` (`null` when none is chosen); `POST` takes `{workflow_id | null}` — null clears the choice. No `is_default` in either response.
+- `getRoleMap` is two layers: the chosen workflow's roles map, else the built-in constant `BUILTIN_WORKFLOW_ROLES`. A null project goes straight to the built-in map.
+- Renames: `DEFAULT_WORKFLOW_ROLES` → `BUILTIN_WORKFLOW_ROLES`, `DEFAULT_RESPONSIBILITIES` → `BUILTIN_RESPONSIBILITIES`, `defaultRolesFor` (stateMachine.js) → `builtinRolesFor`; `DEFAULT_WORKFLOW_NAME` and `getDefaultWorkflowDefinition` are gone. `workflows.builtinDefinition()` returns the built-in 14-state definition in the shape a workflow row carries (states, transitions, roles map) — used where no workflow row exists: onboarding for a project with no chosen workflow, and external project creation without a chosen workflow. (`stateMachine.BUILTIN_DEFINITION` carries roles as plain role strings; `builtinDefinition()` is the map form, matching what `definitionFromRow` returns for a stored workflow.)
+
+### Ticket creation
+
+- Explicit `workflow_id` wins. Otherwise the ticket follows the project's chosen workflow (start state + definition + roles map from that workflow). On a project with no chosen workflow and no explicit workflow, creation is refused with 400 `no_workflow` ("This project has no workflow chosen — choose one for the ticket, or set the project's workflow first.") — nothing is silently fallen back to. An uncategorized ticket (no project) with no explicit workflow follows the built-in flow.
+- New error code: `no_workflow` (400).
+
+### Delete and move guards (judgment calls)
+
+- A workflow is "used by a project" when any project's `workflow_id` is it. Deleting it is refused with 400 `workflow_used_by_project` (the message names the project); change that project's workflow first, then delete.
+- Tickets referencing the workflow keep working: delete is also refused while any ticket references it (400 `workflow_in_use`, the existing guard), so the `tickets.workflow_id` foreign key's `ON DELETE SET NULL` is unreachable through the API.
+- Moving a workflow that is any project's chosen workflow is refused with the same 400 `workflow_in_use` ("change that project's workflow first") — otherwise the project would point at a workflow belonging to another project and ticket creation on it would fail the mismatch check. This mirrors the delete rule; it is not in the ticket text, it follows from it.
+
+### Queue: the branch follows the definition (judgment call)
+
+- `listClaimable` keys on the ticket's *definition*, not on whether it carries a `workflow_id`. A ticket whose definition is the built-in definition (`workflows.isBuiltinDefinition`: same states and transitions; roles may differ — a role override does not change the shape of the flow) keeps the built-in queue: claimable from `requirement` and `pending_dev`, with the role from the ticket's own roles map when it has one, otherwise the project's role map. A ticket on a genuinely custom definition is claimable only from a state with a `pickup`-kind transition.
+- Why this matters: after migration 020 every existing project runs the former Default flow as its chosen workflow, so its new tickets carry a `workflow_id`. If the queue still branched on `workflow_id` presence, those tickets would take the custom (pickup-only) branch and a leader could no longer claim a ticket sitting in `requirement` — a regression for the main flow. The definition-based branch keeps the queue behavior for the built-in flow exactly as before.
+- This is NOT the separate `/api/queue` claimability blind-spot fix (tickets on non-active workflows): that fix is tracked separately and is not attempted here.
+
+### Onboarding and external project creation
+
+- Onboarding (`buildOnboardingDocument`) for a project with no chosen workflow uses the built-in definition (`workflows.builtinDefinition()`), flow name `Built-in flow`. With a chosen workflow it uses that workflow, flow name = the workflow's name.
+- External project creation without a workflow derives its role agents from the built-in definition (same six roles as before); with a chosen workflow, from that workflow's definition (`workflows.getWorkflowDefinition`).
+- Project creation can only choose a Global workflow (judgment call): the project does not exist yet, so no workflow can belong to it.
+
+### Frontend
+
+- Workflows panel (`src/WorkflowsPanel.tsx`): the create form's Project selector gains a "Global (all projects)" option; the edit form also shows the Project selector (it was create-only); the "Set active" button works for Global or own-project workflows when a project filter is selected; "Switch back to default" is now "Clear workflow" (the project has no workflow chosen afterwards); the Active badge marks the selected project's chosen workflow; the "Create workflow" button is no longer disabled when there are no projects. The intro text states there is no default workflow.
+- Projects panel (`src/ProjectsPanel.tsx`): the create form gains a Workflow selector (Global workflows only, plus "No workflow chosen (built-in 14-state flow)"); the projects table gains a Workflow column (the chosen workflow's name, `None` when none is chosen); the role-agent preview follows the selected workflow, else the built-in flow.
+- New ticket form (`src/NewTicketForm.tsx`): the empty workflow option reads "Project's chosen workflow" when a project is selected, "Built-in flow (14 states)" when uncategorized. The row named `Default` is an ordinary Global workflow and appears in the list.
+- `src/api.ts`: `Project` gains `workflow_id: string | null`; `Workflow` loses `is_default` / `is_active`; `createProject` accepts `workflow_id?`; `updateWorkflow` accepts `project_id?`; the active-workflow endpoints return `{workflow: Workflow | null}`.
+
+### Tests
+
+- `server/workflows.test.js` (30 items, was 26): multiple Global workflows are allowed; a workflow moves to another project or to Global, an unknown project is 400, a name taken in the target project is 409, a workflow that is a project's chosen workflow cannot be moved; set-active chooses a workflow (Global works too, null clears it); `getRoleMap` — empty table returns built-in, the chosen workflow wins, no chosen workflow means built-in; delete is free when unused, refused while a project has chosen it, allowed once the project changes; `isBuiltinDefinition` (built-in matches, a role override still matches, a different flow does not). The old "default workflow is read-only" test is deleted.
+- `server/projects.test.js` (15 items, was 13): creation with a workflow stores it as the project's chosen workflow (Global ok; project-scoped 400 `workflow_project_mismatch`; unknown 404 `workflow_not_found`); external creation with a chosen workflow creates agents from that flow.
+- `server/tickets.test.js` (36 items, was 32): creation defaults to the project's chosen workflow; 400 `no_workflow` on a project with no chosen workflow and no explicit choice; uncategorized without a workflow follows the built-in flow; an explicit workflow wins over the chosen one. The tests that create tickets on projects now seed a chosen workflow for the project first.
+- `server/onboarding.test.js` (7 items, was 6): a project with no chosen workflow gets the built-in flow doc (`workflow_name` "Built-in flow"); the live-doc test now chooses the seeded Global `Default` workflow for the project.
+- `server/monitor.test.js` (18 items): the FakeDb now carries projects with `workflow_id`; the "notify_role follows the ticket project active workflow" test still passes via the chosen-workflow mechanism.
+- `server/migrations.test.js` (31 items, was 28): migration 020 checks — `workflow_id` column + FK + index, the two backfills before the drops, the drops of `is_default` / `is_active`, and the 018-style DO-block guard for the FK.
+- `server/roles.test.js` (4 items): the "default 14-state flow" test is renamed "the built-in 14-state flow".
+- Frontend browser verification was not possible (no headless browser on the VM); only `tsc` + `vite build` were run.

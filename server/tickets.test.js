@@ -24,18 +24,18 @@ class FakeDb {
     this.transitions = [];
     this.workflows = [];
     this.projects = [
-      { id: 'proj-1', name: 'WebTracker', description: '' },
-      { id: 'proj-2', name: 'Drydock', description: '' },
+      { id: 'proj-1', name: 'WebTracker', description: '', workflow_id: null },
+      { id: 'proj-2', name: 'Drydock', description: '', workflow_id: null },
     ];
     this.seq = 0;
   }
 
-  // Seed an active custom workflow for a project (design doc ch. 14):
-  // roles start from the built-in default map, with `overrides`
-  // applied per state. The row carries the built-in definition, as a
-  // migration-seeded default workflow would.
+  // Seed a project workflow (design doc ch. 19): roles start from the
+  // built-in map, with `overrides` applied per state. The row carries
+  // the built-in definition, and the project chooses it as its
+  // workflow — there is no default workflow anymore.
   seedActiveWorkflow(projectId, overrides = {}) {
-    const roles = JSON.parse(JSON.stringify(workflows.DEFAULT_WORKFLOW_ROLES));
+    const roles = JSON.parse(JSON.stringify(workflows.BUILTIN_WORKFLOW_ROLES));
     for (const [status, entry] of Object.entries(overrides)) {
       roles[status] = { ...roles[status], ...entry };
     }
@@ -46,13 +46,13 @@ class FakeDb {
       roles,
       states: sm.BUILTIN_STATES,
       transitions: sm.BUILTIN_DEFINITION.transitions,
-      is_default: false,
-      is_active: true,
       created_by: 'pm-1',
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };
     this.workflows.push(row);
+    const project = this.projects.find((p) => p.id === projectId);
+    if (project) project.workflow_id = row.id;
     return row;
   }
 
@@ -65,8 +65,6 @@ class FakeDb {
       roles: JSON.parse(JSON.stringify(example.roles)),
       states: JSON.parse(JSON.stringify(example.states)),
       transitions: JSON.parse(JSON.stringify(example.transitions)),
-      is_default: false,
-      is_active: false,
       created_by: 'pm-1',
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
@@ -160,17 +158,10 @@ class FakeDb {
     if (sql.startsWith('SELECT * FROM ticket_transitions WHERE ticket_id')) {
       return { rows: this.transitions.filter((tr) => tr.ticket_id === params[0]).map((tr) => ({ ...tr })) };
     }
-    // Workflow role maps (design doc ch. 14): getRoleMap's two fixed
-    // queries. An empty workflows table means the built-in fallback,
-    // which is what proves the existing tests are unaffected.
-    if (sql === 'SELECT * FROM workflows WHERE project_id = $1 AND is_active = true LIMIT 1') {
-      const w = this.workflows.find((x) => x.project_id === params[0] && x.is_active);
-      return { rows: w ? [{ ...w }] : [] };
-    }
-    if (sql === 'SELECT * FROM workflows WHERE is_default = true LIMIT 1') {
-      const w = this.workflows.find((x) => x.is_default);
-      return { rows: w ? [{ ...w }] : [] };
-    }
+    // Workflow role maps (design doc ch. 19): getRoleMap reads the
+    // project's chosen workflow via the project row, or the built-in
+    // map when the project has chosen none. The project query above
+    // and the definition lookup below are the two queries it issues.
     // Definition lookups for a ticket's own workflow (ch. 15).
     if (/^SELECT \* FROM workflows WHERE id = \$1/.test(sql)) {
       const w = this.workflows.find((x) => x.id === params[0]);
@@ -641,8 +632,9 @@ async function main() {
   await ok('workflow override: a custom workflow reroutes the queue and the transition role', async () => {
     const db = new FakeDb();
     // proj-1 runs a custom workflow where pending_dev belongs to the
-    // tester instead of the engineer; proj-2 stays on the default.
+    // tester instead of the engineer; proj-2 keeps the built-in roles.
     db.seedActiveWorkflow('proj-1', { pending_dev: { role: 'tester' } });
+    db.seedActiveWorkflow('proj-2');
     const pm = { actorId: 'pm-1', actorRoles: ['pm'] };
     const a = await tickets.createTicket(db, { ...pm, title: 'a', description: 'd', projectId: 'proj-1' });
     const b = await tickets.createTicket(db, { ...pm, title: 'b', description: 'd', projectId: 'proj-2' });
@@ -694,6 +686,7 @@ async function main() {
 
   await ok('create with a project stores it; unknown project is 400', async () => {
     const db = new FakeDb();
+    db.seedActiveWorkflow('proj-1');
     const withProject = await tickets.createTicket(db, {
       actorId: 'pm-1', actorRoles: ['pm'],
       title: 'in project', description: 'd', projectId: 'proj-1',
@@ -715,9 +708,63 @@ async function main() {
     assert.equal((await tickets.listTickets(db, null)).length, 2);
   });
 
+  await ok('create defaults to the project\'s chosen workflow', async () => {
+    const db = new FakeDb();
+    const wf = db.seedCustomWorkflow(examples.FLOW_INCIDENT, 'proj-1');
+    db.projects.find((p) => p.id === 'proj-1').workflow_id = wf.id;
+    const res = await tickets.createTicket(db, {
+      actorId: 'pm-1', actorRoles: ['pm'],
+      title: 'Outage', description: 'API is down.', projectId: 'proj-1',
+    });
+    assert.equal(res.ok, true, JSON.stringify(res));
+    assert.equal(res.ticket.workflow_id, wf.id);
+    assert.equal(res.ticket.status, 'system_event');
+    const history = await tickets.listTransitions(db, res.ticket.id);
+    assert.equal(history.length, 1);
+    assert.equal(history[0].to_status, 'system_event');
+  });
+
+  await ok('create without a workflow on a project with no chosen workflow is 400 no_workflow', async () => {
+    const db = new FakeDb();
+    const res = await tickets.createTicket(db, {
+      actorId: 'pm-1', actorRoles: ['pm'],
+      title: 'No flow', description: 'd', projectId: 'proj-1',
+    });
+    assert.equal(res.ok, false);
+    assert.equal(res.status, 400);
+    assert.equal(res.error, 'no_workflow');
+    assert.equal((await tickets.listTickets(db, null)).length, 0);
+  });
+
+  await ok('create without a project and without a workflow follows the built-in flow', async () => {
+    const db = new FakeDb();
+    const res = await tickets.createTicket(db, {
+      actorId: 'pm-1', actorRoles: ['pm'], title: 'Uncategorized', description: 'd',
+    });
+    assert.equal(res.ok, true, JSON.stringify(res));
+    assert.equal(res.ticket.workflow_id, null);
+    assert.equal(res.ticket.status, 'requirement');
+  });
+
+  await ok('an explicit workflow wins over the project\'s chosen workflow', async () => {
+    const db = new FakeDb();
+    const chosen = db.seedCustomWorkflow(examples.FLOW_INCIDENT, 'proj-1');
+    const explicit = db.seedCustomWorkflow(examples.FLOW_WITH_CONFIRMATION, 'proj-1');
+    db.projects.find((p) => p.id === 'proj-1').workflow_id = chosen.id;
+    const res = await tickets.createTicket(db, {
+      actorId: 'pm-1', actorRoles: ['pm'],
+      title: 'Spec', description: 'd', projectId: 'proj-1', workflowId: explicit.id,
+    });
+    assert.equal(res.ok, true, JSON.stringify(res));
+    assert.equal(res.ticket.workflow_id, explicit.id);
+    assert.equal(res.ticket.status, 'user_requirement');
+  });
+
   await ok('list filters by project, including uncategorized', async () => {
     const db = new FakeDb();
     const pm = { actorId: 'pm-1', actorRoles: ['pm'] };
+    db.seedActiveWorkflow('proj-1');
+    db.seedActiveWorkflow('proj-2');
     const a = await tickets.createTicket(db, { ...pm, title: 'a', description: 'd', projectId: 'proj-1' });
     await tickets.createTicket(db, { ...pm, title: 'b', description: 'd', projectId: 'proj-2' });
     await tickets.createTicket(db, { ...pm, title: 'c', description: 'd' });
@@ -738,6 +785,8 @@ async function main() {
   await ok('queue filters by project', async () => {
     const db = new FakeDb();
     const pm = { actorId: 'pm-1', actorRoles: ['pm'] };
+    db.seedActiveWorkflow('proj-1');
+    db.seedActiveWorkflow('proj-2');
     const a = await tickets.createTicket(db, { ...pm, title: 'a', description: 'd', projectId: 'proj-1' });
     const b = await tickets.createTicket(db, { ...pm, title: 'b', description: 'd', projectId: 'proj-2' });
     for (const t of [a, b]) {
@@ -758,6 +807,8 @@ async function main() {
   await ok('list is scoped to the caller\'s assigned project, overriding the query filter', async () => {
     const db = new FakeDb();
     const pm = { actorId: 'pm-1', actorRoles: ['pm'] };
+    db.seedActiveWorkflow('proj-1');
+    db.seedActiveWorkflow('proj-2');
     await tickets.createTicket(db, { ...pm, title: 'a', description: 'd', projectId: 'proj-1' });
     await tickets.createTicket(db, { ...pm, title: 'b', description: 'd', projectId: 'proj-2' });
     await tickets.createTicket(db, { ...pm, title: 'c', description: 'd' });
@@ -779,6 +830,8 @@ async function main() {
   await ok('queue is scoped to the assigned project; unassigned queue is unchanged', async () => {
     const db = new FakeDb();
     const pm = { actorId: 'pm-1', actorRoles: ['pm'] };
+    db.seedActiveWorkflow('proj-1');
+    db.seedActiveWorkflow('proj-2');
     const a = await tickets.createTicket(db, { ...pm, title: 'a', description: 'd', projectId: 'proj-1' });
     const b = await tickets.createTicket(db, { ...pm, title: 'b', description: 'd', projectId: 'proj-2' });
     for (const t of [a, b]) {
@@ -801,6 +854,7 @@ async function main() {
   await ok('cross-project transitions are rejected and audited; same-project transitions pass', async () => {
     const db = new FakeDb();
     const pm = { actorId: 'pm-1', actorRoles: ['pm'] };
+    db.seedActiveWorkflow('proj-1');
     const a = await tickets.createTicket(db, { ...pm, title: 'a', description: 'd', projectId: 'proj-1' });
     const c = await tickets.createTicket(db, { ...pm, title: 'c', description: 'd' });
     for (const t of [a, c]) {
@@ -842,6 +896,8 @@ async function main() {
   await ok('ticket detail is scoped: assigned accounts read only their own project, out-of-scope reads are rejected and audited', async () => {
     const db = new FakeDb();
     const pm = { actorId: 'pm-1', actorRoles: ['pm'] };
+    db.seedActiveWorkflow('proj-1');
+    db.seedActiveWorkflow('proj-2');
     const a = await tickets.createTicket(db, { ...pm, title: 'a', description: 'd', projectId: 'proj-1' });
     const b = await tickets.createTicket(db, { ...pm, title: 'b', description: 'd', projectId: 'proj-2' });
     const c = await tickets.createTicket(db, { ...pm, title: 'c', description: 'd' });
@@ -882,6 +938,8 @@ async function main() {
   await ok('ticket transitions history is scoped the same way as the detail', async () => {
     const db = new FakeDb();
     const pm = { actorId: 'pm-1', actorRoles: ['pm'] };
+    db.seedActiveWorkflow('proj-1');
+    db.seedActiveWorkflow('proj-2');
     const a = await tickets.createTicket(db, { ...pm, title: 'a', description: 'd', projectId: 'proj-1' });
     const b = await tickets.createTicket(db, { ...pm, title: 'b', description: 'd', projectId: 'proj-2' });
     const c = await tickets.createTicket(db, { ...pm, title: 'c', description: 'd' });
@@ -1105,6 +1163,7 @@ async function main() {
     assert.equal((await tickets.listClaimable(db, ['leader'])).length, 0);
     // The built-in queue is unaffected: a built-in ticket in
     // requirement is still claimable by the leader.
+    db.seedActiveWorkflow('proj-1');
     const builtin = await tickets.createTicket(db, {
       actorId: 'pm-1', actorRoles: ['pm'], title: 'Built-in ticket',
       description: 'Goal, scope and acceptance criteria.',

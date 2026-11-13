@@ -134,8 +134,8 @@ relay/
 │   ├── tickets.js        # ticket service: create / transition / history / claim queue
 │   ├── documents.js      # document service: file / list / categories / download
 │   ├── projects.js       # project service (internal/external, role agents on external creation)
-│   ├── onboarding.js     # onboarding packages: live doc from the active workflow + role definitions
-│   ├── workflows.js      # workflow service: CRUD, active workflow, role maps
+│   ├── onboarding.js     # onboarding packages: live doc from the project's chosen workflow + role definitions
+│   ├── workflows.js      # workflow service: CRUD, chosen workflow, role maps
 │   ├── monitor.js        # PM stall monitor: detect stalled tickets, reminder state
 │   ├── auth.js           # users, scrypt passwords, sessions, API keys, auth middleware
 │   ├── admin.js          # admin overview aggregation, project assignment
@@ -154,7 +154,7 @@ relay/
 │   ├── viewHash.test.js
 │   └── migrations.test.js
 ├── db/
-│   └── migrations/       # schema as SQL migrations (001-019)
+│   └── migrations/       # schema as SQL migrations (001-020)
 ├── doc/
 │   └── design.md         # design document (Traditional Chinese)
 ├── screenshots/          # README screenshots (see screenshots/README.md)
@@ -182,7 +182,7 @@ The backend needs a PostgreSQL database (default name `relay`, see
 not done by the code in this repo; the server creates the `tickets`,
 `ticket_transitions`, `users`, `sessions`, `api_keys`, `projects`,
 `monitor_reminders` and `workflows` tables itself on startup (migrations
-`db/migrations/001-019`).
+`db/migrations/001-020`).
 
 On first run the users table is empty, so the app shows a setup screen:
 create the first admin account there (username, display name, password).
@@ -272,8 +272,8 @@ project creation (one agent per flow role, with keys and onboarding
 packages, rolled back when a role has no free username) and the
 onboarding document regenerating from a live workflow edit.
 
-276 tests in total: state machine 21, tickets 32, projects 13, onboarding 6, auth 21,
-admin 7, API keys 8, monitor 18, workflows 26, quick-create builder 11, documents 24, document tickets 12, document render 18, gantt helpers 14, admin nav 5, view hash 8, migrations 28, role lists 4.
+290 tests in total: state machine 21, tickets 36, projects 15, onboarding 7, auth 21,
+admin 7, API keys 8, monitor 18, workflows 30, quick-create builder 11, documents 24, document tickets 12, document render 18, gantt helpers 14, admin nav 5, view hash 8, migrations 31, role lists 4.
 
 ## Accounts & authentication
 
@@ -484,24 +484,28 @@ each sub-page owns its own form state and handlers.
   in order, pick the responsible role per state, and Generate chains
   them into a linear flow (first state is the start, last is
   terminal); backward transitions and other advanced settings live in
-  the Advanced section and are not required. The default workflow
-  itself is read-only (view only).
+  the Advanced section and are not required.
 - **Tickets choose a workflow when created:** the New ticket form offers
-  the default 14-state development flow plus the project's (and global)
+  the built-in 14-state development flow plus the project's (and global)
   workflows. A ticket follows its workflow for its whole life; the
   transition table, claimable queue, stall monitor and status labels all
   follow the ticket's own workflow. A workflow with live tickets cannot
   be deleted, and a state with live tickets cannot be removed.
-- **Default workflow:** one global default workflow (`Default`,
-  read-only) ships with the system and behaves exactly like the
-  built-in flow. A project without an active workflow follows it;
-  switching a project's active workflow back to `null` returns it to
-  the default. Deleting the active workflow is refused while the
-  project has no other workflow to fall back on.
-- **Routing follows the active workflow:** for tickets on the built-in
+- **No default workflow:** there is no default workflow — a project
+  chooses its workflow (`projects.workflow_id`), set at creation or
+  through the active-workflow endpoints; a project with no chosen
+  workflow has none, and opening a ticket on it without an explicit
+  workflow is refused (400 `no_workflow`). The row named `Default`
+  is an ordinary Global workflow, editable like any other. Global
+  workflows (`project_id` null) are visible to every project and
+  several may exist; a workflow's project can be changed (or cleared
+  to Global) on edit. Deleting a workflow is refused while any
+  project has chosen it (400 `workflow_used_by_project`) or while
+  tickets reference it.
+- **Routing follows the chosen workflow:** for tickets on the built-in
   flow, ticket transitions, the claimable queue and the stall monitor's
   notify role all resolve through the ticket's project workflow
-  (active → default → built-in). Cancel stays PM-only and is never
+  (chosen workflow → built-in). Cancel stays PM-only and is never
   overridden. For tickets on a custom workflow, the workflow's own
   definition and roles map decide instead; the queue only offers states
   with a pickup transition, and the stall monitor flags non-terminal,
@@ -515,7 +519,7 @@ each sub-page owns its own form state and handlers.
   and setting the active workflow are Admin only; a duplicate name
   in the same project answers 409 `workflow_name_taken`. An assigned
   account sees only its own project's workflows plus the global
-  default; cross-project reads answer 403 `out_of_scope`.
+  workflows; cross-project reads answer 403 `out_of_scope`.
 
 ## Documents
 
@@ -656,7 +660,7 @@ log records the role actually exercised.
 | `POST` | `/api/monitor/stalled/:id/reminded` | Record that a reminder was sent for a stalled ticket (PM only) |
 | `POST` | `/api/monitor/stalled/:id/escalated` | Record that a stalled ticket was escalated to the main chat (PM only, after 3 reminders) |
 | `GET` | `/api/projects` | List projects with ticket counts and agent counts |
-| `POST` | `/api/projects` | Create a project (PM or Admin); `type` internal (default) or external — external auto-creates one role agent per flow role, each with a key and onboarding package |
+| `POST` | `/api/projects` | Create a project (PM or Admin); `type` internal (default) or external — external auto-creates one role agent per flow role, each with a key and onboarding package; optional `workflow_id` (a Global workflow) becomes the project's chosen workflow |
 | `GET` | `/api/projects/:id` | One project |
 | `GET` | `/api/document-categories` | All categories, by name (seeded Prototype, Undefined) |
 | `POST` | `/api/document-categories` | Add a category (PM or Admin; duplicate name answers 409 `category_name_taken`) |
@@ -665,13 +669,13 @@ log records the role actually exercised.
 | `GET` | `/api/documents/:id` | One document; reading another project's document is rejected 403 `out_of_scope` for an assigned caller |
 | `GET` | `/api/documents/:id/download` | Download the document as a `.md` file (filename from the title) |
 | `DELETE` | `/api/documents/:id` | Delete a document (PM or Admin) |
-| `GET` | `/api/workflows?project_id=<id>` | List workflows (project's plus the global default); an assigned caller only sees their project's workflows plus the default |
+| `GET` | `/api/workflows?project_id=<id>` | List workflows (project's plus the global workflows); an assigned caller only sees their project's workflows plus the global ones |
 | `GET` | `/api/workflows/:id` | One workflow; reading another project's workflow is rejected 403 `out_of_scope` for an assigned caller |
-| `POST` | `/api/workflows` | Create a workflow (admin only; `name`, `project_id`, `roles`) |
-| `PATCH` | `/api/workflows/:id` | Update a workflow's name and/or roles (admin only; the default workflow is read-only) |
-| `DELETE` | `/api/workflows/:id` | Delete a workflow (admin only; the default can never be deleted, an active workflow needs an alternative) |
-| `GET` | `/api/projects/:id/active-workflow` | The workflow in force for a project: `{workflow, is_default}` |
-| `POST` | `/api/projects/:id/active-workflow` | Set a project's active workflow (`workflow_id`, or null to switch back to the default; admin only) |
+| `POST` | `/api/workflows` | Create a workflow (admin only; `name`, `project_id`, `roles`); `project_id` null = Global, several Global workflows may exist |
+| `PATCH` | `/api/workflows/:id` | Update a workflow's name, roles and/or `project_id` (admin only; a workflow chosen by a project cannot be moved) |
+| `DELETE` | `/api/workflows/:id` | Delete a workflow (admin only; refused while tickets reference it, or while a project has chosen it) |
+| `GET` | `/api/projects/:id/active-workflow` | The workflow in force for a project: `{workflow}` (null when none is chosen) |
+| `POST` | `/api/projects/:id/active-workflow` | Set a project's chosen workflow (`workflow_id`, or null to clear it; admin only) |
 | `GET` | `/api/admin/overview` | System overview (admin only) |
 | `GET` | `/api/admin/users` | List accounts with kind and, for agents, key status (admin only) |
 | `POST` | `/api/admin/users` | Create an account (admin only); accepts `kind` (human default) |

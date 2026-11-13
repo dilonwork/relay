@@ -47,7 +47,7 @@ function ok(name, fn) {
     for (const t of sm.BUILTIN_DEFINITION.transitions) {
       assert.notEqual(t.role, 'guest');
     }
-    for (const entry of Object.values(workflows.DEFAULT_WORKFLOW_ROLES)) {
+    for (const entry of Object.values(workflows.BUILTIN_WORKFLOW_ROLES)) {
       assert.notEqual(entry.role, 'guest');
     }
     // No transition is offered to a guest, from any state.
@@ -62,8 +62,8 @@ function ok(name, fn) {
     assert.deepEqual([...auth.ALL_ROLES], [...auth.WORKFLOW_ROLES, 'guest', 'admin']);
   });
 
-  await ok('the default 14-state flow is unchanged: no ui_ux anywhere', () => {
-    for (const entry of Object.values(workflows.DEFAULT_WORKFLOW_ROLES)) {
+  await ok('the built-in 14-state flow is unchanged: no ui_ux anywhere', () => {
+    for (const entry of Object.values(workflows.BUILTIN_WORKFLOW_ROLES)) {
       assert.notEqual(entry.role, 'ui_ux');
     }
     for (const t of sm.BUILTIN_DEFINITION.transitions) {

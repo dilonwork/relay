@@ -11,9 +11,13 @@
 // A ticket follows one workflow (design doc ch. 15): its workflow_id
 // names the workflow whose states and transitions govern it; a ticket
 // with no workflow follows the built-in 14-state development flow.
-// The workflow is chosen at creation (default: the built-in flow) and
-// never changes afterwards — moving a ticket between workflows would
-// strand it in states the new workflow does not know.
+// The workflow is chosen at creation — an explicit workflow_id, else
+// the project's chosen workflow (design doc ch. 19) — and never
+// changes afterwards: moving a ticket between workflows would strand
+// it in states the new workflow does not know. A project with no
+// chosen workflow cannot take a ticket without an explicit workflow
+// (400 no_workflow); an uncategorized ticket follows the built-in
+// flow, as before.
 const sm = require('./stateMachine');
 const workflows = require('./workflows');
 
@@ -171,6 +175,7 @@ async function createTicket(db, { actorId, actorRoles, title, description, sourc
   const cleanProjectId = projectId === undefined || projectId === null || !String(projectId).trim()
     ? null
     : String(projectId).trim();
+  let projectRow = null;
   if (cleanProjectId) {
     const { rows: projectRows } = await db.query(
       'SELECT * FROM projects WHERE id = $1',
@@ -179,16 +184,27 @@ async function createTicket(db, { actorId, actorRoles, title, description, sourc
     if (!projectRows[0]) {
       return { ok: false, status: 400, error: 'unknown_project', message: `Unknown project: ${cleanProjectId}.` };
     }
+    projectRow = projectRows[0];
   }
-  // The workflow the ticket follows (design doc ch. 15). No workflow
-  // means the built-in 14-state development flow. A project workflow
-  // only applies to its own project's tickets; a global workflow
-  // (project_id NULL) applies anywhere. The ticket starts in the
-  // workflow's start state.
-  const cleanWorkflowId = workflowId === undefined || workflowId === null || !String(workflowId).trim()
+  // The workflow the ticket follows (design doc ch. 15, ch. 19). An
+  // explicit workflow wins; otherwise the ticket follows the
+  // project's chosen workflow. A project with no chosen workflow
+  // cannot take a ticket without an explicit workflow — there is no
+  // fallback to guess from. An uncategorized ticket (no project)
+  // follows the built-in 14-state development flow. A project
+  // workflow only applies to its own project's tickets; a global
+  // workflow (project_id NULL) applies anywhere. The ticket starts
+  // in the workflow's start state.
+  let cleanWorkflowId = workflowId === undefined || workflowId === null || !String(workflowId).trim()
     ? null
     : String(workflowId).trim();
   let definition = sm.BUILTIN_DEFINITION;
+  if (!cleanWorkflowId && projectRow) {
+    if (!projectRow.workflow_id) {
+      return { ok: false, status: 400, error: 'no_workflow', message: 'This project has no workflow chosen — choose one for the ticket, or set the project\'s workflow first.' };
+    }
+    cleanWorkflowId = projectRow.workflow_id;
+  }
   if (cleanWorkflowId) {
     const found = await workflows.getWorkflow(db, cleanWorkflowId);
     if (!found.ok) {
@@ -283,8 +299,8 @@ async function transitionTicket(db, ticketId, { actorId, actorRoles, toStatus, r
 
     // The ticket follows its own workflow's definition (ch. 15); a
     // ticket with no workflow follows the built-in flow, whose required
-    // role may still be overridden by the project's active workflow
-    // (design doc ch. 14) — the state machine, not the caller,
+    // role may still be overridden by the project's chosen workflow
+    // (design doc ch. 19) — the state machine, not the caller,
     // decides which role a transition requires.
     const resolved = await workflows.definitionForTicket(client, ticket);
     if (resolved.missing) {
@@ -293,10 +309,9 @@ async function transitionTicket(db, ticketId, { actorId, actorRoles, toStatus, r
     const isCustom = !!ticket.workflow_id;
     // The required role comes from the ticket's own workflow (ch. 15):
     // for a custom workflow it is that workflow's roles map; for the
-    // built-in flow it is the project's active workflow roles map,
-    // falling back to the default and then the built-in map (ch. 14).
-    // The state machine, not the caller, decides which role a
-    // transition requires.
+    // built-in flow it is the project's chosen workflow roles map,
+    // falling back to the built-in map (ch. 19). The state machine,
+    // not the caller, decides which role a transition requires.
     const roleMap = isCustom
       ? resolved.definition.roles
       : await workflows.getRoleMap(client, ticket.project_id);
@@ -345,13 +360,13 @@ async function transitionTicket(db, ticketId, { actorId, actorRoles, toStatus, r
 // Trial-stage claim queue (design doc ch. 12): tickets waiting for the
 // caller's roles to pick them up. For the built-in flow the trial
 // covers decomposing and development only: a ticket in `requirement`
-// waits for the role the active workflow names for that state to
-// decompose it, and a ticket in `pending_dev` waits for that state's
-// role to start it. In-progress states (decomposing, in_dev, ...) are
-// not claimable — they already have an owner. Each entry carries the
-// transition the caller would take next. Under the default workflow
+// waits for the role the project's chosen workflow names for that
+// state to decompose it, and a ticket in `pending_dev` waits for that
+// state's role to start it. In-progress states (decomposing, in_dev, ...)
+// are not claimable — they already have an owner. Each entry carries
+// the transition the caller would take next. Under the built-in flow
 // the responsible roles are leader and engineer, exactly as before
-// (design doc ch. 14).
+// (design doc ch. 19).
 //
 // For a custom workflow (ch. 15) the same idea generalizes: a ticket
 // is claimable when its current state has an outgoing 'pickup'
@@ -366,11 +381,11 @@ async function listClaimable(db, actorRoles, projectFilter, assignedProjectId) {
   if (roles.length === 0) return [];
   const rows = await listTickets(db, null, projectFilter, assignedProjectId);
   // One role-map lookup per project: tickets of the same project share
-  // their active workflow (design doc ch. 14). One definition lookup
+  // their chosen workflow (design doc ch. 19). One definition lookup
   // per workflow: tickets on the same workflow share it (ch. 15).
   const roleMaps = new Map();
   async function roleMapFor(projectId) {
-    const key = projectId || '__default__';
+    const key = projectId || '__none__';
     if (!roleMaps.has(key)) {
       roleMaps.set(key, await workflows.getRoleMap(db, projectId || null));
     }
@@ -387,9 +402,21 @@ async function listClaimable(db, actorRoles, projectFilter, assignedProjectId) {
   }
   const out = [];
   for (const t of rows) {
-    if (!t.workflow_id) {
+    // The queue follows the ticket's definition, not whether it
+    // carries a workflow id. A ticket on a workflow that carries the
+    // built-in definition (the former Default flow, now any project's
+    // chosen workflow) keeps the built-in queue — claimable from
+    // requirement and pending_dev — while a ticket on a genuinely
+    // custom definition is claimable only from a pickup state
+    // (ch. 19). A ticket whose workflow row is missing is not
+    // claimable at all.
+    const definition = await definitionFor(t);
+    if (definition && workflows.isBuiltinDefinition(definition)) {
       if (!CLAIMABLE_STATUSES.includes(t.status)) continue;
-      const roleMap = await roleMapFor(t.project_id);
+      // The role is the ticket's own workflow roles when it has one
+      // (the same map transitionTicket consults); a workflow-less
+      // ticket takes the project's role map.
+      const roleMap = t.workflow_id ? definition.roles || null : await roleMapFor(t.project_id);
       const entry = roleMap ? roleMap[t.status] : null;
       const role = entry ? entry.role : null;
       if (!role || !roles.includes(role)) continue;
@@ -408,7 +435,6 @@ async function listClaimable(db, actorRoles, projectFilter, assignedProjectId) {
       });
       continue;
     }
-    const definition = await definitionFor(t);
     if (!definition) continue;
     const rule = (definition.transitions || []).find(
       (r) => r.from === t.status && r.kind === 'pickup'

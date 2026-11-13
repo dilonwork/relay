@@ -19,12 +19,15 @@ export interface Ticket {
 // null on a ticket means uncategorized. ticket_count and agent_count
 // are present on the list response only. type is 'internal' or
 // 'external' (ticket 0f26169c): external projects are created together
-// with one role agent per role in the configured flow.
+// with one role agent per role in the configured flow. workflow_id is
+// the project's chosen workflow (design doc ch. 19); null means the
+// project has chosen none.
 export interface Project {
   id: string;
   name: string;
   description: string;
   type: string;
+  workflow_id: string | null;
   created_by: string;
   created_at: string;
   updated_at: string;
@@ -32,12 +35,13 @@ export interface Project {
   agent_count?: number;
 }
 
-// A workflow (design doc ch. 14/15): a named mapping of every ticket
-// state to the role responsible for it, plus a responsibilities
+// A workflow (design doc ch. 14/15, ch. 19): a named mapping of every
+// ticket state to the role responsible for it, plus a responsibilities
 // sentence per state — and, since the state machine editor (ch. 15),
-// the states and transitions themselves. project_id null means the
-// global default workflow, which is read-only and the fallback for
-// every project.
+// the states and transitions themselves. project_id null means a
+// Global workflow, visible to every project and usable by any of
+// them. There is no default workflow: a project chooses its workflow
+// (Project.workflow_id), and a workflow with no project is simply Global.
 export interface WorkflowState {
   code: string;
   label: string;
@@ -63,8 +67,6 @@ export interface Workflow {
   roles: Record<string, { role: string | null; responsibilities: string }>;
   states: WorkflowState[];
   transitions: WorkflowTransition[];
-  is_default: boolean;
-  is_active: boolean;
   created_by: string | null;
   created_at: string | null;
   updated_at: string | null;
@@ -322,7 +324,7 @@ export const api = {
   getQueue: (projectId?: string) =>
     request<QueueEntry[]>(projectId ? `/api/queue?project_id=${encodeURIComponent(projectId)}` : '/api/queue'),
   listProjects: () => request<Project[]>('/api/projects'),
-  createProject: (payload: { name: string; description: string; type?: string }) =>
+  createProject: (payload: { name: string; description: string; type?: string; workflow_id?: string | null }) =>
     request<ProjectCreation>('/api/projects', { method: 'POST', body: JSON.stringify(payload) }),
   listDocumentCategories: () => request<DocumentCategory[]>('/api/document-categories'),
   createDocumentCategory: (name: string) =>
@@ -374,7 +376,7 @@ export const api = {
   listWorkflowExamples: () => request<WorkflowTemplate[]>('/api/workflow-examples'),
   createWorkflow: (payload: { name: string; project_id?: string | null; roles: Workflow['roles']; states?: WorkflowState[]; transitions?: WorkflowTransition[] }) =>
     request<Workflow>('/api/workflows', { method: 'POST', body: JSON.stringify(payload) }),
-  updateWorkflow: (id: string, payload: { name?: string; roles?: Workflow['roles']; states?: WorkflowState[]; transitions?: WorkflowTransition[] }) =>
+  updateWorkflow: (id: string, payload: { name?: string; project_id?: string | null; roles?: Workflow['roles']; states?: WorkflowState[]; transitions?: WorkflowTransition[] }) =>
     request<Workflow>(`/api/workflows/${encodeURIComponent(id)}`, {
       method: 'PATCH',
       body: JSON.stringify(payload),
@@ -382,11 +384,11 @@ export const api = {
   deleteWorkflow: (id: string) =>
     request<Workflow>(`/api/workflows/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   getActiveWorkflow: (projectId: string) =>
-    request<{ workflow: Workflow | null; is_default: boolean }>(
+    request<{ workflow: Workflow | null }>(
       `/api/projects/${encodeURIComponent(projectId)}/active-workflow`
     ),
   setActiveWorkflow: (projectId: string, workflowId: string | null) =>
-    request<{ workflow: Workflow | null; is_default: boolean }>(
+    request<{ workflow: Workflow | null }>(
       `/api/projects/${encodeURIComponent(projectId)}/active-workflow`,
       { method: 'POST', body: JSON.stringify({ workflow_id: workflowId }) }
     ),

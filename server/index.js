@@ -266,6 +266,7 @@ app.post('/api/projects', async (req, res) => {
       name: req.body ? req.body.name : undefined,
       description: req.body ? req.body.description : undefined,
       type: req.body ? req.body.type : undefined,
+      workflowId: req.body ? req.body.workflow_id : undefined,
     });
     if (!result.ok) return res.status(result.status).json({ error: result.error, message: result.message });
     // External creation returns the role agents too, each with its
@@ -303,11 +304,11 @@ app.patch('/api/tickets/:id/project', async (req, res) => {
   }
 });
 
-// --- Workflow endpoints (design doc ch. 14) ---
+// --- Workflow endpoints (design doc ch. 14, ch. 19) ---
 // A workflow maps each ticket state to the role responsible for it.
 // Reads are project-scoped like the ticket reads: an account assigned
 // to one project only sees that project's workflows plus the global
-// default; asking for another project's list is 403 out_of_scope.
+// workflows; asking for another project's list is 403 out_of_scope.
 // Mutations are Admin only; the service enforces it.
 app.get('/api/workflows', async (req, res) => {
   try {
@@ -372,6 +373,7 @@ app.patch('/api/workflows/:id', async (req, res) => {
       actorId: req.user.id,
       actorRoles: req.user.roles,
       name: req.body ? req.body.name : undefined,
+      projectId: req.body ? req.body.project_id : undefined,
       roles: req.body ? req.body.roles : undefined,
       states: req.body ? req.body.states : undefined,
       transitions: req.body ? req.body.transitions : undefined,
@@ -398,16 +400,16 @@ app.delete('/api/workflows/:id', async (req, res) => {
   }
 });
 
-// The workflow in force for a project: its active workflow, otherwise
-// the global default (is_default true). Setting the active workflow
-// takes a workflow id, or null to clear it back to the default.
+// The workflow in force for a project: its chosen workflow, or null
+// when the project has chosen none. Setting the chosen workflow takes
+// a workflow id, or null to clear it.
 app.get('/api/projects/:id/active-workflow', async (req, res) => {
   try {
     const result = await workflows.getActiveWorkflow(db, req.params.id, {
       assignedProjectId: req.user.project_id,
     });
     if (!result.ok) return res.status(result.status).json({ error: result.error, message: result.message });
-    res.json({ workflow: result.workflow, is_default: result.is_default });
+    res.json({ workflow: result.workflow });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -423,7 +425,7 @@ app.post('/api/projects/:id/active-workflow', async (req, res) => {
       assignedProjectId: req.user.project_id,
     });
     if (!result.ok) return res.status(result.status).json({ error: result.error, message: result.message });
-    res.json({ workflow: result.workflow, is_default: result.is_default });
+    res.json({ workflow: result.workflow });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
