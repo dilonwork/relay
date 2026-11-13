@@ -3,7 +3,9 @@ import { api, getToken, onUnauthorized, setToken } from './api';
 import type { LegalTransition, Project, QueueEntry, Ticket, TicketWithHistory, User, Workflow } from './api';
 import { QUEUE_TABS, ROLE_LABELS, countTicketsByProject, isTerminalFor, journeyFromTransitions, stateLabelFor, statusLabel, targetsForUser } from './helpers';
 import { ADMIN_TABS, adminTabForView, adminViewForTab, isAdminView } from './adminNav';
-import type { AdminTab, AdminView } from './adminNav';
+import type { AdminTab } from './adminNav';
+import { gateView, hashToView, viewToHash } from './viewHash';
+import type { MainView } from './viewHash';
 import AdminPanel from './AdminPanel';
 import Dashboard from './Dashboard';
 import NewTicketForm from './NewTicketForm';
@@ -23,14 +25,23 @@ import TicketList from './TicketList';
 // group: 'admin-overview', 'admin-users', 'admin-workflows' and
 // 'admin-keys' (see src/adminNav.ts); the Admin page itself has no
 // tab switcher — the sidebar is the only way to switch sub-pages.
-type MainView = 'dashboard' | 'tickets-list' | 'tickets-gantt' | 'new' | 'projects' | AdminView | 'detail';
+//
+// Every view has a URL hash (see src/viewHash.ts): navigating writes
+// the hash, so refresh and a pasted link land on the same sub-page,
+// and Back/Forward step through views. The hash is not a permission —
+// a non-admin opening an Admin hash is gated back to Dashboard.
+// (The MainView union lives in viewHash.ts with the mapping.)
 
 export default function App() {
   const [authState, setAuthState] = useState<'loading' | 'login' | 'setup' | 'app'>('loading');
   const [user, setUser] = useState<User | null>(null);
   const [authError, setAuthError] = useState('');
 
-  const [mainView, setMainView] = useState<MainView>('dashboard');
+  // The first view comes from the URL hash (deep link / refresh); an
+  // empty or unknown hash starts on Dashboard. The hash is not gated
+  // here — the user is not known yet — the gate below runs once auth
+  // resolves.
+  const [mainView, setMainView] = useState<MainView>(() => hashToView(window.location.hash)?.view ?? 'dashboard');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   // Mobile drawer: at ≤720px the sidebar is hidden off-canvas and opens
   // as an overlay drawer via the hamburger button. Desktop behaviour
@@ -50,7 +61,7 @@ export default function App() {
   const [tickets, setTickets] = useState<QueueEntry[]>([]);
   const [dashboardTickets, setDashboardTickets] = useState<Ticket[]>([]);
   const [dashboardLoading, setDashboardLoading] = useState(false);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(() => hashToView(window.location.hash)?.selectedId ?? null);
   const [detail, setDetail] = useState<TicketWithHistory | null>(null);
   // The transition table of the open ticket's own workflow (ch. 15).
   // Cached per workflow id ('__builtin__' for the default flow) so
@@ -58,6 +69,10 @@ export default function App() {
   const [detailMeta, setDetailMeta] = useState<LegalTransition[]>([]);
   const [detailMetaLoading, setDetailMetaLoading] = useState(false);
   const metaCacheRef = useRef<Record<string, LegalTransition[]>>({});
+  // Hash sync (below) writes with replaceState on its first run, so the
+  // initial load does not add a history entry; later view changes use
+  // pushState, so Back/Forward step through views.
+  const hashSyncStartedRef = useRef(false);
   // All workflows, for the New ticket picker and for workflow-aware
   // labels (status names, terminal checks) across the ticket views.
   const [workflows, setWorkflows] = useState<Workflow[]>([]);
@@ -257,6 +272,59 @@ export default function App() {
     }
   }, [mainView]);
 
+  // URL-hash routing (design doc ch. 15): the view and the hash stay
+  // in sync, so refresh and a pasted link land on the same sub-page.
+  // View changes write the hash with pushState (Back/Forward step
+  // through views); the first write uses replaceState so the initial
+  // load adds no history entry. pushState/replaceState do not fire
+  // hashchange, so this cannot loop with the listener below.
+  useEffect(() => {
+    const target = viewToHash(mainView, selectedId);
+    if (window.location.hash === target) {
+      hashSyncStartedRef.current = true;
+      return;
+    }
+    if (!hashSyncStartedRef.current) {
+      hashSyncStartedRef.current = true;
+      window.history.replaceState(null, '', target);
+    } else {
+      window.history.pushState(null, '', target);
+    }
+  }, [mainView, selectedId]);
+
+  // Back/Forward and manual hash edits: the hash is the source of
+  // truth for the view. The gate below re-checks permissions once
+  // the view lands, so a disallowed hash is redirected, not rendered.
+  useEffect(() => {
+    const onHashChange = () => {
+      const parsed = hashToView(window.location.hash);
+      setSelectedId(parsed?.selectedId ?? null);
+      setMainView(parsed?.view ?? 'dashboard');
+    };
+    window.addEventListener('hashchange', onHashChange);
+    return () => window.removeEventListener('hashchange', onHashChange);
+  }, []);
+
+  // The hash is not a permission: once the signed-in user is known,
+  // a view the user may not open is gated to a safe page. The URL is
+  // replaced in place (not pushed), so Back does not loop on the
+  // disallowed hash. The render already falls through to the ticket
+  // list for an un-gated Admin view — this keeps the URL honest too.
+  useEffect(() => {
+    if (authState !== 'app' || !user) return;
+    const gated = gateView(
+      mainView,
+      selectedId,
+      user.roles.includes('admin'),
+      user.roles.includes('pm') || user.roles.includes('admin')
+    );
+    if (gated.view !== mainView || gated.selectedId !== selectedId) {
+      setSelectedId(gated.selectedId);
+      setMainView(gated.view);
+      window.history.replaceState(null, '', viewToHash(gated.view, gated.selectedId));
+    }
+  }, [authState, user, mainView, selectedId]);
+
   // Closing the mobile drawer whenever the view changes (a nav item,
   // a project row or a ticket was tapped), so the content underneath
   // is visible again. Also runs on mount, where it is a no-op.
@@ -311,7 +379,18 @@ export default function App() {
       setToken(res.token);
       setUser(res.user);
       setLoginPassword('');
-      setMainView('dashboard');
+      // A deep link opened while logged out survives login: the view
+      // comes from the hash, gated by the roles just signed in. With
+      // no hash this is still Dashboard, as before.
+      const loginParsed = hashToView(window.location.hash);
+      const loginRestored = gateView(
+        loginParsed?.view ?? 'dashboard',
+        loginParsed?.selectedId ?? null,
+        res.user.roles.includes('admin'),
+        res.user.roles.includes('pm') || res.user.roles.includes('admin')
+      );
+      setSelectedId(loginRestored.selectedId);
+      setMainView(loginRestored.view);
       setAuthState('app');
     } catch (err) {
       setAuthError(err instanceof Error ? err.message : 'Login failed.');
@@ -334,7 +413,16 @@ export default function App() {
       setToken(res.token);
       setUser(res.user);
       setSetupPassword('');
-      setMainView('dashboard');
+      // Same deep-link restore as login (see handleLogin).
+      const setupParsed = hashToView(window.location.hash);
+      const setupRestored = gateView(
+        setupParsed?.view ?? 'dashboard',
+        setupParsed?.selectedId ?? null,
+        res.user.roles.includes('admin'),
+        res.user.roles.includes('pm') || res.user.roles.includes('admin')
+      );
+      setSelectedId(setupRestored.selectedId);
+      setMainView(setupRestored.view);
       setAuthState('app');
     } catch (err) {
       setAuthError(err instanceof Error ? err.message : 'Setup failed.');

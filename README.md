@@ -113,6 +113,7 @@ relay/
 │   ├── WorkflowsPanel.tsx # workflow list / state machine editor / set active
 │   ├── workflowQuickCreate.ts # quick-create builder: rows to a linear flow (shared with the server tests)
 │   ├── adminNav.ts        # Admin sub-pages: tab ↔ view mapping shared by the sidebar and AdminPanel (server-tested)
+│   ├── viewHash.ts       # URL-hash routing: mainView ↔ location.hash mapping, permission gate (server-tested)
 │   ├── AdminPanel.tsx    # Admin shell: renders the active sub-page (Overview / Users / Workflows / API keys)
 │   ├── AdminOverview.tsx # system overview, tickets by status, audit
 │   ├── AdminUsers.tsx    # user list, create/edit, assign project, reset password, workflow responsibilities
@@ -139,6 +140,7 @@ relay/
 │   ├── workflows.test.js
 │   ├── workflowQuickCreate.test.js
 │   ├── adminNav.test.js
+│   ├── viewHash.test.js
 │   └── migrations.test.js
 ├── db/
 │   └── migrations/       # schema as SQL migrations (001-013)
@@ -216,6 +218,13 @@ account or password anywhere in the code.
   Gantt bar or the claimable queue) opens the detail view with its full
   transition history and handoff notes; a back link returns to the
   Tickets sub-page it came from.
+- **URL-hash routing:** every view has a URL hash (`#/dashboard`,
+  `#/tickets/list`, `#/tickets/gantt`, `#/new`, `#/projects`,
+  `#/admin/overview|users|workflows|keys`, `#/ticket/<id>`), so refresh
+  and a pasted link land on the same sub-page, and Back/Forward step
+  through views. The hash is not a permission — a non-admin opening an
+  Admin hash is gated back to Dashboard. The queue tab and the project
+  filter are not in the hash: refresh resets them to their defaults.
 
 ## Tests
 
@@ -235,8 +244,8 @@ are walked end to end (including the backward move), the definition
 validator's rules are tested case by case, and the migration files are
 tested for the 001→013 sequence.
 
-144 tests in total: state machine 21, tickets 30, projects 7, auth 13,
-admin 7, API keys 6, monitor 17, workflows 23, quick-create builder 10, migrations 10.
+158 tests in total: state machine 21, tickets 30, projects 7, auth 13,
+admin 7, API keys 6, monitor 17, workflows 24, quick-create builder 10, admin nav 5, view hash 8, migrations 10.
 
 ## Accounts & authentication
 
