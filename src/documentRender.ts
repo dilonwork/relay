@@ -94,13 +94,15 @@ function escapeHtml(value: string): string {
 
 // Decode the entities an attacker can use to hide a dangerous
 // protocol from a plain-text check: numeric decimal (&#106;) and hex
-// (&#x6A;) entities, with or without the trailing semicolon, plus the
-// named entities that produce a colon or whitespace (&colon;, &Tab;,
-// &NewLine;). Decoding happens before the protocol comparison in
-// sanitizeHref, so &#106;avascript: is judged as javascript:.
+// (&#x6A; or &#X6A; — browsers treat uppercase X the same as
+// lowercase, per the HTML spec) entities, with or without the
+// trailing semicolon, plus the named entities that produce a colon
+// or whitespace (&colon;, &Tab;, &NewLine;). Decoding happens before
+// the protocol comparison in sanitizeHref, so &#106;avascript: is
+// judged as javascript:.
 function decodeEntities(value: string): string {
   return String(value || '')
-    .replace(/&#(?:x([0-9a-fA-F]+)|(\d+));?/g, (_m, hex, dec) => {
+    .replace(/&#(?:[xX]([0-9a-fA-F]+)|(\d+));?/g, (_m, hex, dec) => {
       const code = parseInt(hex ?? dec, hex ? 16 : 10);
       return Number.isFinite(code) && code >= 0 && code <= 0x10ffff
         ? String.fromCodePoint(code)

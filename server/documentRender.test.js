@@ -87,8 +87,15 @@ function ok(name, fn) {
       ' javascript:alert(1)',
       '&#106;avascript:alert(1)',
       '&#x6A;avascript:alert(1)',
+      '&#X6A;avascript:alert(1)',
+      '&#X6a;avascript:alert(1)',
+      '&#X0006A;avascript:alert(1)',
+      'javascript&#X3A;alert(1)',
+      'jav&#X09;ascript:alert(1)',
       'vbscript:msgbox(1)',
+      'vbs&#X63;ript:msgbox(1)',
       'data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==',
+      'd&#X61;ta:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==',
     ]) {
       const out = render.renderMarkdownToHtml(`[click](${href})`);
       assert.ok(!/href="javascript:/i.test(out), out);
@@ -121,10 +128,16 @@ function ok(name, fn) {
     assert.ok(out.includes('src="https://example.com/x.png"'), out);
   });
 
-  await ok('sanitizeHref blocks encoded and control-char bypasses', () => {
+  await ok('sanitizeHref blocks encoded and control-char bypasses, including uppercase X hex entities', () => {
     assert.equal(render.sanitizeHref('java\tscript:alert(1)', false), '#');
     assert.equal(render.sanitizeHref('java\nscript:alert(1)', false), '#');
     assert.equal(render.sanitizeHref('&#106;avascript:alert(1)', false), '#');
+    assert.equal(render.sanitizeHref('&#X6A;avascript:alert(1)', false), '#');
+    assert.equal(render.sanitizeHref('&#X0006A;avascript:alert(1)', false), '#');
+    assert.equal(render.sanitizeHref('javascript&#X3A;alert(1)', false), '#');
+    assert.equal(render.sanitizeHref('jav&#X09;ascript:alert(1)', false), '#');
+    assert.equal(render.sanitizeHref('vbs&#X63;ript:msgbox(1)', false), '#');
+    assert.equal(render.sanitizeHref('d&#X61;ta:text/html,<script>alert(1)</script>', false), '#');
     assert.equal(render.sanitizeHref('data:text/html,<script>alert(1)</script>', true), '#');
     assert.equal(render.sanitizeHref('data:image/svg+xml,<svg></svg>', true), 'data:image/svg+xml,<svg></svg>');
     assert.equal(render.sanitizeHref('https://example.com', false), 'https://example.com');
