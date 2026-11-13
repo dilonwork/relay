@@ -7,6 +7,11 @@ import {
   findPrototypeFlow,
   isValidReplanReason,
 } from './documentTickets';
+import {
+  detectDocumentKind,
+  HTML_PREVIEW_SANDBOX,
+  renderMarkdownToHtml,
+} from './documentRender';
 
 // Documents (design doc ch. 17): the filing cabinet for the
 // documents the platform produces. Documents are filed here with a
@@ -36,6 +41,51 @@ interface DocumentsPanelProps {
   onOpenTicket: (id: string) => void;
   onError: (msg: string) => void;
   onNotice: (msg: string) => void;
+}
+
+// Expanded content for one document (ticket 2f32761f): a Prototype
+// document renders by type — HTML as a sandboxed interactive page,
+// Markdown as formatted text — while every other document keeps the
+// plain-text <pre> it always had. A Prototype whose type cannot be
+// decided also falls back to the <pre>. Non-Prototype documents
+// never reach the renderer, so their expanded view is unchanged.
+// Download / Implement / Not OK / Delete are untouched by this:
+// they live in the list row, not in the expanded content.
+function renderDocumentContent(doc: DocumentItem, isPrototype: boolean) {
+  const content = doc.content || '(No content.)';
+  if (!isPrototype || !doc.content) {
+    return (
+      <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', margin: 0 }}>
+        {content}
+      </pre>
+    );
+  }
+  const kind = detectDocumentKind(doc.title, doc.content);
+  if (kind === 'html') {
+    // 600px tall with its own scrolling: tall enough to see a real
+    // prototype page at work, not just a strip of it.
+    return (
+      <iframe
+        title={`Preview of ${doc.title}`}
+        sandbox={HTML_PREVIEW_SANDBOX}
+        srcDoc={doc.content}
+        style={{ width: '100%', height: '600px', border: '1px solid #cfdbe4', borderRadius: '6px', background: '#fff' }}
+      />
+    );
+  }
+  if (kind === 'markdown') {
+    return (
+      <div
+        className="document-markdown"
+        dangerouslySetInnerHTML={{ __html: renderMarkdownToHtml(doc.content) }}
+      />
+    );
+  }
+  return (
+    <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', margin: 0 }}>
+      {content}
+    </pre>
+  );
 }
 
 export default function DocumentsPanel(props: DocumentsPanelProps) {
@@ -442,9 +492,7 @@ export default function DocumentsPanel(props: DocumentsPanelProps) {
                     {expanded && (
                       <tr>
                         <td colSpan={5}>
-                          <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', margin: 0 }}>
-                            {doc.content || '(No content.)'}
-                          </pre>
+                          {renderDocumentContent(doc, isPrototype)}
                           {isPrototype && notOkId === doc.id && isPm && (
                             <form
                               onSubmit={(e) => {
