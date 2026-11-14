@@ -14,7 +14,15 @@ export default defineConfig(({ mode }) => {
       proxy: {
         '/api': {
           target: `http://localhost:${backendPort}`,
-          changeOrigin: true
+          // Do NOT rewrite the Host header (ticket 3b436bdd): the
+          // backend uses the request Host as the project prompt
+          // bundle's public base URL fallback (see
+          // server/publicUrl.js), so the proxy must pass the
+          // browser's Host through. With changeOrigin: true the
+          // backend sees localhost:<backendPort> and the bundle
+          // prints a localhost endpoint an external agent cannot
+          // reach. PUBLIC_URL still wins when it is set.
+          changeOrigin: false
         }
       }
     }
