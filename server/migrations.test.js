@@ -44,7 +44,30 @@
 // updated in place with the kind column and a nullable
 // password_hash, 007 with the type column; 019 brings existing
 // databases to the same schema, with the same DO-block guard
-// convention for the CHECK adds.
+// convention for the CHECK adds. Migration 020 removes the Default
+// concept (ticket 7c2fefc5): projects gains workflow_id (the
+// project's chosen workflow, NULL means none chosen) with a foreign
+// key to workflows(id) and an index; the backfill first keeps each
+// project's active workflow as its chosen one, then assigns the
+// former Default flow to every project still without one; workflows
+// loses is_default and is_active. 007 and 010 are NOT updated in
+// place: 007 cannot carry the foreign key inline (the workflows
+// table does not exist yet at migration 007 time), and 010 must keep
+// is_active/is_default so 020's backfill can read them — a fresh
+// database runs 010 then 020 and converges on the same final
+// schema. Migration 021 makes Global workflow names unique (ticket
+// 7c2fefc5, follow-up to 020): 020 allowed multiple Global workflows,
+// but the (project_id, name) unique index cannot enforce uniqueness
+// among Globals (PostgreSQL treats NULL project_id values as
+// distinct), so a partial unique index on (name) WHERE project_id
+// IS NULL closes the gap; the service already turns 23505 into 409
+// workflow_name_taken. Migration 010 and 013 seed statements are
+// guarded on the is_default column existing (ticket 7c2fefc5,
+// follow-up to 020): 020 drops is_default, and the server re-runs
+// every migration on startup, so the unguarded 010 seed INSERT and
+// 013 seed UPDATE would fail on the second run (column does not
+// exist) and block 011-021. The CREATE TABLE columns stay: a fresh
+// database needs them so 020's backfill can read them.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -237,6 +260,32 @@ async function main() {
     assert.deepEqual(JSON.parse(m[1]), BUILTIN_STATES, '013: seeded states must equal BUILTIN_STATES');
     assert.deepEqual(JSON.parse(m[2]), BUILTIN_DEFINITION.transitions, '013: seeded transitions must equal BUILTIN_DEFINITION.transitions');
     assert.ok(sql.includes("WHERE is_default AND states = '[]'::jsonb"), '013: seed must only fill an empty default workflow');
+    // The seed UPDATE is guarded on the is_default column existing:
+    // migration 020 drops it, and the server re-runs every migration
+    // on startup, so an unguarded UPDATE would fail on the second run
+    // and block 014-021. The UPDATE must sit inside the guard.
+    assert.ok(sql.includes('DO $$'), '013: seed UPDATE must be inside a DO block guard');
+    assert.ok(sql.includes("column_name = 'is_default'"), '013: seed UPDATE must be guarded on is_default existing');
+    const guardAt = sql.indexOf('DO $$');
+    const updateAt = sql.indexOf('UPDATE workflows');
+    assert.ok(updateAt > guardAt, '013: UPDATE must be inside the guard (after DO $$)');
+  });
+
+  await ok('migration 010 seed INSERT is guarded for re-runs after 020', async () => {
+    const sql = readMigration('010_create_workflows.sql');
+    // The CREATE TABLE must keep the is_default / is_active columns:
+    // a fresh database needs them so 020's backfill can read them.
+    assert.ok(sql.includes('is_default BOOLEAN NOT NULL DEFAULT false'), '010: CREATE TABLE must keep is_default');
+    assert.ok(sql.includes('is_active BOOLEAN NOT NULL DEFAULT false'), '010: CREATE TABLE must keep is_active');
+    // The seed INSERT references those columns, so it must be guarded
+    // on is_default existing: 020 drops the column, and the server
+    // re-runs every migration on startup, so an unguarded INSERT would
+    // fail on the second run and block 011-021.
+    assert.ok(sql.includes('DO $$'), '010: seed INSERT must be inside a DO block guard');
+    assert.ok(sql.includes("column_name = 'is_default'"), '010: seed INSERT must be guarded on is_default existing');
+    const guardAt = sql.indexOf('DO $$');
+    const insertAt = sql.indexOf('INSERT INTO workflows (name, project_id, roles, is_default, is_active, created_by)');
+    assert.ok(insertAt > guardAt, '010: INSERT must be inside the guard (after DO $$)');
   });
 
   await ok('migration 003 creates users with all 9 roles in the CHECK (016 updated it)', async () => {
@@ -451,6 +500,61 @@ async function main() {
     const sql = readMigration('007_create_projects.sql');
     assert.ok(sql.includes('type TEXT NOT NULL DEFAULT \'internal\''), '007: missing type column');
     assert.ok(sql.includes('CHECK (type IN (\'internal\', \'external\'))'), '007: missing type CHECK');
+  });
+
+  await ok('migration 020 adds projects.workflow_id with its FK and index', async () => {
+    const sql = readMigration('020_global_workflows_project_workflow.sql');
+    assert.ok(sql.includes('ADD COLUMN IF NOT EXISTS workflow_id UUID'), '020: missing ADD COLUMN for workflow_id');
+    assert.ok(sql.includes('ADD CONSTRAINT projects_workflow_id_fkey'), '020: missing FK constraint');
+    assert.ok(sql.includes('FOREIGN KEY (workflow_id) REFERENCES workflows(id) ON DELETE SET NULL'), '020: FK must reference workflows(id) ON DELETE SET NULL');
+    assert.ok(sql.includes('CREATE INDEX IF NOT EXISTS idx_projects_workflow ON projects (workflow_id)'), '020: missing workflow index');
+  });
+
+  await ok('migration 020 backfills the chosen workflow before dropping the flags', async () => {
+    const sql = readMigration('020_global_workflows_project_workflow.sql');
+    // A project keeps its active workflow as its chosen one.
+    assert.ok(sql.includes('WHERE w.project_id = projects.id AND w.is_active'), '020: missing active-workflow backfill');
+    // Every project still without one gets the former Default flow.
+    assert.ok(sql.includes('SELECT id FROM workflows WHERE is_default LIMIT 1'), '020: missing former-Default backfill');
+    assert.ok(sql.includes('WHERE workflow_id IS NULL'), '020: backfills must only touch projects with no chosen workflow');
+    // The backfills are guarded on the columns existing: the drops
+    // below remove is_active / is_default, so an unguarded backfill
+    // would fail on the second run (the server re-runs every
+    // migration on startup). The guard must check the column in
+    // information_schema before the UPDATE that reads it.
+    assert.ok(sql.includes("column_name = 'is_active'"), '020: active-workflow backfill must be guarded on is_active existing');
+    assert.ok(sql.includes("column_name = 'is_default'"), '020: former-Default backfill must be guarded on is_default existing');
+    // The backfills must run before the flags they read are dropped.
+    const dropDefault = sql.indexOf('DROP COLUMN IF EXISTS is_default');
+    const dropActive = sql.indexOf('DROP COLUMN IF EXISTS is_active');
+    assert.ok(dropDefault > sql.indexOf('w.is_active'), '020: is_default must be dropped after the backfills');
+    assert.ok(dropActive > sql.indexOf('w.is_active'), '020: is_active must be dropped after the backfills');
+  });
+
+  await ok('migration 020 drops is_default and is_active and guards the FK like 018', async () => {
+    const sql = readMigration('020_global_workflows_project_workflow.sql');
+    assert.ok(sql.includes('ALTER TABLE workflows DROP COLUMN IF EXISTS is_default'), '020: missing DROP for is_default');
+    assert.ok(sql.includes('ALTER TABLE workflows DROP COLUMN IF EXISTS is_active'), '020: missing DROP for is_active');
+    assert.ok(sql.includes('DO $$'), '020: FK add must be inside a DO block guard');
+    assert.ok(
+      sql.includes('WHERE p.workflow_id IS NOT NULL'),
+      '020: guard must check stored workflow_id values reference existing workflows'
+    );
+    const dropAt = sql.indexOf('DROP CONSTRAINT IF EXISTS projects_workflow_id_fkey');
+    const addAt = sql.indexOf('ADD CONSTRAINT projects_workflow_id_fkey');
+    assert.ok(dropAt > sql.indexOf('DO $$'), '020: DROP must be inside the guard (after DO $$)');
+    assert.ok(addAt > dropAt, '020: ADD must come after DROP');
+  });
+
+  await ok('migration 021 makes Global workflow names unique', async () => {
+    const sql = readMigration('021_global_workflow_name_unique.sql');
+    // 020 allowed multiple Global workflows, but the (project_id,
+    // name) unique index from 010 cannot enforce uniqueness among
+    // Globals: PostgreSQL treats NULL project_id values as distinct.
+    // A partial unique index on the Global scope closes the gap; the
+    // service already turns 23505 into 409 workflow_name_taken.
+    assert.ok(sql.includes('CREATE UNIQUE INDEX IF NOT EXISTS idx_workflows_global_name_unique'), '021: missing partial unique index');
+    assert.ok(sql.includes('ON workflows (name) WHERE project_id IS NULL'), '021: index must be partial on Global workflows only');
   });
 
   console.log(`\n${passed} migration tests passed.`);

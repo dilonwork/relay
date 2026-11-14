@@ -70,7 +70,7 @@ export default function App() {
   const [selectedId, setSelectedId] = useState<string | null>(() => hashToView(window.location.hash)?.selectedId ?? null);
   const [detail, setDetail] = useState<TicketWithHistory | null>(null);
   // The transition table of the open ticket's own workflow (ch. 15).
-  // Cached per workflow id ('__builtin__' for the default flow) so
+  // Cached per workflow id ('__builtin__' for the built-in flow) so
   // opening another ticket on the same workflow needs no request.
   const [detailMeta, setDetailMeta] = useState<LegalTransition[]>([]);
   const [detailMetaLoading, setDetailMetaLoading] = useState(false);
@@ -94,6 +94,7 @@ export default function App() {
   const [newProjectName, setNewProjectName] = useState('');
   const [newProjectDescription, setNewProjectDescription] = useState('');
   const [newProjectType, setNewProjectType] = useState('internal');
+  const [newProjectWorkflowId, setNewProjectWorkflowId] = useState('');
   // Role agents created with the last external project, with each
   // API key shown exactly once (cleared when the admin closes the
   // box or creates another project).
@@ -497,10 +498,12 @@ export default function App() {
         name: newProjectName,
         description: newProjectDescription,
         type: newProjectType,
+        workflow_id: newProjectWorkflowId || null,
       });
       setNewProjectName('');
       setNewProjectDescription('');
       setNewProjectType('internal');
+      setNewProjectWorkflowId('');
       if (created.agents.length > 0) {
         setCreatedAgents(created.agents);
         setNotice(`Project created: ${created.project.name} with ${created.agents.length} role agents. Copy their API keys now — each is shown only once.`);
@@ -983,11 +986,13 @@ export default function App() {
           newProjectName={newProjectName}
           newProjectDescription={newProjectDescription}
           newProjectType={newProjectType}
+          newProjectWorkflowId={newProjectWorkflowId}
           createdAgents={createdAgents}
           busy={busy}
           onNewProjectNameChange={setNewProjectName}
           onNewProjectDescriptionChange={setNewProjectDescription}
           onNewProjectTypeChange={setNewProjectType}
+          onNewProjectWorkflowIdChange={setNewProjectWorkflowId}
           onCreateProject={handleCreateProject}
           onClearCreatedAgents={() => setCreatedAgents(null)}
           onSelectProject={selectProject}

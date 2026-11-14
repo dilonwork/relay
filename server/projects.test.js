@@ -6,6 +6,7 @@ const assert = require('node:assert/strict');
 const projects = require('./projects.js');
 const sm = require('./stateMachine.js');
 const workflows = require('./workflows.js');
+const examples = require('./workflowExamples.js');
 
 let passed = 0;
 function ok(name, fn) {
@@ -54,25 +55,29 @@ class FakeDb {
     return u;
   }
 
-  // The default workflow row, as migration 013 seeds it: the built-in
-  // 14-state definition. External creation derives its role agents
-  // from this row (a brand-new project has no active workflow yet).
-  seedDefaultWorkflow() {
+  // Seed a Global workflow row directly (bypassing the service), e.g.
+  // the former Default row or a custom flow a project may choose.
+  seedWorkflow({ id, project_id = null, name, roles, states, transitions }) {
     const w = {
-      id: 'test-workflow-default',
-      name: 'Default',
-      project_id: null,
-      roles: workflows.DEFAULT_WORKFLOW_ROLES,
-      states: sm.BUILTIN_STATES,
-      transitions: sm.BUILTIN_DEFINITION.transitions,
-      is_default: true,
-      is_active: false,
+      id: id || `test-workflow-${++this.seq}`,
+      name,
+      project_id,
+      roles: roles || workflows.BUILTIN_WORKFLOW_ROLES,
+      states: states || sm.BUILTIN_STATES,
+      transitions: transitions || sm.BUILTIN_DEFINITION.transitions,
       created_by: 'system',
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };
     this.workflows.push(w);
     return w;
+  }
+
+  // The former Default row as it stands after migration 020: an
+  // ordinary Global workflow named 'Default' with the built-in
+  // definition — no flag makes it special anymore.
+  seedGlobalWorkflow() {
+    return this.seedWorkflow({ id: 'test-workflow-default', name: 'Default' });
   }
 
   async query(text, params = []) {
@@ -89,7 +94,8 @@ class FakeDb {
         name: params[0],
         description: params[1],
         type: params[2],
-        created_by: params[3],
+        workflow_id: params[3] === undefined ? null : params[3],
+        created_by: params[4],
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       };
@@ -143,12 +149,8 @@ class FakeDb {
       this.apiKeys.push(k);
       return { rows: [{ ...k }] };
     }
-    if (sql.startsWith('SELECT * FROM workflows WHERE is_default = true')) {
-      const w = this.workflows.find((x) => x.is_default);
-      return { rows: w ? [{ ...w }] : [] };
-    }
-    if (sql.startsWith('SELECT * FROM workflows WHERE project_id = $1 AND is_active = true')) {
-      const w = this.workflows.find((x) => x.project_id === params[0] && x.is_active);
+    if (sql.startsWith('SELECT * FROM workflows WHERE id = $1')) {
+      const w = this.workflows.find((x) => x.id === params[0]);
       return { rows: w ? [{ ...w }] : [] };
     }
     if (/^SELECT \* FROM projects WHERE id = \$1/.test(sql)) {
@@ -204,6 +206,8 @@ async function main() {
     assert.equal(byPm.project.name, 'WebTracker');
     assert.equal(byPm.project.description, 'Stock tracker.');
     assert.equal(byPm.project.created_by, 'pm-1');
+    // No workflow chosen: the project stores workflow_id null.
+    assert.equal(byPm.project.workflow_id, null);
     // Type defaults to internal, and internal creation creates no agents.
     assert.equal(byPm.project.type, 'internal');
     assert.deepEqual(byPm.agents, []);
@@ -297,16 +301,61 @@ async function main() {
     assert.equal(clearedBlank.ticket.project_id, null);
   });
 
-  await ok('external creation creates one agent per default-flow role, each with a key and onboarding package', async () => {
+  await ok('creation with a workflow stores it as the project\'s chosen workflow', async () => {
     const db = new FakeDb();
-    db.seedDefaultWorkflow();
+    const global = db.seedWorkflow({ name: 'Incident flow', roles: examples.FLOW_INCIDENT.roles, states: examples.FLOW_INCIDENT.states, transitions: examples.FLOW_INCIDENT.transitions });
+    const scoped = db.seedWorkflow({ name: 'Scoped', project_id: 'other-project' });
+    const chosen = await projects.createProject(db, {
+      actorId: 'pm-1', actorRoles: ['pm'], name: 'Acme Support', description: '', type: 'internal', workflowId: global.id,
+    });
+    assert.equal(chosen.ok, true, JSON.stringify(chosen));
+    assert.equal(chosen.project.workflow_id, global.id);
+    // A project-scoped workflow of another project cannot be chosen:
+    // at creation the project does not exist yet, so only Global
+    // workflows are choosable.
+    const mismatch = await projects.createProject(db, {
+      actorId: 'pm-1', actorRoles: ['pm'], name: 'Other', description: '', type: 'internal', workflowId: scoped.id,
+    });
+    assert.equal(mismatch.ok, false);
+    assert.equal(mismatch.status, 400);
+    assert.equal(mismatch.error, 'workflow_project_mismatch');
+    assert.equal(db.projects.length, 1);
+    // An unknown workflow is 404.
+    const unknown = await projects.createProject(db, {
+      actorId: 'pm-1', actorRoles: ['pm'], name: 'Third', description: '', type: 'internal', workflowId: 'no-such-workflow',
+    });
+    assert.equal(unknown.ok, false);
+    assert.equal(unknown.status, 404);
+    assert.equal(unknown.error, 'workflow_not_found');
+    assert.equal(db.projects.length, 1);
+  });
+
+  await ok('external creation with a chosen workflow creates agents from that flow', async () => {
+    const db = new FakeDb();
+    const incident = db.seedWorkflow({ name: 'Incident flow', roles: examples.FLOW_INCIDENT.roles, states: examples.FLOW_INCIDENT.states, transitions: examples.FLOW_INCIDENT.transitions });
+    const res = await projects.createProject(db, {
+      actorId: 'pm-1', actorRoles: ['pm'], name: 'Acme Support', description: 'External client project.', type: 'external', workflowId: incident.id,
+    });
+    assert.equal(res.ok, true, JSON.stringify(res));
+    assert.equal(res.project.workflow_id, incident.id);
+    // The incident flow has two roles (pm, engineer), in state order.
+    assert.deepEqual(res.agents.map((a) => a.user.roles[0]), ['pm', 'engineer']);
+    assert.deepEqual(res.agents.map((a) => a.user.username), ['acme-support-pm', 'acme-support-engineer']);
+    const byRole = Object.fromEntries(res.agents.map((a) => [a.user.roles[0], a]));
+    assert.ok(byRole.pm.onboarding.markdown.includes('**System event**'), 'pm doc lists its states');
+    assert.ok(byRole.engineer.onboarding.markdown.includes('**Create incident**'), 'engineer doc lists its states');
+    assert.ok(byRole.pm.onboarding.markdown.includes('**Flow:** Incident flow'), 'doc names the chosen flow');
+  });
+
+  await ok('external creation creates one agent per built-in flow role, each with a key and onboarding package', async () => {
+    const db = new FakeDb();
     const res = await projects.createProject(db, {
       actorId: 'pm-1', actorRoles: ['pm'], name: 'Acme Support', description: 'External client project.', type: 'external',
     });
     assert.equal(res.ok, true, JSON.stringify(res));
     assert.equal(res.status, 201);
     assert.equal(res.project.type, 'external');
-    // The default flow's roles, in state order: the roles map assigns
+    // The built-in flow's roles, in state order: the roles map assigns
     // each state the role of its first outgoing transition, so
     // 'requirement' belongs to the Leader (requirement -> decomposing)
     // and the PM owns the two clarification states. Six role agents.
@@ -354,7 +403,6 @@ async function main() {
 
   await ok('internal creation creates no agents', async () => {
     const db = new FakeDb();
-    db.seedDefaultWorkflow();
     const res = await projects.createProject(db, {
       actorId: 'admin-1', actorRoles: ['admin'], name: 'Relay', description: '', type: 'internal',
     });
@@ -366,7 +414,6 @@ async function main() {
 
   await ok('a taken agent username gets a numeric suffix', async () => {
     const db = new FakeDb();
-    db.seedDefaultWorkflow();
     db.seedUser('acme-support-engineer');
     const res = await projects.createProject(db, {
       actorId: 'pm-1', actorRoles: ['pm'], name: 'Acme Support', description: '', type: 'external',
@@ -379,7 +426,6 @@ async function main() {
 
   await ok('external creation rolls back when no free username exists for a role', async () => {
     const db = new FakeDb();
-    db.seedDefaultWorkflow();
     // Block every candidate for the engineer agent: the plain name
     // plus -2 through -10. PM and Leader agents are created first,
     // so a rollback must remove them too.
@@ -408,7 +454,6 @@ async function main() {
 
   await ok('list returns type and agent counts', async () => {
     const db = new FakeDb();
-    db.seedDefaultWorkflow();
     const internal = await projects.createProject(db, {
       actorId: 'pm-1', actorRoles: ['pm'], name: 'Relay', description: '', type: 'internal',
     });

@@ -5,28 +5,26 @@
 // row stores three JSONB columns: roles (state -> {role,
 // responsibilities}), states (the state list) and transitions (the
 // from -> to table). The built-in 14-state development flow is the
-// default definition (server/stateMachine.js BUILTIN_DEFINITION); a
-// ticket with no workflow follows it, so existing behaviour is
-// unchanged.
+// definition in server/stateMachine.js (BUILTIN_DEFINITION); a ticket
+// with no workflow follows it, so existing behaviour is unchanged.
+//
+// A workflow belongs to one project (project_id) or to no project:
+// a Global workflow (project_id NULL) is visible to every project
+// and may be chosen by any of them. There is no default workflow
+// (design doc ch. 19, ticket 7c2fefc5): migration 020 dropped the
+// is_default and is_active flags, and a project chooses its workflow
+// instead of falling back to one — projects.workflow_id names the
+// project's chosen workflow, and the active-workflow endpoints read
+// and write that column. A project with no chosen workflow has none:
+// new tickets on it need an explicit workflow (400 no_workflow).
 //
 // Takes a `db` object with the same interface as server/database.js:
 //   db.query(text, params) and db.withTransaction(fn).
 // Tests inject an in-memory fake with that interface, so no live database
 // is needed to test the service logic.
 //
-// A workflow is a per-project override of the built-in role map. The
-// global default workflow (project_id NULL, is_default true) is the
-// fallback when a project has no active workflow, and the built-in
-// DEFAULT_WORKFLOW_ROLES constant is the fallback when even the
-// default workflow is missing from the database (e.g. the seed has not
-// run yet). The three layers guarantee existing behaviour is unchanged.
-//
-// The default workflow is read-only: it can never be updated, deleted
-// or set active. is_active is at most one workflow per project; setting
-// a workflow active clears the flag on the project's other workflows,
-// and passing null clears the project's active workflow (back to the
-// default). Mutation is Admin only (ticket 9637f2e9): workflows live
-// under Admin, and PM may read but not mutate.
+// Mutation is Admin only (ticket 9637f2e9): workflows live under
+// Admin, and PM may read but not mutate.
 //
 // A transition's role is derived from its from-state's role in the
 // roles map (ch. 15): the editor edits roles per state, and the server
@@ -62,10 +60,10 @@ const STATE_CODE_RE = /^[a-z][a-z0-9_]{0,63}$/;
 // editor offers forward / backward / pickup / clarify.
 const EDITABLE_KINDS = ['forward', 'backward', 'pickup', 'clarify', 'return'];
 
-// Responsibilities text for the default workflow. These sentences were
-// written for this ticket (2026-11-12): no existing document or program
-// states them; the design doc (ch. 14) records that they are new.
-const DEFAULT_RESPONSIBILITIES = {
+// Responsibilities text for the built-in flow. These sentences were
+// written for ticket 3269ec1c (2026-11-12): no existing document or
+// program states them; the design doc (ch. 14) records that they are new.
+const BUILTIN_RESPONSIBILITIES = {
   requirement: 'Pick up the ticket and decompose it into a buildable plan, or return it for clarification.',
   decomposing: 'Break the requirement into tasks and hand the plan to development.',
   needs_clarification: 'Answer the open question and send the ticket back for decomposition.',
@@ -85,16 +83,14 @@ const DEFAULT_RESPONSIBILITIES = {
 // The built-in role map, derived from the state machine: for each state,
 // the role of the first transition out of that state. Terminal states
 // have no outgoing transition, so their role is null.
-const DEFAULT_WORKFLOW_ROLES = {};
+const BUILTIN_WORKFLOW_ROLES = {};
 for (const status of sm.STATUSES) {
   const rule = sm.TRANSITIONS.find((t) => t.from === status);
-  DEFAULT_WORKFLOW_ROLES[status] = {
+  BUILTIN_WORKFLOW_ROLES[status] = {
     role: rule ? rule.role : null,
-    responsibilities: DEFAULT_RESPONSIBILITIES[status],
+    responsibilities: BUILTIN_RESPONSIBILITIES[status],
   };
 }
-
-const DEFAULT_WORKFLOW_NAME = 'Default';
 
 function asJson(value) {
   if (value === null || value === undefined) return null;
@@ -136,9 +132,9 @@ function normalizeWorkflow(row) {
 // non-null roles in its roles map, in the workflow's state order
 // (terminal states have role null and contribute nothing). Used by
 // external project creation (one role agent per flow role, ticket
-// 0f26169c) and by the onboarding package. For the built-in default
-// flow that is pm, leader, engineer, reviewer, tester, deployer —
-// six roles; a custom flow's roles are whatever its map assigns.
+// 0f26169c) and by the onboarding package. For the built-in flow that
+// is pm, leader, engineer, reviewer, tester, deployer — six roles; a
+// custom flow's roles are whatever its map assigns.
 function flowRolesFromDefinition(definition) {
   if (!definition || typeof definition !== 'object') return [];
   const roles = definition.roles || {};
@@ -411,12 +407,12 @@ async function createWorkflow(db, { actorId, actorRoles, name, projectId, roles,
   }
   // States/transitions default to the built-in definition, so a
   // roles-only create (the pre-editor shape) still builds a workflow
-  // that behaves exactly like the default flow.
+  // that behaves exactly like the built-in flow.
   const nextStates = states === undefined || states === null ? sm.BUILTIN_STATES : states;
   const nextTransitions = transitions === undefined || transitions === null
     ? sm.BUILTIN_DEFINITION.transitions
     : transitions;
-  const nextRoles = roles === undefined || roles === null ? DEFAULT_WORKFLOW_ROLES : roles;
+  const nextRoles = roles === undefined || roles === null ? BUILTIN_WORKFLOW_ROLES : roles;
   const check = validateWorkflowDefinition({ states: nextStates, transitions: nextTransitions, roles: nextRoles });
   if (!check.ok) {
     return { ok: false, status: 400, error: check.error, message: check.message };
@@ -434,16 +430,16 @@ async function createWorkflow(db, { actorId, actorRoles, name, projectId, roles,
     return { ok: true, status: 201, workflow: normalizeWorkflow(rows[0]) };
   } catch (err) {
     if (err.code === '23505') {
-      return { ok: false, status: 409, error: 'workflow_name_taken', message: `Workflow name ${String(name).trim()} is already taken in this project.` };
+      return { ok: false, status: 409, error: 'workflow_name_taken', message: `Workflow name ${String(name).trim()} is already taken${target ? ' in this project' : ''}.` };
     }
     throw err;
   }
 }
 
 // List workflows visible to the caller. A project filter returns that
-// project's workflows plus the global default (project_id NULL), which
-// is visible to everyone. An account assigned to one project only ever
-// sees that project's workflows plus the global default.
+// project's workflows plus the global workflows (project_id NULL),
+// which are visible to everyone. An account assigned to one project
+// only ever sees that project's workflows plus the global workflows.
 async function listWorkflows(db, { projectId, assignedProjectId } = {}) {
   const effectiveProject = assignedProjectId || cleanProjectId(projectId);
   if (assignedProjectId && projectId && cleanProjectId(projectId) !== assignedProjectId) {
@@ -483,7 +479,13 @@ async function getWorkflow(db, id, { assignedProjectId } = {}) {
   return { ok: true, status: 200, workflow: normalizeWorkflow(row) };
 }
 
-async function updateWorkflow(db, id, { actorId, actorRoles, name, roles, states, transitions, assignedProjectId } = {}) {
+// Update a workflow's name, definition, or project. Passing
+// projectId moves the workflow to another project (or to Global with
+// null); omitting it leaves the project unchanged. A workflow that
+// is a project's chosen workflow cannot be moved: change that
+// project's workflow first, or the project would be left pointing at
+// a workflow that belongs to another project.
+async function updateWorkflow(db, id, { actorId, actorRoles, name, projectId, roles, states, transitions, assignedProjectId } = {}) {
   if (!requireAdmin(actorRoles)) {
     return { ok: false, status: 403, error: 'wrong_role', message: 'Only an Admin may update a workflow.' };
   }
@@ -497,8 +499,18 @@ async function updateWorkflow(db, id, { actorId, actorRoles, name, roles, states
   if (!workflowVisibleTo(row, assignedProjectId)) {
     return { ok: false, status: 403, error: 'out_of_scope', message: 'This workflow belongs to a different project than the one you are assigned to.' };
   }
-  if (row.is_default) {
-    return { ok: false, status: 400, error: 'default_workflow_readonly', message: 'The default workflow is read-only.' };
+  const moveTo = projectId === undefined ? undefined : cleanProjectId(projectId);
+  if (moveTo !== undefined) {
+    const { rows: chosenBy } = await db.query(
+      'SELECT id, name FROM projects WHERE workflow_id = $1 LIMIT 1',
+      [row.id]
+    );
+    if (chosenBy.length > 0) {
+      return { ok: false, status: 400, error: 'workflow_in_use', message: `This workflow is the chosen workflow of project ${chosenBy[0].name} — change that project's workflow first.` };
+    }
+    if (moveTo && !(await projectExists(db, moveTo))) {
+      return { ok: false, status: 400, error: 'unknown_project', message: `Unknown project: ${moveTo}.` };
+    }
   }
   const cleanName = name === undefined || name === null ? null : String(name).trim();
   if (name !== undefined && name !== null && !cleanName) {
@@ -527,26 +539,27 @@ async function updateWorkflow(db, id, { actorId, actorRoles, name, roles, states
   }
   const clean = normalizeDefinition({ states: nextStates, transitions: nextTransitions, roles: nextRoles });
   const nextName = cleanName || row.name;
+  const nextProjectId = moveTo === undefined ? row.project_id : moveTo;
   try {
     const { rows } = await db.query(
-      'UPDATE workflows SET name = $1, roles = $2, states = $3, transitions = $4, updated_at = CURRENT_TIMESTAMP WHERE id = $5 RETURNING *',
-      [nextName, JSON.stringify(nextRoles), JSON.stringify(clean.states), JSON.stringify(clean.transitions), row.id]
+      'UPDATE workflows SET name = $1, project_id = $2, roles = $3, states = $4, transitions = $5, updated_at = CURRENT_TIMESTAMP WHERE id = $6 RETURNING *',
+      [nextName, nextProjectId, JSON.stringify(nextRoles), JSON.stringify(clean.states), JSON.stringify(clean.transitions), row.id]
     );
     return { ok: true, status: 200, workflow: normalizeWorkflow(rows[0]) };
   } catch (err) {
     if (err.code === '23505') {
-      return { ok: false, status: 409, error: 'workflow_name_taken', message: `Workflow name ${nextName} is already taken in this project.` };
+      return { ok: false, status: 409, error: 'workflow_name_taken', message: `Workflow name ${nextName} is already taken${nextProjectId ? ' in this project' : ''}.` };
     }
     throw err;
   }
 }
 
-// Delete rules (design doc ch. 14): the default workflow can never be
-// deleted; an active workflow can only be deleted when the project has
-// another non-default workflow to fall back on (the project then falls
-// back to the default workflow); a non-active workflow deletes freely.
-// A workflow with tickets on it cannot be deleted at all: its tickets
-// would fall back to the built-in flow and strand in unknown states.
+// Delete rules (design doc ch. 19): a workflow with tickets on it
+// cannot be deleted at all — its tickets would lose the workflow
+// they follow. A workflow that is a project's chosen workflow cannot
+// be deleted directly either: change the project's workflow first,
+// then delete. Anything else deletes freely; there is no default
+// workflow to protect and no fallback to arrange.
 async function deleteWorkflow(db, id, { actorId, actorRoles, assignedProjectId } = {}) {
   if (!requireAdmin(actorRoles)) {
     return { ok: false, status: 403, error: 'wrong_role', message: 'Only an Admin may delete a workflow.' };
@@ -561,9 +574,6 @@ async function deleteWorkflow(db, id, { actorId, actorRoles, assignedProjectId }
   if (!workflowVisibleTo(row, assignedProjectId)) {
     return { ok: false, status: 403, error: 'out_of_scope', message: 'This workflow belongs to a different project than the one you are assigned to.' };
   }
-  if (row.is_default) {
-    return { ok: false, status: 400, error: 'default_workflow_readonly', message: 'The default workflow cannot be deleted.' };
-  }
   const { rows: usedBy } = await db.query(
     'SELECT id FROM tickets WHERE workflow_id = $1 LIMIT 1',
     [row.id]
@@ -571,39 +581,49 @@ async function deleteWorkflow(db, id, { actorId, actorRoles, assignedProjectId }
   if (usedBy.length > 0) {
     return { ok: false, status: 400, error: 'workflow_in_use', message: 'This workflow has tickets on it and cannot be deleted.' };
   }
-  if (row.is_active) {
-    const { rows } = await db.query(
-      'SELECT * FROM workflows WHERE project_id = $1 ORDER BY created_at ASC, id ASC',
-      [row.project_id]
-    );
-    const alternative = rows.some((w) => w.id !== row.id && !w.is_default);
-    if (!alternative) {
-      return { ok: false, status: 400, error: 'active_workflow_no_alternative', message: 'The active workflow cannot be deleted: this project has no other workflow to fall back on.' };
-    }
+  const { rows: chosenBy } = await db.query(
+    'SELECT id, name FROM projects WHERE workflow_id = $1 LIMIT 1',
+    [row.id]
+  );
+  if (chosenBy.length > 0) {
+    return { ok: false, status: 400, error: 'workflow_used_by_project', message: `This workflow is the chosen workflow of project ${chosenBy[0].name} — change that project's workflow first.` };
   }
   await db.query('DELETE FROM workflows WHERE id = $1 RETURNING *', [row.id]);
   return { ok: true, status: 200, workflow: normalizeWorkflow(row) };
 }
 
-// The default workflow's definition: the seeded default row when it
-// exists, otherwise the built-in definition (the seed has not run
-// yet). Used where no project exists yet — external project creation
-// derives the new project's role agents from the configured flow,
-// which for a brand-new project is always the default flow.
-async function getDefaultWorkflowDefinition(db) {
-  const { rows } = await db.query('SELECT * FROM workflows WHERE is_default = true LIMIT 1');
-  if (rows[0]) return definitionFromRow(rows[0]);
+// The built-in 14-state definition in the shape a workflow row
+// carries: states, transitions, and the roles map (state ->
+// {role, responsibilities}). Used where no workflow row exists —
+// onboarding for a project with no chosen workflow, and external
+// project creation without a chosen workflow. (stateMachine's
+// BUILTIN_DEFINITION carries roles as plain role strings instead;
+// this is the map form, matching what definitionFromRow returns for
+// a stored workflow.)
+function builtinDefinition() {
   return {
     states: sm.BUILTIN_STATES,
     transitions: sm.BUILTIN_DEFINITION.transitions,
-    roles: DEFAULT_WORKFLOW_ROLES,
+    roles: BUILTIN_WORKFLOW_ROLES,
   };
 }
 
-// The workflow in force for a project: its active workflow, otherwise
-// the global default. When the database has no default row yet (the
-// seed has not run), the built-in default is synthesized so callers
-// still get a usable workflow.
+// Whether a definition is the built-in 14-state definition: the
+// same states and transitions. Roles may differ (a project workflow
+// may override who owns a state) — roles do not change the shape of
+// the flow, and the roles map stays the authority for who may act.
+function isBuiltinDefinition(definition) {
+  if (!definition) return false;
+  return (
+    JSON.stringify(definition.states || []) === JSON.stringify(sm.BUILTIN_STATES) &&
+    JSON.stringify(definition.transitions || []) === JSON.stringify(sm.BUILTIN_DEFINITION.transitions)
+  );
+}
+
+// The workflow in force for a project: its chosen workflow
+// (projects.workflow_id), or null when the project has chosen none.
+// "Active" here means chosen — the endpoints keep their names, but
+// there is no default to fall back to anymore (ch. 19).
 async function getActiveWorkflow(db, projectId, { assignedProjectId } = {}) {
   const target = cleanProjectId(projectId);
   if (!target) {
@@ -612,45 +632,28 @@ async function getActiveWorkflow(db, projectId, { assignedProjectId } = {}) {
   if (assignedProjectId && target !== assignedProjectId) {
     return { ok: false, status: 403, error: 'out_of_scope', message: 'This project is not the one you are assigned to.' };
   }
-  if (!(await projectExists(db, target))) {
+  const { rows: projectRows } = await db.query('SELECT * FROM projects WHERE id = $1', [target]);
+  if (!projectRows[0]) {
     return { ok: false, status: 400, error: 'unknown_project', message: `Unknown project: ${target}.` };
   }
-  const { rows: activeRows } = await db.query(
-    'SELECT * FROM workflows WHERE project_id = $1 AND is_active = true LIMIT 1',
-    [target]
-  );
-  if (activeRows[0]) {
-    return { ok: true, status: 200, workflow: normalizeWorkflow(activeRows[0]), is_default: false };
+  const chosenId = projectRows[0].workflow_id;
+  if (!chosenId) {
+    return { ok: true, status: 200, workflow: null };
   }
-  const { rows: defaultRows } = await db.query(
-    'SELECT * FROM workflows WHERE is_default = true LIMIT 1'
-  );
-  if (defaultRows[0]) {
-    return { ok: true, status: 200, workflow: normalizeWorkflow(defaultRows[0]), is_default: true };
+  const row = await getWorkflowRow(db, chosenId);
+  if (!row) {
+    // Unreachable in practice: the foreign key plus the delete guard
+    // keep a project's chosen workflow in place. Treat it as no
+    // workflow rather than inventing one.
+    return { ok: true, status: 200, workflow: null };
   }
-  return {
-    ok: true,
-    status: 200,
-    workflow: {
-      id: null,
-      project_id: null,
-      name: DEFAULT_WORKFLOW_NAME,
-      roles: DEFAULT_WORKFLOW_ROLES,
-      states: sm.BUILTIN_STATES,
-      transitions: sm.BUILTIN_DEFINITION.transitions,
-      is_default: true,
-      is_active: false,
-      created_by: null,
-      created_at: null,
-      updated_at: null,
-    },
-    is_default: true,
-  };
+  return { ok: true, status: 200, workflow: normalizeWorkflow(row) };
 }
 
-// Set a project's active workflow, or pass workflowId null to clear it
-// (back to the default). Setting one active clears the flag on the
-// project's other workflows, inside one transaction.
+// Set a project's chosen workflow, or pass workflowId null to clear
+// it (the project then has no workflow; new tickets need an explicit
+// one). A Global workflow or one of the project's own may be chosen;
+// a workflow of another project is refused.
 async function setActiveWorkflow(db, { actorId, actorRoles, projectId, workflowId, assignedProjectId } = {}) {
   if (!requireAdmin(actorRoles)) {
     return { ok: false, status: 403, error: 'wrong_role', message: 'Only an Admin may change the active workflow.' };
@@ -671,75 +674,56 @@ async function setActiveWorkflow(db, { actorId, actorRoles, projectId, workflowI
   const cleanWorkflowId = workflowId === undefined || workflowId === null || !String(workflowId).trim()
     ? null
     : String(workflowId).trim();
-  if (!cleanWorkflowId) {
-    await db.withTransaction(async (client) => {
-      await client.query(
-        'UPDATE workflows SET is_active = false WHERE project_id = $1 AND is_active = true',
-        [target]
-      );
-    });
-    const fallback = await getActiveWorkflow(db, target);
-    return { ok: true, status: 200, workflow: fallback.workflow, is_default: true };
+  let chosen = null;
+  if (cleanWorkflowId) {
+    const row = await getWorkflowRow(db, cleanWorkflowId);
+    if (!row) {
+      return { ok: false, status: 404, error: 'workflow_not_found', message: 'Workflow not found.' };
+    }
+    if (row.project_id && row.project_id !== target) {
+      return { ok: false, status: 400, error: 'workflow_project_mismatch', message: 'This workflow belongs to a different project.' };
+    }
+    chosen = row;
   }
-  const row = await getWorkflowRow(db, cleanWorkflowId);
-  if (!row) {
-    return { ok: false, status: 404, error: 'workflow_not_found', message: 'Workflow not found.' };
+  const { rows } = await db.query(
+    'UPDATE projects SET workflow_id = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING *',
+    [cleanWorkflowId, target]
+  );
+  if (!rows[0]) {
+    return { ok: false, status: 400, error: 'unknown_project', message: `Unknown project: ${target}.` };
   }
-  if (row.is_default) {
-    return { ok: false, status: 400, error: 'default_workflow_readonly', message: 'The default workflow cannot be set active; clear the project\'s active workflow to fall back to it.' };
-  }
-  if (row.project_id !== target) {
-    return { ok: false, status: 400, error: 'workflow_project_mismatch', message: 'This workflow belongs to a different project.' };
-  }
-  const updated = await db.withTransaction(async (client) => {
-    await client.query(
-      'UPDATE workflows SET is_active = false WHERE project_id = $1 AND is_active = true',
-      [target]
-    );
-    const { rows } = await client.query(
-      'UPDATE workflows SET is_active = true WHERE id = $1 RETURNING *',
-      [row.id]
-    );
-    return rows[0];
-  });
-  return { ok: true, status: 200, workflow: normalizeWorkflow(updated), is_default: false };
+  return { ok: true, status: 200, workflow: chosen ? normalizeWorkflow(chosen) : null };
 }
 
-// The roles map in force for a project, through the three-layer
-// fallback: the project's active workflow, else the default workflow
-// in the database, else the built-in constant. A null project id
-// (uncategorized tickets) goes straight to the default. The two
-// queries are written in this fixed form so test fakes can match them.
+// The roles map in force for a project, through the two-layer
+// resolution (ch. 19): the project's chosen workflow, else the
+// built-in map. There is no default layer anymore. A null project id
+// (uncategorized tickets) goes straight to the built-in map.
 // NOTE (ch. 15): this map only ever overrides roles for tickets on the
 // built-in flow. A ticket on a custom workflow follows that workflow's
 // own transitions and roles; this map is never applied to it.
 async function getRoleMap(db, projectId) {
   const target = cleanProjectId(projectId);
   if (target) {
-    const { rows } = await db.query(
-      'SELECT * FROM workflows WHERE project_id = $1 AND is_active = true LIMIT 1',
-      [target]
-    );
-    if (rows[0]) {
-      const roles = asRolesMap(rows[0].roles);
-      if (roles) return roles;
+    const { rows: projectRows } = await db.query('SELECT * FROM projects WHERE id = $1', [target]);
+    const chosenId = projectRows[0] && projectRows[0].workflow_id;
+    if (chosenId) {
+      const row = await getWorkflowRow(db, chosenId);
+      if (row) {
+        const roles = asRolesMap(row.roles);
+        if (roles) return roles;
+      }
     }
   }
-  const { rows: defaultRows } = await db.query(
-    'SELECT * FROM workflows WHERE is_default = true LIMIT 1'
-  );
-  if (defaultRows[0]) {
-    const roles = asRolesMap(defaultRows[0].roles);
-    if (roles) return roles;
-  }
-  return DEFAULT_WORKFLOW_ROLES;
+  return BUILTIN_WORKFLOW_ROLES;
 }
 
 module.exports = {
   WORKFLOW_ROLES,
-  DEFAULT_RESPONSIBILITIES,
-  DEFAULT_WORKFLOW_ROLES,
-  DEFAULT_WORKFLOW_NAME,
+  BUILTIN_RESPONSIBILITIES,
+  BUILTIN_WORKFLOW_ROLES,
+  builtinDefinition,
+  isBuiltinDefinition,
   listWorkflowExamples,
   validateRolesMap,
   validateWorkflowDefinition,
@@ -747,7 +731,6 @@ module.exports = {
   flowRolesFromDefinition,
   definitionFromRow,
   getWorkflowDefinition,
-  getDefaultWorkflowDefinition,
   definitionForTicket,
   createWorkflow,
   listWorkflows,

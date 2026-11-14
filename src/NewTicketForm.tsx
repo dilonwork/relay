@@ -38,11 +38,11 @@ export default function NewTicketForm(props: NewTicketFormProps) {
   } = props;
 
   // Workflows usable for the chosen project: workflows of this project
-  // or global ones. The default workflow row is excluded — the
-  // "Default development flow" option above already means it
-  // (workflow_id null). A workflow of another project never appears here.
+  // or global ones. The empty option means the project's chosen
+  // workflow (or the built-in flow when the ticket is uncategorized).
+  // A workflow of another project never appears here.
   const usable = workflows.filter(
-    (w) => !w.is_default && (!w.project_id || w.project_id === projectId)
+    (w) => !w.project_id || w.project_id === projectId
   );
 
   return (
@@ -85,7 +85,9 @@ export default function NewTicketForm(props: NewTicketFormProps) {
               value={workflowId}
               onChange={(e) => onWorkflowIdChange(e.target.value)}
             >
-              <option value="">Default development flow (14 states)</option>
+              <option value="">
+                {projectId ? "Project's chosen workflow" : 'Built-in flow (14 states)'}
+              </option>
               {usable.map((w) => (
                 <option key={w.id || `default-${w.name}`} value={w.id || ''}>
                   {w.name} ({(w.states || []).length} states)

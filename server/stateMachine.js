@@ -4,7 +4,7 @@
 //
 // The machine is definition-driven: every ticket follows one workflow
 // definition — a list of states plus a list of transitions. The built-in
-// 14-state development flow (ch. 5) is the default definition; a custom
+// 14-state development flow (ch. 5) is the built-in definition; a custom
 // workflow supplies its own definition (design doc ch. 15) and the same
 // validation functions run against it, so custom flows get the same
 // checks (scope, legal transition, role, self-work, reason/handoff)
@@ -121,7 +121,7 @@ const CANCEL_RULE = {
 // no workflow follows this definition, so existing behaviour is
 // unchanged. `roles` maps each state to the role responsible for it,
 // derived from the transition table (first transition out of the state),
-// exactly as server/workflows.js derives DEFAULT_WORKFLOW_ROLES.
+// exactly as server/workflows.js derives BUILTIN_WORKFLOW_ROLES.
 const BUILTIN_STATES = STATUSES.map((code, i) => ({
   code,
   label: STATE_LABELS[code],
@@ -130,7 +130,7 @@ const BUILTIN_STATES = STATUSES.map((code, i) => ({
   is_terminal: TERMINAL_STATUSES.includes(code),
 }));
 
-function defaultRolesFor(transitions) {
+function builtinRolesFor(transitions) {
   const roles = {};
   for (const state of BUILTIN_STATES) {
     const rule = transitions.find((t) => t.from === state.code);
@@ -142,7 +142,7 @@ function defaultRolesFor(transitions) {
 const BUILTIN_DEFINITION = {
   states: BUILTIN_STATES,
   transitions: TRANSITIONS.filter((t) => t.kind !== 'create'),
-  roles: defaultRolesFor(TRANSITIONS),
+  roles: builtinRolesFor(TRANSITIONS),
 };
 
 function stateCodes(definition) {

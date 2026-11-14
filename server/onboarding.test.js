@@ -38,6 +38,7 @@ class FakeDb {
       name,
       description: '',
       type: type || 'external',
+      workflow_id: null,
       created_by: 'admin-1',
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
@@ -46,16 +47,17 @@ class FakeDb {
     return p;
   }
 
-  seedDefaultWorkflow() {
+  // The former Default row as it stands after migration 020: an
+  // ordinary Global workflow named 'Default' with the built-in
+  // definition — no flag makes it special anymore.
+  seedGlobalWorkflow() {
     const w = {
       id: 'test-workflow-default',
       name: 'Default',
       project_id: null,
-      roles: workflows.DEFAULT_WORKFLOW_ROLES,
+      roles: workflows.BUILTIN_WORKFLOW_ROLES,
       states: sm.BUILTIN_STATES,
       transitions: sm.BUILTIN_DEFINITION.transitions,
-      is_default: true,
-      is_active: false,
       created_by: 'system',
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
@@ -121,13 +123,16 @@ class FakeDb {
         .sort((a, b) => (a.created_at < b.created_at ? -1 : 1));
       return { rows: matches.map((k) => ({ ...k })) };
     }
-    if (sql.startsWith('SELECT * FROM workflows WHERE project_id = $1 AND is_active = true')) {
-      const w = this.workflows.find((x) => x.project_id === params[0] && x.is_active);
-      return { rows: w ? [{ ...w }] : [] };
+    if (sql.startsWith('SELECT id, name FROM projects WHERE workflow_id = $1')) {
+      const p = this.projects.find((x) => x.workflow_id === params[0]);
+      return { rows: p ? [{ id: p.id, name: p.name }] : [] };
     }
-    if (sql.startsWith('SELECT * FROM workflows WHERE is_default = true')) {
-      const w = this.workflows.find((x) => x.is_default);
-      return { rows: w ? [{ ...w }] : [] };
+    if (sql.startsWith('UPDATE projects SET workflow_id')) {
+      const p = this.projects.find((x) => x.id === params[1]);
+      if (!p) return { rows: [] };
+      p.workflow_id = params[0];
+      p.updated_at = new Date().toISOString();
+      return { rows: [{ ...p }] };
     }
     if (sql.startsWith('SELECT * FROM workflows WHERE id = $1')) {
       const w = this.workflows.find((x) => x.id === params[0]);
@@ -142,34 +147,20 @@ class FakeDb {
         states: JSON.parse(params[3]),
         transitions: JSON.parse(params[4]),
         created_by: params[5],
-        is_default: false,
-        is_active: false,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       };
       this.workflows.push(w);
       return { rows: [{ ...w }] };
     }
-    if (sql.startsWith('UPDATE workflows SET is_active = false WHERE project_id = $1')) {
-      for (const w of this.workflows) {
-        if (w.project_id === params[0] && w.is_active) w.is_active = false;
-      }
-      return { rows: [] };
-    }
-    if (sql.startsWith('UPDATE workflows SET is_active = true WHERE id = $1')) {
-      const w = this.workflows.find((x) => x.id === params[0]);
-      if (!w) return { rows: [] };
-      w.is_active = true;
-      w.updated_at = new Date().toISOString();
-      return { rows: [{ ...w }] };
-    }
-    if (sql.startsWith('UPDATE workflows SET name = $1')) {
-      const w = this.workflows.find((x) => x.id === params[4]);
+    if (sql.startsWith('UPDATE workflows SET name = $1, project_id = $2')) {
+      const w = this.workflows.find((x) => x.id === params[5]);
       if (!w) return { rows: [] };
       w.name = params[0];
-      w.roles = JSON.parse(params[1]);
-      w.states = JSON.parse(params[2]);
-      w.transitions = JSON.parse(params[3]);
+      w.project_id = params[1];
+      w.roles = JSON.parse(params[2]);
+      w.states = JSON.parse(params[3]);
+      w.transitions = JSON.parse(params[4]);
       w.updated_at = new Date().toISOString();
       return { rows: [{ ...w }] };
     }
@@ -207,12 +198,12 @@ async function main() {
   });
 
   await ok('flowRolesFromDefinition returns distinct roles in state order', async () => {
-    // The built-in default flow: the roles map assigns each state the
+    // The built-in flow: the roles map assigns each state the
     // role of its first outgoing transition.
     assert.deepEqual(
       workflows.flowRolesFromDefinition({
         states: sm.BUILTIN_STATES,
-        roles: workflows.DEFAULT_WORKFLOW_ROLES,
+        roles: workflows.BUILTIN_WORKFLOW_ROLES,
       }),
       ['leader', 'pm', 'engineer', 'reviewer', 'tester', 'deployer']
     );
@@ -230,7 +221,8 @@ async function main() {
   await ok('buildOnboardingDocument generates a live doc for an external project role', async () => {
     const db = new FakeDb();
     const project = db.seedProject('Acme Support', 'external');
-    db.seedDefaultWorkflow();
+    const flow = db.seedGlobalWorkflow();
+    project.workflow_id = flow.id;
     const doc = await onboarding.buildOnboardingDocument(db, { projectId: project.id, role: 'engineer' });
     assert.equal(doc.ok, true, JSON.stringify(doc));
     assert.equal(doc.project.name, 'Acme Support');
@@ -250,10 +242,20 @@ async function main() {
     assert.ok(!doc.document.markdown.includes('rl_'), 'the document never contains a token');
   });
 
+  await ok('a project with no chosen workflow gets the built-in flow doc', async () => {
+    const db = new FakeDb();
+    const project = db.seedProject('Acme Support', 'external');
+    db.seedGlobalWorkflow();
+    const doc = await onboarding.buildOnboardingDocument(db, { projectId: project.id, role: 'engineer' });
+    assert.equal(doc.ok, true, JSON.stringify(doc));
+    assert.equal(doc.workflow_name, 'Built-in flow');
+    assert.ok(doc.document.markdown.includes('**Flow:** Built-in flow'));
+    assert.deepEqual(doc.states.map((s) => s.code), ['pending_dev', 'in_dev']);
+  });
+
   await ok('the package returns the agent, its masked key and the live doc', async () => {
     const db = new FakeDb();
     const project = db.seedProject('Acme Support', 'external');
-    db.seedDefaultWorkflow();
     const agent = await auth.createAgent(db, {
       username: 'acme-support-engineer', displayName: 'Acme Support Engineer', role: 'engineer', projectId: project.id,
     });
@@ -275,11 +277,10 @@ async function main() {
   await ok('Regenerate reflects a workflow edit', async () => {
     const db = new FakeDb();
     const project = db.seedProject('Acme Support', 'external');
-    db.seedDefaultWorkflow();
-    // A project workflow, set active: the package follows it, not the default.
+    // A project workflow, set active: the package follows it, not the built-in flow.
     const created = await workflows.createWorkflow(db, {
       actorId: 'admin-1', actorRoles: ['admin'], name: 'Acme flow', projectId: project.id,
-      roles: workflows.DEFAULT_WORKFLOW_ROLES,
+      roles: workflows.BUILTIN_WORKFLOW_ROLES,
       states: sm.BUILTIN_STATES,
       transitions: sm.BUILTIN_DEFINITION.transitions,
     });
@@ -294,7 +295,7 @@ async function main() {
     assert.ok(before.document.markdown.includes('Pick up the ticket and start development.'));
     assert.ok(!before.document.markdown.includes('UPDATED RESPONSIBILITY'));
     // Edit the workflow: change one responsibilities sentence.
-    const editedRoles = JSON.parse(JSON.stringify(workflows.DEFAULT_WORKFLOW_ROLES));
+    const editedRoles = JSON.parse(JSON.stringify(workflows.BUILTIN_WORKFLOW_ROLES));
     editedRoles.pending_dev.responsibilities = 'UPDATED RESPONSIBILITY: pick up and start.';
     const updated = await workflows.updateWorkflow(db, created.workflow.id, {
       actorId: 'admin-1', actorRoles: ['admin'], roles: editedRoles,
@@ -311,7 +312,6 @@ async function main() {
     const db = new FakeDb();
     const internal = db.seedProject('Relay', 'internal');
     const external = db.seedProject('Acme Support', 'external');
-    db.seedDefaultWorkflow();
     const notExternal = await onboarding.buildOnboardingDocument(db, { projectId: internal.id, role: 'engineer' });
     assert.equal(notExternal.ok, false);
     assert.equal(notExternal.status, 400);

@@ -17,9 +17,9 @@
 // A project is internal or external (ticket 0f26169c, migration 019).
 // Internal projects use internal agents, assigned later. External
 // projects are created together with one role agent per role in the
-// configured flow — a brand-new project has no active workflow yet,
-// so the configured flow is the default flow — each with its own API
-// key and onboarding package, all inside one transaction with the
+// configured flow — the workflow the project chooses at creation, or
+// the built-in 14-state flow when it chooses none — each with its own
+// API key and onboarding package, all inside one transaction with the
 // project itself.
 const auth = require('./auth');
 const onboarding = require('./onboarding');
@@ -59,7 +59,14 @@ function abort(result) {
   throw err;
 }
 
-async function createProject(db, { actorId, actorRoles, name, description, type }) {
+// A project chooses its workflow at creation (design doc ch. 19):
+// workflowId is optional and is stored as the project's chosen
+// workflow (projects.workflow_id); new tickets on the project follow
+// it unless they name another workflow. Only a Global workflow can
+// be chosen here — the project does not exist yet, so no workflow
+// can belong to it. Without a workflow the project has none, and
+// external role agents come from the built-in flow instead.
+async function createProject(db, { actorId, actorRoles, name, description, type, workflowId }) {
   if (!actorRoles || (!actorRoles.includes('pm') && !actorRoles.includes('admin'))) {
     return { ok: false, status: 403, error: 'wrong_role', message: 'Only the PM or an Admin may create a project.' };
   }
@@ -75,18 +82,32 @@ async function createProject(db, { actorId, actorRoles, name, description, type 
   if (!PROJECT_TYPES.includes(cleanType)) {
     return { ok: false, status: 400, error: 'bad_request', message: `Type must be one of: ${PROJECT_TYPES.join(', ')}.` };
   }
+  const cleanWorkflowId = workflowId === undefined || workflowId === null || !String(workflowId).trim()
+    ? null
+    : String(workflowId).trim();
+  if (cleanWorkflowId) {
+    const found = await workflows.getWorkflow(db, cleanWorkflowId);
+    if (!found.ok) {
+      return { ok: false, status: found.status, error: found.error, message: found.message };
+    }
+    if (found.workflow.project_id) {
+      return { ok: false, status: 400, error: 'workflow_project_mismatch', message: 'A project can only choose a Global workflow at creation.' };
+    }
+  }
   try {
     return await db.withTransaction(async (client) => {
       const { rows } = await client.query(
-        'INSERT INTO projects (name, description, type, created_by) VALUES ($1, $2, $3, $4) RETURNING *',
-        [cleanName, cleanDescription, cleanType, String(actorId).trim()]
+        'INSERT INTO projects (name, description, type, workflow_id, created_by) VALUES ($1, $2, $3, $4, $5) RETURNING *',
+        [cleanName, cleanDescription, cleanType, cleanWorkflowId, String(actorId).trim()]
       );
       const project = rows[0];
       if (cleanType === 'internal') {
         return { ok: true, status: 201, project, agents: [] };
       }
-      const definition = await workflows.getDefaultWorkflowDefinition(client);
-      const roles = workflows.flowRolesFromDefinition(definition);
+      const definition = cleanWorkflowId
+        ? await workflows.getWorkflowDefinition(client, cleanWorkflowId)
+        : workflows.builtinDefinition();
+      const roles = workflows.flowRolesFromDefinition(definition || workflows.builtinDefinition());
       const slug = slugifyProjectName(cleanName);
       const agents = [];
       for (const role of roles) {

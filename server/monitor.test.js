@@ -9,6 +9,7 @@
 const assert = require('node:assert/strict');
 const monitor = require('./monitor.js');
 const workflows = require('./workflows.js');
+const sm = require('./stateMachine.js');
 const examples = require('./workflowExamples.js');
 
 const NOW = new Date('2026-11-12T12:00:00.000Z');
@@ -36,12 +37,19 @@ class FakeDb {
     this.transitions = [];
     this.reminders = [];
     this.workflows = [];
+    this.projects = [
+      { id: 'proj-1', name: 'WebTracker', description: '', workflow_id: null },
+      { id: 'proj-2', name: 'Drydock', description: '', workflow_id: null },
+    ];
     this.seq = 0;
   }
 
-  // Seed an active custom workflow for a project (design doc ch. 14).
+  // Seed a project workflow (design doc ch. 19): roles start from the
+  // built-in map, with `overrides` applied per state. The row carries
+  // the built-in definition, and the project chooses it as its
+  // workflow — there is no default workflow anymore.
   seedActiveWorkflow(projectId, overrides = {}) {
-    const roles = JSON.parse(JSON.stringify(workflows.DEFAULT_WORKFLOW_ROLES));
+    const roles = JSON.parse(JSON.stringify(workflows.BUILTIN_WORKFLOW_ROLES));
     for (const [status, entry] of Object.entries(overrides)) {
       roles[status] = { ...roles[status], ...entry };
     }
@@ -50,13 +58,15 @@ class FakeDb {
       project_id: projectId,
       name: 'Custom',
       roles,
-      is_default: false,
-      is_active: true,
+      states: sm.BUILTIN_STATES,
+      transitions: sm.BUILTIN_DEFINITION.transitions,
       created_by: 'pm-1',
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };
     this.workflows.push(row);
+    const project = this.projects.find((p) => p.id === projectId);
+    if (project) project.workflow_id = row.id;
     return row;
   }
 
@@ -69,8 +79,6 @@ class FakeDb {
       roles: JSON.parse(JSON.stringify(example.roles)),
       states: JSON.parse(JSON.stringify(example.states)),
       transitions: JSON.parse(JSON.stringify(example.transitions)),
-      is_default: false,
-      is_active: false,
       created_by: 'pm-1',
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
@@ -157,17 +165,13 @@ class FakeDb {
       row.updated_at = params[1];
       return { rows: [{ ...row }] };
     }
-    // Workflow role maps (design doc ch. 14): getRoleMap's two fixed
-    // queries. An empty workflows table means the built-in fallback,
-    // which is what proves the existing tests are unaffected.
-    if (sql === 'SELECT * FROM workflows WHERE project_id = $1 AND is_active = true LIMIT 1') {
-      const w = this.workflows.find((x) => x.project_id === params[0] && x.is_active);
-      return { rows: w ? [{ ...w }] : [] };
+    if (/^SELECT \* FROM projects WHERE id = \$1/.test(sql)) {
+      const p = this.projects.find((x) => x.id === params[0]);
+      return { rows: p ? [{ ...p }] : [] };
     }
-    if (sql === 'SELECT * FROM workflows WHERE is_default = true LIMIT 1') {
-      const w = this.workflows.find((x) => x.is_default);
-      return { rows: w ? [{ ...w }] : [] };
-    }
+    // Workflow role maps (design doc ch. 19): getRoleMap reads the
+    // project's chosen workflow via the project row, or the built-in
+    // map when the project has chosen none.
     // Definition lookups for a ticket's own workflow (ch. 15).
     if (/^SELECT \* FROM workflows WHERE id = \$1/.test(sql)) {
       const w = this.workflows.find((x) => x.id === params[0]);
@@ -440,7 +444,8 @@ async function main() {
   await ok('notify_role follows the ticket project active workflow', async () => {
     const db = new FakeDb();
     // proj-1 runs a custom workflow where in_dev belongs to the
-    // reviewer instead of the engineer; a proj-2 ticket stays default.
+    // reviewer instead of the engineer; a proj-2 ticket keeps the
+    // built-in roles.
     db.seedActiveWorkflow('proj-1', { in_dev: { role: 'reviewer' } });
     seedTicket(db, { title: 'custom', status: 'in_dev', project_id: 'proj-1', transitionMinutesAgo: 60 });
     seedTicket(db, { title: 'default', status: 'in_dev', project_id: 'proj-2', transitionMinutesAgo: 60 });
@@ -503,7 +508,7 @@ async function main() {
     assert.equal(rows[0].notify_role, 'engineer');
   });
 
-  await ok('isStalledState: built-in list for the default flow, generic rule for custom flows', async () => {
+  await ok('isStalledState: built-in list for the built-in flow, generic rule for custom flows', async () => {
     const custom = {
       states: examples.FLOW_WITH_CONFIRMATION.states,
       transitions: examples.FLOW_WITH_CONFIRMATION.transitions,

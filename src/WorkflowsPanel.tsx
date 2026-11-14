@@ -43,17 +43,14 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
   const [workflows, setWorkflows] = useState<Workflow[]>([]);
   const [selectedProject, setSelectedProject] = useState('all');
   const [activeWorkflow, setActiveWorkflow] = useState<Workflow | null>(null);
-  const [activeIsDefault, setActiveIsDefault] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
 
   // Create / edit form state. editingId null means creating a new
-  // workflow; formOpen false hides the form. readOnly opens the
-  // default workflow for viewing: every input disabled, no submit.
+  // workflow; formOpen false hides the form.
   const [formOpen, setFormOpen] = useState(false);
-  const [readOnly, setReadOnly] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [formName, setFormName] = useState('');
   const [formProjectId, setFormProjectId] = useState('');
@@ -84,10 +81,8 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
       if (projectId) {
         const active = await api.getActiveWorkflow(projectId);
         setActiveWorkflow(active.workflow);
-        setActiveIsDefault(active.is_default);
       } else {
         setActiveWorkflow(null);
-        setActiveIsDefault(true);
       }
     } catch (err) {
       if ((err as { status?: number }).status === 401) return; // handled by onUnauthorized
@@ -102,19 +97,17 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
   }, [load]);
 
   function projectName(id: string | null): string {
-    if (!id) return 'Global default';
+    if (!id) return 'Global';
     return projects.find((p) => p.id === id)?.name || '—';
   }
 
   function openCreate() {
     setEditingId(null);
-    setReadOnly(false);
     setFormName('');
     setFormProjectId(selectedProject !== 'all' ? selectedProject : projects[0]?.id || '');
     // New workflows start blank: no states, transitions or roles.
-    // Add states below, apply a template, or use Quick create. The
-    // default workflow itself is untouched, and existing workflows
-    // are unaffected.
+    // Add states below, apply a template, or use Quick create.
+    // Existing workflows are unaffected.
     setFormStates([]);
     setFormTransitions([]);
     setFormRoles(emptyRoles());
@@ -223,7 +216,6 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
 
   function openEdit(w: Workflow) {
     setEditingId(w.id);
-    setReadOnly(false);
     setFormName(w.name);
     setFormProjectId(w.project_id || '');
     setFormStates(clone(w.states || []).sort((a, b) => a.sort_order - b.sort_order));
@@ -232,11 +224,6 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
     setFormOpen(true);
     setError('');
     setNotice('');
-  }
-
-  function openView(w: Workflow) {
-    openEdit(w);
-    setReadOnly(true);
   }
 
   // --- States editing ---
@@ -419,7 +406,13 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
     setBusy(true);
     try {
       if (editingId) {
-        const updated = await api.updateWorkflow(editingId, { name: formName, roles: formRoles, states, transitions });
+        const updated = await api.updateWorkflow(editingId, {
+          name: formName,
+          project_id: formProjectId || null,
+          roles: formRoles,
+          states,
+          transitions,
+        });
         setNotice(`Workflow updated: ${updated.name}`);
       } else {
         const created = await api.createWorkflow({
@@ -441,13 +434,13 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
   }
 
   async function handleSetActive(w: Workflow) {
-    if (!w.project_id || !w.id) return;
+    if (selectedProject === 'all' || !w.id) return;
     setError('');
     setNotice('');
     setBusy(true);
     try {
-      const res = await api.setActiveWorkflow(w.project_id, w.id);
-      setNotice(`Active workflow for ${projectName(w.project_id)}: ${res.workflow?.name || 'Default'}`);
+      const res = await api.setActiveWorkflow(selectedProject, w.id);
+      setNotice(`Active workflow for ${projectName(selectedProject)}: ${res.workflow?.name || '—'}`);
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to set active workflow.');
@@ -456,17 +449,17 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
     }
   }
 
-  async function handleBackToDefault() {
+  async function handleClearWorkflow() {
     if (selectedProject === 'all') return;
     setError('');
     setNotice('');
     setBusy(true);
     try {
       await api.setActiveWorkflow(selectedProject, null);
-      setNotice(`Active workflow cleared — ${projectName(selectedProject)} now uses the default workflow.`);
+      setNotice(`Workflow cleared — ${projectName(selectedProject)} has no workflow chosen. New tickets need an explicit workflow.`);
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to switch back to the default workflow.');
+      setError(err instanceof Error ? err.message : 'Failed to clear the project workflow.');
     } finally {
       setBusy(false);
     }
@@ -496,11 +489,12 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
       <h2>Workflows</h2>
       <p className="muted">
         A workflow is a state machine: its states, the transitions between
-        them, and the role responsible for each state. Each project
-        follows its active workflow; without one it follows the default
-        workflow. The default workflow is read-only. Tickets choose a
-        workflow when created; the default 14-state development flow is
-        used when none is chosen.
+        them, and the role responsible for each state. A workflow belongs
+        to one project, or is Global (usable by every project). Each
+        project chooses one workflow; new tickets follow it unless they
+        name another workflow. A project with no workflow chosen needs an
+        explicit workflow on every new ticket. There is no default
+        workflow.
       </p>
       {error && <div className="banner error">{error}</div>}
       {notice && <div className="banner notice">{notice}</div>}
@@ -525,17 +519,16 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
           <div>
             <label className="field">Active workflow</label>
             <p style={{ margin: '0.25rem 0' }}>
-              {activeWorkflow ? activeWorkflow.name : '—'}
-              {activeIsDefault ? ' (default)' : ''}
-              {!activeIsDefault && (
+              {activeWorkflow ? activeWorkflow.name : 'No workflow chosen'}
+              {activeWorkflow && (
                 <button
                   className="link"
                   type="button"
-                  onClick={handleBackToDefault}
+                  onClick={handleClearWorkflow}
                   disabled={busy}
                   style={{ marginLeft: '0.5rem' }}
                 >
-                  Switch back to default
+                  Clear workflow
                 </button>
               )}
             </p>
@@ -560,35 +553,28 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
           </thead>
           <tbody>
             {workflows.map((w) => (
-              <tr key={w.id || `default-${w.name}`}>
+              <tr key={w.id || `global-${w.name}`}>
                 <td>
                   {w.name}{' '}
-                  {w.is_default && <span className="badge">Default</span>}{' '}
-                  {w.is_active && <span className="badge">Active</span>}
+                  {selectedProject !== 'all' && activeWorkflow?.id === w.id && <span className="badge">Active</span>}
                 </td>
                 <td>{projectName(w.project_id)}</td>
                 <td>{(w.states || []).length}</td>
                 <td>{roleSummary(w)}</td>
                 <td>
-                  {w.is_default ? (
-                    <button className="link" type="button" onClick={() => openView(w)} disabled={busy}>
-                      View
-                    </button>
-                  ) : (
-                    <>
-                      <button className="link" type="button" onClick={() => openEdit(w)} disabled={busy}>
-                        Edit
-                      </button>{' '}
-                      {w.project_id && !w.is_active && (
-                        <button className="link" type="button" onClick={() => handleSetActive(w)} disabled={busy}>
-                          Set active
-                        </button>
-                      )}{' '}
-                      <button className="link" type="button" onClick={() => handleDelete(w)} disabled={busy}>
-                        Delete
+                  <button className="link" type="button" onClick={() => openEdit(w)} disabled={busy}>
+                    Edit
+                  </button>{' '}
+                  {selectedProject !== 'all' &&
+                    (!w.project_id || w.project_id === selectedProject) &&
+                    activeWorkflow?.id !== w.id && (
+                      <button className="link" type="button" onClick={() => handleSetActive(w)} disabled={busy}>
+                        Set active
                       </button>
-                    </>
-                  )}
+                    )}{' '}
+                  <button className="link" type="button" onClick={() => handleDelete(w)} disabled={busy}>
+                    Delete
+                  </button>
                 </td>
               </tr>
             ))}
@@ -597,17 +583,12 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
       )}
 
       {!formOpen ? (
-        <button className="primary" type="button" onClick={openCreate} disabled={busy || projects.length === 0}>
+        <button className="primary" type="button" onClick={openCreate} disabled={busy}>
           Create workflow
         </button>
       ) : (
         <form onSubmit={handleSubmit}>
-          <h3>
-            {readOnly ? `View workflow: ${formName}` : editingId ? 'Edit workflow' : 'New workflow'}
-          </h3>
-          {readOnly && (
-            <p className="muted">The default workflow is read-only. Create a new workflow to build your own flow.</p>
-          )}
+          <h3>{editingId ? 'Edit workflow' : 'New workflow'}</h3>
           <div className="form-row">
             <div>
               <label className="field" htmlFor="workflow-name">Name</label>
@@ -617,35 +598,32 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
                 value={formName}
                 onChange={(e) => setFormName(e.target.value)}
                 placeholder="e.g. Spec flow"
-                disabled={readOnly}
               />
             </div>
-            {!editingId && (
-              <div>
-                <label className="field" htmlFor="workflow-project">Project</label>
-                <select
-                  id="workflow-project"
-                  value={formProjectId}
-                  onChange={(e) => setFormProjectId(e.target.value)}
-                  disabled={readOnly}
-                >
-                  {projects.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
+            <div>
+              <label className="field" htmlFor="workflow-project">Project</label>
+              <select
+                id="workflow-project"
+                value={formProjectId}
+                onChange={(e) => setFormProjectId(e.target.value)}
+              >
+                <option value="">Global (all projects)</option>
+                {projects.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
 
-          {!editingId && !readOnly && (
+          {!editingId && (
             <>
               <h3>Start from</h3>
               <p className="muted">
                 New workflows start blank — add states below, apply a
                 template, or use Quick create to chain states into a
-                linear flow. The default workflow itself is untouched.
+                linear flow.
               </p>
               <div className="form-row">
                 <div>
@@ -811,7 +789,6 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
                       value={s.label}
                       onChange={(e) => setStateField(i, { label: e.target.value })}
                       placeholder="e.g. User requirement"
-                      disabled={readOnly}
                       aria-label={`Label for state ${i + 1}`}
                     />
                   </td>
@@ -821,10 +798,9 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
                       value={s.code}
                       onChange={(e) => setStateField(i, { code: e.target.value })}
                       placeholder="e.g. user_requirement"
-                      disabled={readOnly}
                       aria-label={`Code for state ${i + 1}`}
                     />
-                    {!readOnly && s.label && (
+                    {s.label && (
                       <button
                         className="link"
                         type="button"
@@ -843,7 +819,6 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
                       onChange={() =>
                         setFormStates((prev) => prev.map((x, j) => ({ ...x, is_start: j === i })))
                       }
-                      disabled={readOnly}
                       aria-label={`Start state: ${s.label || s.code || i + 1}`}
                     />
                   </td>
@@ -852,25 +827,24 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
                       type="checkbox"
                       checked={s.is_terminal}
                       onChange={(e) => setStateField(i, { is_terminal: e.target.checked })}
-                      disabled={readOnly}
                       aria-label={`Terminal: ${s.label || s.code || i + 1}`}
                     />
                   </td>
                   <td>
-                    <button className="link" type="button" onClick={() => moveState(i, -1)} disabled={readOnly || i === 0}>
+                    <button className="link" type="button" onClick={() => moveState(i, -1)} disabled={i === 0}>
                       ↑
                     </button>{' '}
                     <button
                       className="link"
                       type="button"
                       onClick={() => moveState(i, 1)}
-                      disabled={readOnly || i === formStates.length - 1}
+                      disabled={i === formStates.length - 1}
                     >
                       ↓
                     </button>
                   </td>
                   <td>
-                    <button className="link" type="button" onClick={() => removeState(i)} disabled={readOnly}>
+                    <button className="link" type="button" onClick={() => removeState(i)}>
                       Delete
                     </button>
                   </td>
@@ -878,11 +852,9 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
               ))}
             </tbody>
           </table>
-          {!readOnly && (
-            <button className="link" type="button" onClick={addState}>
-              + Add state
-            </button>
-          )}
+          <button className="link" type="button" onClick={addState}>
+            + Add state
+          </button>
 
           <h3>Transitions</h3>
           <p className="muted">
@@ -912,7 +884,6 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
                     <select
                       value={t.from}
                       onChange={(e) => setTransitionField(i, { from: e.target.value })}
-                      disabled={readOnly}
                       aria-label={`Transition ${i + 1} from`}
                     >
                       {formStates.map((s) => (
@@ -926,7 +897,6 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
                     <select
                       value={t.to}
                       onChange={(e) => setTransitionField(i, { to: e.target.value })}
-                      disabled={readOnly}
                       aria-label={`Transition ${i + 1} to`}
                     >
                       {formStates.map((s) => (
@@ -940,7 +910,6 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
                     <select
                       value={t.kind}
                       onChange={(e) => setTransitionField(i, { kind: e.target.value })}
-                      disabled={readOnly}
                       aria-label={`Transition ${i + 1} kind`}
                     >
                       {WORKFLOW_KINDS.map((k) => (
@@ -956,7 +925,6 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
                       type="checkbox"
                       checked={t.requiresReason}
                       onChange={(e) => setTransitionField(i, { requiresReason: e.target.checked })}
-                      disabled={readOnly}
                       aria-label={`Transition ${i + 1} requires reason`}
                     />
                   </td>
@@ -965,12 +933,11 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
                       type="checkbox"
                       checked={t.requiresHandoff}
                       onChange={(e) => setTransitionField(i, { requiresHandoff: e.target.checked })}
-                      disabled={readOnly}
                       aria-label={`Transition ${i + 1} requires handoff`}
                     />
                   </td>
                   <td>
-                    <button className="link" type="button" onClick={() => removeTransition(i)} disabled={readOnly}>
+                    <button className="link" type="button" onClick={() => removeTransition(i)}>
                       Delete
                     </button>
                   </td>
@@ -978,11 +945,9 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
               ))}
             </tbody>
           </table>
-          {!readOnly && (
-            <button className="link" type="button" onClick={addTransition} disabled={formStates.length < 2}>
-              + Add transition
-            </button>
-          )}
+          <button className="link" type="button" onClick={addTransition} disabled={formStates.length < 2}>
+            + Add transition
+          </button>
 
           <h3>Roles &amp; responsibilities</h3>
           <p className="muted">
@@ -1008,7 +973,7 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
                       <select
                         value={entry.role || ''}
                         onChange={(e) => setFormRole(s.code, e.target.value || null)}
-                        disabled={readOnly || s.is_terminal}
+                        disabled={s.is_terminal}
                         aria-label={`Role for ${s.label || s.code}`}
                       >
                         {s.is_terminal ? (
@@ -1028,7 +993,6 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
                         value={entry.responsibilities}
                         onChange={(e) => setFormResponsibilities(s.code, e.target.value)}
                         placeholder={s.is_terminal ? 'Terminal state — no further action.' : 'What this role does in this state'}
-                        disabled={readOnly}
                         aria-label={`Responsibilities for ${s.label || s.code}`}
                       />
                     </td>
@@ -1037,15 +1001,11 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
               })}
             </tbody>
           </table>
-          {!readOnly && (
-            <>
-              <button className="primary" type="submit" disabled={busy || !formName.trim()}>
-                {editingId ? 'Save changes' : 'Create workflow'}
-              </button>{' '}
-            </>
-          )}
+          <button className="primary" type="submit" disabled={busy || !formName.trim()}>
+            {editingId ? 'Save changes' : 'Create workflow'}
+          </button>{' '}
           <button className="link" type="button" onClick={() => setFormOpen(false)} disabled={busy}>
-            {readOnly ? 'Close' : 'Cancel'}
+            Cancel
           </button>
         </form>
       )}

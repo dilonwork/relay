@@ -120,7 +120,7 @@ async function listStalled(db, { assignedProjectId, now = new Date() } = {}) {
   const all = await tickets.listTickets(db, null, undefined, assignedProjectId);
   // One definition lookup per workflow: tickets on the same workflow
   // share it (ch. 15). One role-map lookup per project: tickets of
-  // the same project share their active workflow (ch. 14).
+  // the same project share their chosen workflow (ch. 19).
   const definitions = new Map();
   async function definitionFor(ticket) {
     const key = ticket.workflow_id || '__builtin__';
@@ -132,7 +132,7 @@ async function listStalled(db, { assignedProjectId, now = new Date() } = {}) {
   }
   const roleMaps = new Map();
   async function roleMapFor(projectId) {
-    const key = projectId || '__default__';
+    const key = projectId || '__none__';
     if (!roleMaps.has(key)) {
       roleMaps.set(key, await workflows.getRoleMap(db, projectId || null));
     }
