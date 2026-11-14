@@ -282,8 +282,8 @@ onboarding document regenerating from a live workflow edit, and the
 project prompt bundle (whole project context, base-URL resolution,
 no token in the bundle).
 
-370 tests in total: state machine 21, tickets 36, projects 16, onboarding 12, public base URL 5, auth 21,
-admin 7, API keys 8, monitor 18, workflows 30, quick-create builder 11, documents 24, document tickets 12, document render 18, gantt helpers 27, admin nav 5, view hash 8, migrations 33, role lists 4, title bar 6, dashboard redesign 17, ticket detail redesign 16, projects redesign 15.
+379 tests in total: state machine 21, tickets 40, projects 16, onboarding 12, public base URL 5, auth 21,
+admin 7, API keys 8, monitor 18, workflows 30, quick-create builder 11, documents 27, document tickets 13, document render 18, gantt helpers 27, admin nav 5, view hash 8, migrations 34, role lists 4, title bar 6, dashboard redesign 17, ticket detail redesign 16, projects redesign 15.
 
 ## Accounts & authentication
 
@@ -596,7 +596,17 @@ each sub-page owns its own form state and handlers.
   Documents page) plus the document's full content, so the implementer
   can read the prototype from the ticket itself. On success the app
   navigates to the new ticket's detail view. No workflow is named, so
-  the ticket follows the built-in flow.
+  the ticket follows the built-in flow. The ticket is linked back to the
+  prototype in the database (`documents.implementation_ticket_id`,
+  migration 022): a delivered implementation ticket shows an
+  "Implemented" badge on the document (list and detail view), an open
+  one shows "Implementation in progress", and either badge opens the
+  ticket. While a link exists the Implement button is disabled, and the
+  server refuses a second Implement for the same prototype with 409
+  `duplicate_implementation`; a link to a cancelled ticket is dead, so
+  a fresh implementation may replace it. Old Implement tickets are
+  linked by the 022 backfill, which parses the document id from their
+  description (design doc ch. 26).
 - **Prototype → re-plan (Not OK):** a Prototype document also has a Not OK
   action (PM only). It opens a form for the reason / feedback (required),
   then opens a re-planning ticket on the Prototype flow via the existing

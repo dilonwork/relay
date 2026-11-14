@@ -23,6 +23,7 @@ class FakeDb {
       { id: 'cat-undef', name: 'Undefined', created_by: 'system', created_at: '2026-11-12T00:00:01.000Z' },
     ];
     this.documents = [];
+    this.tickets = [];
     this.projects = [
       { id: 'proj-1', name: 'Relay', description: '' },
       { id: 'proj-2', name: 'WebTracker', description: '' },
@@ -39,7 +40,7 @@ class FakeDb {
     return new Date(Date.now() + this.seq * 1000).toISOString();
   }
 
-  seedDocument({ id, project_id = 'proj-1', category_id = 'cat-proto', title = 'Seed doc', content = '', source = 'manual' }) {
+  seedDocument({ id, project_id = 'proj-1', category_id = 'cat-proto', title = 'Seed doc', content = '', source = 'manual', implementation_ticket_id = null }) {
     const row = {
       id: id || `doc-${++this.seq}`,
       project_id,
@@ -47,11 +48,20 @@ class FakeDb {
       title,
       content,
       source,
+      implementation_ticket_id,
       created_by: 'pm-1',
       created_at: this._now(),
       updated_at: this._now(),
     };
     this.documents.push(row);
+    return row;
+  }
+
+  // Seed a ticket for the implementation-badge attach: only id and
+  // status matter to the documents service.
+  seedTicket({ id, status = 'requirement' }) {
+    const row = { id: id || `ticket-${++this.seq}`, status };
+    this.tickets.push(row);
     return row;
   }
 
@@ -61,6 +71,9 @@ class FakeDb {
     if (/^SELECT \* FROM projects WHERE id = \$1/.test(sql)) {
       const p = this.projects.find((x) => x.id === params[0]);
       return { rows: p ? [{ ...p }] : [] };
+    }
+    if (sql === 'SELECT id, status FROM tickets WHERE id = ANY($1)') {
+      return { rows: this.tickets.filter((t) => params[0].includes(t.id)).map((t) => ({ id: t.id, status: t.status })) };
     }
     if (sql === 'SELECT * FROM documents WHERE id = $1') {
       const d = this.documents.find((x) => x.id === params[0]);
@@ -109,6 +122,7 @@ class FakeDb {
         project_id: params[2],
         content: params[3],
         source: params[4],
+        implementation_ticket_id: null,
         created_by: params[5],
         created_at: this._now(),
         updated_at: this._now(),
@@ -491,6 +505,49 @@ async function main() {
     assert.equal(noDelete.error, 'wrong_role');
     const stillThere = await documents.getDocument(db, seeded.id, {});
     assert.equal(stillThere.document.id, seeded.id);
+  });
+
+  await ok('implementationStatusFor: delivered is implemented, cancelled is no status, the rest is in progress (ticket b14207c5)', () => {
+    assert.equal(documents.implementationStatusFor('delivered'), 'implemented');
+    assert.equal(documents.implementationStatusFor('cancelled'), null);
+    assert.equal(documents.implementationStatusFor('requirement'), 'in_progress');
+    assert.equal(documents.implementationStatusFor('in_dev'), 'in_progress');
+    assert.equal(documents.implementationStatusFor('pending_review'), 'in_progress');
+    assert.equal(documents.implementationStatusFor(null), null);
+    assert.equal(documents.implementationStatusFor(undefined), null);
+  });
+
+  await ok('listDocuments attaches the implementation badge: delivered, in progress, cancelled link is dead (ticket b14207c5)', async () => {
+    const db = new FakeDb();
+    const done = db.seedTicket({ status: 'delivered' });
+    const doing = db.seedTicket({ status: 'in_dev' });
+    const dead = db.seedTicket({ status: 'cancelled' });
+    const a = db.seedDocument({ title: 'A', implementation_ticket_id: done.id });
+    const b = db.seedDocument({ title: 'B', implementation_ticket_id: doing.id });
+    const c = db.seedDocument({ title: 'C', implementation_ticket_id: dead.id });
+    const d = db.seedDocument({ title: 'D' });
+    const listed = await documents.listDocuments(db, {});
+    const byTitle = new Map(listed.map((x) => [x.title, x]));
+    assert.equal(byTitle.get('A').implementation_status, 'implemented');
+    assert.equal(byTitle.get('A').implementation_ticket_id, done.id);
+    assert.equal(byTitle.get('B').implementation_status, 'in_progress');
+    assert.equal(byTitle.get('C').implementation_status, null);
+    assert.equal(byTitle.get('C').implementation_ticket_id, dead.id);
+    assert.equal(byTitle.get('D').implementation_status, null);
+    assert.equal(byTitle.get('D').implementation_ticket_id, null);
+  });
+
+  await ok('getDocument attaches the implementation badge for one document (ticket b14207c5)', async () => {
+    const db = new FakeDb();
+    const done = db.seedTicket({ status: 'delivered' });
+    const seeded = db.seedDocument({ title: 'A', implementation_ticket_id: done.id });
+    const found = await documents.getDocument(db, seeded.id, {});
+    assert.equal(found.ok, true);
+    assert.equal(found.document.implementation_status, 'implemented');
+    assert.equal(found.document.implementation_ticket_id, done.id);
+    const plain = db.seedDocument({ title: 'B' });
+    const foundPlain = await documents.getDocument(db, plain.id, {});
+    assert.equal(foundPlain.document.implementation_status, null);
   });
 
   await ok('downloadDocument: filename comes from the title, missing is 404', async () => {

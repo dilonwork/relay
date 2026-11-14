@@ -152,7 +152,7 @@ async function getTicketTransitions(db, id, { actorId, actorRoles, assignedProje
   return { ok: true, status: 200, transitions };
 }
 
-async function createTicket(db, { actorId, actorRoles, title, description, source, reason, projectId, workflowId }) {
+async function createTicket(db, { actorId, actorRoles, title, description, source, reason, projectId, workflowId, documentId }) {
   if (!actorRoles || !actorRoles.includes('pm')) {
     return { ok: false, status: 403, error: 'wrong_role', message: 'Only the PM may create a ticket.' };
   }
@@ -217,6 +217,45 @@ async function createTicket(db, { actorId, actorRoles, title, description, sourc
   }
   const startState = sm.startStateFor(definition);
 
+  // Implementing a Prototype document (ticket b14207c5, design doc
+  // ch. 26): an optional document_id links this ticket to the
+  // prototype it implements. The link is the stored, explicit
+  // connection — never derived from the title — and the duplicate
+  // check lives here, at ticket creation, so no caller (UI, API key)
+  // can open a second implementation ticket for the same prototype:
+  // the button being disabled is only the friendly face of this.
+  // The document must exist, be a Prototype, live in the same
+  // project as the ticket (Implement inherits the document's
+  // project), and have no live implementation ticket yet. A link to
+  // a cancelled ticket is dead (documents.implementationStatusFor),
+  // so a fresh implementation may replace it.
+  const cleanDocumentId = documentId === undefined || documentId === null || !String(documentId).trim()
+    ? null
+    : String(documentId).trim();
+  let documentRow = null;
+  if (cleanDocumentId) {
+    const { rows: docRows } = await db.query('SELECT * FROM documents WHERE id = $1', [cleanDocumentId]);
+    documentRow = docRows[0] || null;
+    if (!documentRow) {
+      return { ok: false, status: 400, error: 'unknown_document', message: `Unknown document: ${cleanDocumentId}.` };
+    }
+    const { rows: catRows } = await db.query('SELECT * FROM document_categories WHERE id = $1', [documentRow.category_id]);
+    const category = catRows[0];
+    if (!category || category.name !== 'Prototype') {
+      return { ok: false, status: 400, error: 'not_a_prototype', message: 'Only a Prototype document can be implemented.' };
+    }
+    if ((documentRow.project_id || null) !== cleanProjectId) {
+      return { ok: false, status: 400, error: 'document_project_mismatch', message: 'The implementation ticket must run in the same project as the prototype.' };
+    }
+    if (documentRow.implementation_ticket_id) {
+      const { rows: linkedRows } = await db.query('SELECT * FROM tickets WHERE id = $1', [documentRow.implementation_ticket_id]);
+      const linked = linkedRows[0];
+      if (linked && linked.status !== 'cancelled') {
+        return { ok: false, status: 409, error: 'duplicate_implementation', message: `This prototype already has an implementation ticket (${linked.id}, ${linked.status}).` };
+      }
+    }
+  }
+
   const ticket = await db.withTransaction(async (client) => {
     const { rows } = await client.query(
       `INSERT INTO tickets (title, source, status, creator_id, assignee_id, developer_id, description, project_id, workflow_id)
@@ -229,6 +268,14 @@ async function createTicket(db, { actorId, actorRoles, title, description, sourc
        VALUES ($1, $2, $3, NULL, $4, $5, $6, $7, 'applied') RETURNING *`,
       [created.id, String(actorId).trim(), 'pm', startState, (reason && String(reason).trim()) || 'Ticket created', '', JSON.stringify([])]
     );
+    // Link the prototype to this ticket in the same transaction, so
+    // the ticket and the link commit (or roll back) together.
+    if (documentRow) {
+      await client.query(
+        'UPDATE documents SET implementation_ticket_id = $1 WHERE id = $2 RETURNING *',
+        [created.id, documentRow.id]
+      );
+    }
     return created;
   });
   return { ok: true, status: 201, ticket };

@@ -45,6 +45,7 @@ Tickets carry project development work through a pipeline: the PM creates a requ
 23. Ticket Detail Redesign: Two Columns, Description First, the Move as Buttons
 24. Projects Redesign: The List Is the Page, Creation Behind an Action
 25. Gantt Redesign: Segmented Bars, One Toolbar, a Summary Line
+26. Prototype Implementation: Stored Link, Badge, Duplicate Block
 - Appendix A State Code Reference
 - Appendix B Ticket Lifecycle Example
 
@@ -1300,3 +1301,60 @@ No schema change: this is a frontend-only change. No migration was added for thi
 
 - `server/gantt.test.js` (13 new items, 27 total): segments split a terminal ticket by status ending at `updated_at` (the zero-length terminal slice is dropped), an open ticket's last slice runs to now, no history or a history not ending at the current status falls back to one slice, a revisited status opens a new slice while a no-op transition opens none, day ticks fall on local-midnight boundaries inside the window and thin to at most eight on a wide window, a sub-day window gets a single tick at its start, day labels read "Nov 8" style, the summary counts stalled tickets and names the oldest by `updated_at` (and is empty when nothing is stalled), stalled ages read in days then hours, the component renders the two-row toolbar, summary, segments, project chip and end dot with the journey line gone (and `App` passes `histories`, not `journeys`), and the styles cover the new elements with the journey rules gone.
 - Frontend browser verification was not possible (no headless browser on the VM); only `tsc` + `vite build` were run. The Tester verifies the Gantt in the browser after deploy (two-row toolbar, summary line, project chip, segmented bars, day axis, search/chips/group-by/collapse/zoom/today/stalled/density, click-to-detail, mobile width).
+## 26. Prototype Implementation: Stored Link, Badge, Duplicate Block
+
+**Ticket:** b14207c5 — "Document Prototype: mark implemented prototypes and prevent duplicate implementation".
+
+### The problem
+
+Implementing a prototype (the Implement button on a Prototype document) only embedded the document id in the ticket's description text. Nothing on the document said it had been implemented, so the button could be clicked again and open a second implementation ticket for work already done or in progress. The description text is a human-readable reference; it was never a link the system could act on.
+
+### The link: stored on the document
+
+`documents.implementation_ticket_id UUID REFERENCES tickets(id) ON DELETE SET NULL` (migration 022), set by the server inside `createTicket`'s transaction when the ticket is created with a `document_id` — the ticket and the link commit (or roll back) together, and the ticket still carries the description text as before.
+
+The direction was chosen deliberately. The badge is a property of the document (it is read wherever the document is listed), and the duplicate check is a single-row check on the document (`implementation_ticket_id` is set and the linked ticket is live). Storing `document_id` on the ticket would have made both reads join the tickets table in the other direction. The link is never derived from the title — titles can collide or be renamed, and the description text stays a reference only.
+
+### The badge: derived at read time
+
+The server derives the badge from the linked ticket's status, on every read, and the frontend only renders what the server sends — the status is never stored on the document, so the badge follows the ticket as it moves:
+
+- linked ticket `delivered` → `implementation_status: 'implemented'` → green **Implemented** badge.
+- linked ticket in any other live status → `'in_progress'` → amber **Implementation in progress** badge.
+- no link, or the linked ticket is `cancelled` → `null` → no badge.
+
+A cancelled link is dead on purpose: a cancelled implementation attempt must not block a fresh one, so the badge disappears and Implement is allowed again (the new Implement overwrites the dead link). `server/documents.js` carries `implementationStatusFor` (exported for tests) and `attachImplementationStatus`, which resolves all linked tickets in the list with one `SELECT id, status FROM tickets WHERE id = ANY($1)` and applies it in `listDocuments` (all filter variants) and `getDocument`. The linked ticket lives in the document's own project (Implement inherits it), so the badge never leaks across the project scope the list already enforces.
+
+The badge shows in both places a prototype is seen: next to the title in the document list row and at the top of the expanded detail view (with a "View implementation ticket" link). It is a button — clicking it opens the implementation ticket via `onOpenTicket`.
+
+### Preventing duplicates: disabled button plus a server 409
+
+The frontend disables Implement whenever `implementation_status` is set, with a title that says why ("Already implemented — open the implementation ticket from the badge" / "Implementation already in progress — open it from the badge"). The button alone is not the enforcement: `createTicket` with a `document_id` checks the document server-side before inserting anything, and refuses a second live implementation with **409 `duplicate_implementation`** (the message names the existing ticket id), so no caller — UI or API key — can open a duplicate. The same validation refuses an unknown document (400 `unknown_document`), a document that is not a Prototype (400 `not_a_prototype`), and a ticket in a different project than the document (400 `document_project_mismatch`).
+
+### Backfill: option (a), link the old Implement tickets
+
+Several prototypes were already implemented through the old flow (the Dashboard / Ticket detail / Projects / Gantt redesign implementations among them) and have no stored link; leaving them unlinked would have failed the acceptance criteria for exactly the prototypes the ticket is about. So migration 022 backfills them. The old Implement tickets embed the document id in their description ("Source document: ... (category: Prototype, document ID: <uuid>)"), so the link is recoverable deterministically. Two details make the backfill safe:
+
+- **The title filter is essential.** Re-plan tickets embed the same "document ID:" line, so the backfill only considers tickets titled `Implement Prototype: %`.
+- **One ticket wins per document.** A delivered one first, then an in-progress one, then a cancelled one (a cancelled link only wins when nothing else exists — a dead link is better than no link at all, and a fresh Implement overwrites it anyway); earliest within each class. Only documents with no link yet are touched, so re-running the migration is a no-op.
+
+### Frontend
+
+- `src/api.ts`: `DocumentItem` gains `implementation_ticket_id` and `implementation_status` (`'implemented' | 'in_progress' | null`); `createTicket` payload gains `document_id?`.
+- `src/documentTickets.ts`: `buildImplementTicketPayload` includes `document_id: doc.id` (the title, description, source and project are unchanged).
+- `src/DocumentsPanel.tsx`: `ImplementationBadge` (button styled as a badge, opens the linked ticket), rendered next to the title in the list row and at the top of the expanded view; Implement is disabled when `implementation_status` is set, with the reason in its title.
+- `src/index.css`: `.badge.in-progress` (amber, same colors as the stalled signal) and `button.badge` (badge look, pointer cursor).
+- `server/index.js`: `POST /api/tickets` passes `document_id` through to `createTicket`.
+
+### Tests
+
+- `server/documents.test.js` (+3): `implementationStatusFor` for every status class (delivered, cancelled, live, none); `listDocuments` attaches the badge for delivered / in-progress / cancelled / unlinked documents; `getDocument` attaches it for one document.
+- `server/tickets.test.js` (+4): `document_id` sets the link on creation; a second Implement is 409 for both an in-progress and a delivered link (and the message names the existing ticket); a cancelled link is dead and a fresh Implement replaces it; unknown document / non-Prototype / project mismatch are 400 and create no ticket.
+- `server/documentTickets.test.js` (+1): the Implement payload carries `document_id`.
+- `server/migrations.test.js` (+1): static checks for 022 (column + FK + index, title filter, document-id parse, only-unlinked update, delivered-first ranking).
+- The migration chain 001→022 was run twice against a scratch database on the VM (see the ticket report): the second run is clean and the backfill links the old Implement tickets, including a delivered one, an in-progress one, a cancelled one, and a Re-plan ticket embedding the same document id (which the title filter correctly ignores).
+
+### Not verified
+
+Frontend browser verification was not possible (no headless browser on the VM); only `tsc` + `vite build` were run. The Tester verifies in the browser after deploy: an implemented prototype shows the Implemented badge in the list and in the expanded view, an in-progress one shows the amber badge and a disabled Implement with the reason, and clicking a badge opens the implementation ticket.
+

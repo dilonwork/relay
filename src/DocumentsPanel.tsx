@@ -24,7 +24,11 @@ import {
 // Not OK asks for the reason first and opens a re-planning ticket on
 // the Prototype flow — both reusing POST /api/tickets. The payloads
 // live in src/documentTickets.ts, the single source of truth for what
-// those tickets say.
+// those tickets say. Once a prototype is implemented (or being
+// implemented) the document carries an implementation badge
+// (ticket b14207c5) and Implement is disabled — the server stores
+// the link on the document and rejects a second Implement for the
+// same prototype, so a duplicate cannot be opened by accident.
 //
 // This panel owns its data (like AdminPanel): the list and the
 // categories load on mount, when the project filter changes, and
@@ -85,6 +89,28 @@ function renderDocumentContent(doc: DocumentItem, isPrototype: boolean) {
     <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', margin: 0 }}>
       {content}
     </pre>
+  );
+}
+
+// Implementation badge (ticket b14207c5): a Prototype whose
+// implementation ticket is delivered shows "Implemented" (green),
+// one still in progress shows "Implementation in progress" (amber).
+// The badge is a button — clicking it opens the implementation
+// ticket — and it is also the reason the Implement button is
+// disabled, so the link to the existing ticket is always one click
+// away. A document with no (live) link shows no badge.
+function ImplementationBadge({ doc, onOpenTicket }: { doc: DocumentItem; onOpenTicket: (id: string) => void }) {
+  if (!doc.implementation_status || !doc.implementation_ticket_id) return null;
+  const implemented = doc.implementation_status === 'implemented';
+  return (
+    <button
+      type="button"
+      className={implemented ? 'badge delivered' : 'badge in-progress'}
+      onClick={() => onOpenTicket(doc.implementation_ticket_id as string)}
+      title={implemented ? 'Open the implementation ticket' : 'Open the implementation ticket in progress'}
+    >
+      {implemented ? 'Implemented' : 'Implementation in progress'}
+    </button>
   );
 }
 
@@ -440,7 +466,8 @@ export default function DocumentsPanel(props: DocumentsPanelProps) {
                       <td>
                         <button type="button" className="link" onClick={() => setExpandedId(expanded ? null : doc.id)} title={expanded ? 'Hide content' : 'Show content'}>
                           {doc.title}
-                        </button>
+                        </button>{' '}
+                        <ImplementationBadge doc={doc} onOpenTicket={onOpenTicket} />
                       </td>
                       <td>
                         <span className="badge">{categoryNameFor(doc.category_id)}</span>
@@ -458,8 +485,16 @@ export default function DocumentsPanel(props: DocumentsPanelProps) {
                               type="button"
                               className="link"
                               onClick={() => handleImplement(doc)}
-                              disabled={!isPm || implementingId === doc.id}
-                              title={isPm ? 'Open a ticket to implement this prototype' : 'Only the PM may open an implementation ticket'}
+                              disabled={!isPm || implementingId === doc.id || !!doc.implementation_status}
+                              title={
+                                !isPm
+                                  ? 'Only the PM may open an implementation ticket'
+                                  : doc.implementation_status === 'implemented'
+                                    ? 'Already implemented — open the implementation ticket from the badge'
+                                    : doc.implementation_status === 'in_progress'
+                                      ? 'Implementation already in progress — open it from the badge'
+                                      : 'Open a ticket to implement this prototype'
+                              }
                             >
                               Implement
                             </button>
@@ -488,6 +523,15 @@ export default function DocumentsPanel(props: DocumentsPanelProps) {
                     {expanded && (
                       <tr>
                         <td colSpan={5}>
+                          {doc.implementation_status && doc.implementation_ticket_id && (
+                            <p style={{ marginTop: 0 }}>
+                              Implementation:{' '}
+                              <ImplementationBadge doc={doc} onOpenTicket={onOpenTicket} />{' '}
+                              <button type="button" className="link" onClick={() => onOpenTicket(doc.implementation_ticket_id as string)}>
+                                View implementation ticket
+                              </button>
+                            </p>
+                          )}
                           {renderDocumentContent(doc, isPrototype)}
                           {isPrototype && notOkId === doc.id && isPm && (
                             <form

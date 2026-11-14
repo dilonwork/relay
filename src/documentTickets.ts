@@ -91,15 +91,17 @@ export function buildImplementTicket(
 // so the implementation ticket runs in the same project as the
 // prototype. A document with no project (project_id null) opens a
 // ticket with no project, the same as a ticket created without a
-// project from the New ticket form. The panel passes this payload
-// straight to api.createTicket.
+// project from the New ticket form. The document_id links the ticket
+// to the prototype on the server (ticket b14207c5): the server stores
+// it on the document, shows the implementation badge from it, and
+// rejects a second Implement for the same prototype.
 export function buildImplementTicketPayload(
   doc: PrototypeDocumentRef,
   projectName: string,
   origin: string,
-): { title: string; description: string; source: string; project_id: string | null } {
+): { title: string; description: string; source: string; project_id: string | null; document_id: string } {
   const { title, description } = buildImplementTicket(doc, projectName, origin);
-  return { title, description, source: 'project', project_id: doc.project_id };
+  return { title, description, source: 'project', project_id: doc.project_id, document_id: doc.id };
 }
 
 // The re-planning ticket opened by Not OK: the title says at a glance

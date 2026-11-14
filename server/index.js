@@ -128,6 +128,9 @@ app.post('/api/tickets', async (req, res) => {
       // The workflow the ticket follows (design doc ch. 15); omitted
       // means the built-in 14-state development flow.
       workflowId: req.body ? req.body.workflow_id : undefined,
+      // Implementing a Prototype (ticket b14207c5): the document this
+      // ticket implements, linked on the document when created.
+      documentId: req.body ? req.body.document_id : undefined,
     });
     if (!result.ok) return res.status(result.status).json({ error: result.error, message: result.message });
     res.status(201).json(result.ticket);

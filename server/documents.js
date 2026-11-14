@@ -102,6 +102,43 @@ async function getCategoryRow(db, id) {
   return rows[0] || null;
 }
 
+// Implementation status of a prototype, derived from its linked
+// implementation ticket (ticket b14207c5, design doc ch. 26):
+// 'delivered' -> the prototype is implemented; 'cancelled' -> the
+// link is dead (no badge, and Implement is allowed again — a
+// cancelled attempt must not block a fresh one); any other status
+// -> the implementation is in progress. A document with no link has
+// no status. The status is derived at read time, never stored: the
+// ticket moves on, the badge follows it.
+function implementationStatusFor(ticketStatus) {
+  if (!ticketStatus) return null;
+  if (ticketStatus === 'delivered') return 'implemented';
+  if (ticketStatus === 'cancelled') return null;
+  return 'in_progress';
+}
+
+// Attach the implementation badge data to document rows: the stored
+// implementation_ticket_id plus the status derived from the linked
+// ticket, in one query for the whole list. Rows without a link get
+// implementation_status null, so callers can always read the field.
+// The linked ticket lives in the document's own project (Implement
+// inherits it), so the badge never leaks across the project scope
+// the list already enforces.
+async function attachImplementationStatus(db, docs) {
+  for (const doc of docs) {
+    doc.implementation_status = null;
+  }
+  const linked = docs.filter((d) => d.implementation_ticket_id);
+  if (!linked.length) return docs;
+  const ids = [...new Set(linked.map((d) => d.implementation_ticket_id))];
+  const { rows } = await db.query('SELECT id, status FROM tickets WHERE id = ANY($1)', [ids]);
+  const byId = new Map(rows.map((r) => [r.id, r.status]));
+  for (const doc of linked) {
+    doc.implementation_status = implementationStatusFor(byId.get(doc.implementation_ticket_id));
+  }
+  return docs;
+}
+
 // All categories, by name, so the order is deterministic everywhere:
 // the seeded defaults sort as Prototype before Undefined, and a
 // category added later lands in its alphabetical place. (Ordering by
@@ -162,36 +199,36 @@ async function listDocuments(db, { projectId, categoryId, assignedProjectId } = 
         `SELECT * FROM documents WHERE category_id = $1 AND project_id IS NULL ${order}`,
         [cleanCategoryId]
       );
-      return rows;
+      return attachImplementationStatus(db, rows);
     }
     const { rows } = await db.query(
       `SELECT * FROM documents WHERE category_id = $1 AND project_id = $2 ${order}`,
       [cleanCategoryId, effectiveProject]
     );
-    return rows;
+    return attachImplementationStatus(db, rows);
   }
   if (cleanCategoryId) {
     const { rows } = await db.query(
       `SELECT * FROM documents WHERE category_id = $1 ${order}`,
       [cleanCategoryId]
     );
-    return rows;
+    return attachImplementationStatus(db, rows);
   }
   if (effectiveProject) {
     if (effectiveProject === 'none') {
       const { rows } = await db.query(
         `SELECT * FROM documents WHERE project_id IS NULL ${order}`
       );
-      return rows;
+      return attachImplementationStatus(db, rows);
     }
     const { rows } = await db.query(
       `SELECT * FROM documents WHERE project_id = $1 ${order}`,
       [effectiveProject]
     );
-    return rows;
+    return attachImplementationStatus(db, rows);
   }
   const { rows } = await db.query(`SELECT * FROM documents ${order}`);
-  return rows;
+  return attachImplementationStatus(db, rows);
 }
 
 async function getDocument(db, id, { assignedProjectId } = {}) {
@@ -205,7 +242,8 @@ async function getDocument(db, id, { assignedProjectId } = {}) {
   if (!documentVisibleTo(row, assignedProjectId)) {
     return { ok: false, status: 403, error: 'out_of_scope', message: 'This document belongs to a different project than the one you are assigned to.' };
   }
-  return { ok: true, status: 200, document: row };
+  const [document] = await attachImplementationStatus(db, [row]);
+  return { ok: true, status: 200, document };
 }
 
 // Shared insert for the two filing paths (hand-filed and agent
@@ -363,6 +401,7 @@ async function downloadDocument(db, id, { assignedProjectId } = {}) {
 module.exports = {
   slugifyTitle,
   documentVisibleTo,
+  implementationStatusFor,
   MAX_AGENT_UPLOAD_BYTES,
   listDocumentCategories,
   createDocumentCategory,

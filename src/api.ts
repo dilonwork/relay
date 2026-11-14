@@ -147,6 +147,12 @@ export interface DocumentItem {
   created_by: string;
   created_at: string;
   updated_at: string;
+  // Implementation link (ticket b14207c5): the ticket implementing
+  // this prototype, and its derived status — 'implemented' when the
+  // ticket is delivered, 'in_progress' while it is open, null when
+  // there is no (live) link. The server attaches both on every read.
+  implementation_ticket_id: string | null;
+  implementation_status: 'implemented' | 'in_progress' | null;
 }
 
 // Public directory entry (ticket 978e4721): the ticket detail page
@@ -325,7 +331,7 @@ export const api = {
     return request<Ticket[]>(qs ? `/api/tickets?${qs}` : '/api/tickets');
   },
   getTicket: (id: string) => request<TicketWithHistory>(`/api/tickets/${encodeURIComponent(id)}`),
-  createTicket: (payload: { title: string; description: string; source: string; project_id?: string | null; workflow_id?: string | null; reason?: string }) =>
+  createTicket: (payload: { title: string; description: string; source: string; project_id?: string | null; workflow_id?: string | null; reason?: string; document_id?: string | null }) =>
     request<Ticket>('/api/tickets', { method: 'POST', body: JSON.stringify(payload) }),
   transitionTicket: (
     id: string,
