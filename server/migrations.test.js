@@ -55,7 +55,13 @@
 // table does not exist yet at migration 007 time), and 010 must keep
 // is_active/is_default so 020's backfill can read them — a fresh
 // database runs 010 then 020 and converges on the same final
-// schema.
+// schema. Migration 021 makes Global workflow names unique (ticket
+// 7c2fefc5, follow-up to 020): 020 allowed multiple Global workflows,
+// but the (project_id, name) unique index cannot enforce uniqueness
+// among Globals (PostgreSQL treats NULL project_id values as
+// distinct), so a partial unique index on (name) WHERE project_id
+// IS NULL closes the gap; the service already turns 23505 into 409
+// workflow_name_taken.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -506,6 +512,17 @@ async function main() {
     const addAt = sql.indexOf('ADD CONSTRAINT projects_workflow_id_fkey');
     assert.ok(dropAt > sql.indexOf('DO $$'), '020: DROP must be inside the guard (after DO $$)');
     assert.ok(addAt > dropAt, '020: ADD must come after DROP');
+  });
+
+  await ok('migration 021 makes Global workflow names unique', async () => {
+    const sql = readMigration('021_global_workflow_name_unique.sql');
+    // 020 allowed multiple Global workflows, but the (project_id,
+    // name) unique index from 010 cannot enforce uniqueness among
+    // Globals: PostgreSQL treats NULL project_id values as distinct.
+    // A partial unique index on the Global scope closes the gap; the
+    // service already turns 23505 into 409 workflow_name_taken.
+    assert.ok(sql.includes('CREATE UNIQUE INDEX IF NOT EXISTS idx_workflows_global_name_unique'), '021: missing partial unique index');
+    assert.ok(sql.includes('ON workflows (name) WHERE project_id IS NULL'), '021: index must be partial on Global workflows only');
   });
 
   console.log(`\n${passed} migration tests passed.`);

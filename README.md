@@ -154,7 +154,7 @@ relay/
 │   ├── viewHash.test.js
 │   └── migrations.test.js
 ├── db/
-│   └── migrations/       # schema as SQL migrations (001-020)
+│   └── migrations/       # schema as SQL migrations (001-021)
 ├── doc/
 │   └── design.md         # design document (Traditional Chinese)
 ├── screenshots/          # README screenshots (see screenshots/README.md)
@@ -182,7 +182,7 @@ The backend needs a PostgreSQL database (default name `relay`, see
 not done by the code in this repo; the server creates the `tickets`,
 `ticket_transitions`, `users`, `sessions`, `api_keys`, `projects`,
 `monitor_reminders` and `workflows` tables itself on startup (migrations
-`db/migrations/001-020`).
+`db/migrations/001-021`).
 
 On first run the users table is empty, so the app shows a setup screen:
 create the first admin account there (username, display name, password).
@@ -272,8 +272,8 @@ project creation (one agent per flow role, with keys and onboarding
 packages, rolled back when a role has no free username) and the
 onboarding document regenerating from a live workflow edit.
 
-290 tests in total: state machine 21, tickets 36, projects 15, onboarding 7, auth 21,
-admin 7, API keys 8, monitor 18, workflows 30, quick-create builder 11, documents 24, document tickets 12, document render 18, gantt helpers 14, admin nav 5, view hash 8, migrations 31, role lists 4.
+291 tests in total: state machine 21, tickets 36, projects 15, onboarding 7, auth 21,
+admin 7, API keys 8, monitor 18, workflows 30, quick-create builder 11, documents 24, document tickets 12, document render 18, gantt helpers 14, admin nav 5, view hash 8, migrations 32, role lists 4.
 
 ## Accounts & authentication
 
