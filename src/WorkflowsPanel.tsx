@@ -689,9 +689,14 @@ export default function WorkflowsPanel({ projects, createRequest, onFormOpenChan
     </div>
 
     {formOpen && (
-      <div className="card">
+      <div className="card editor-card">
         <form onSubmit={handleSubmit}>
           <h3 className="section">{editingId ? `Edit — ${formName || 'workflow'}` : 'New workflow'}</h3>
+          {/* Mobile editor head (ticket 1ddcd4ed): the section nav and the
+              flow preview, grouped so the mobile layout can put the flow
+              strip above the tab row (display: contents on desktop — the
+              grouping changes nothing there). */}
+          <div className="editor-head">
           {/* Section navigation (ticket b56b1145): jumps to each editor
               section; a red dot marks a section with validation problems,
               green when clean (dots appear after the first submit). */}
@@ -721,6 +726,7 @@ export default function WorkflowsPanel({ projects, createRequest, onFormOpenChan
               {renderFlowStrip(formStates, formStates.length)}
             </p>
           )}
+          </div>
           {/* Grouped validation summary (ticket b56b1145): every problem,
               by section — not just the first one. */}
           {validationProblems && validationProblems.length > 0 && (
@@ -831,7 +837,7 @@ export default function WorkflowsPanel({ projects, createRequest, onFormOpenChan
                 and has no role. Responsibilities are filled with a
                 default sentence — refine them in the Roles table below.
               </p>
-              <table>
+              <table className="editor-table">
                 <thead>
                   <tr>
                     <th>State name</th>
@@ -843,8 +849,8 @@ export default function WorkflowsPanel({ projects, createRequest, onFormOpenChan
                   {quickRows.map((r, i) => {
                     const isLast = i === quickRows.length - 1;
                     return (
-                      <tr key={i}>
-                        <td>
+                      <tr key={i} data-heading={`State ${i + 1}`}>
+                        <td data-label="State name">
                           <input
                             type="text"
                             value={r.label}
@@ -853,7 +859,7 @@ export default function WorkflowsPanel({ projects, createRequest, onFormOpenChan
                             aria-label={`Quick create state ${i + 1} name`}
                           />
                         </td>
-                        <td>
+                        <td data-label="Responsible role">
                           <select
                             value={isLast ? '' : r.role}
                             onChange={(e) => setQuickRow(i, { role: e.target.value })}
@@ -945,7 +951,7 @@ export default function WorkflowsPanel({ projects, createRequest, onFormOpenChan
             the start; at least one is terminal. Codes are lowercase
             snake_case identifiers — they are what the API and history use.
           </p>
-          <table>
+          <table className="editor-table">
             <thead>
               <tr>
                 <th>Label</th>
@@ -958,8 +964,8 @@ export default function WorkflowsPanel({ projects, createRequest, onFormOpenChan
             </thead>
             <tbody>
               {formStates.map((s, i) => (
-                <tr key={`${s.code || 'new'}-${i}`}>
-                  <td>
+                <tr key={`${s.code || 'new'}-${i}`} data-heading={`${i + 1} · ${s.label || s.code || 'Unnamed state'}`}>
+                  <td data-label="Label">
                     <input
                       type="text"
                       value={s.label}
@@ -968,7 +974,7 @@ export default function WorkflowsPanel({ projects, createRequest, onFormOpenChan
                       aria-label={`Label for state ${i + 1}`}
                     />
                   </td>
-                  <td>
+                  <td data-label="Code">
                     <input
                       type="text"
                       value={s.code}
@@ -988,25 +994,31 @@ export default function WorkflowsPanel({ projects, createRequest, onFormOpenChan
                     )}
                   </td>
                   <td>
-                    <input
-                      type="radio"
-                      name="workflow-start-state"
-                      checked={s.is_start}
-                      onChange={() =>
-                        setFormStates((prev) => prev.map((x, j) => ({ ...x, is_start: j === i })))
-                      }
-                      aria-label={`Start state: ${s.label || s.code || i + 1}`}
-                    />
+                    <label className="mobile-toggle">
+                      <input
+                        type="radio"
+                        name="workflow-start-state"
+                        checked={s.is_start}
+                        onChange={() =>
+                          setFormStates((prev) => prev.map((x, j) => ({ ...x, is_start: j === i })))
+                        }
+                        aria-label={`Start state: ${s.label || s.code || i + 1}`}
+                      />
+                      <span>Start</span>
+                    </label>
                   </td>
                   <td>
-                    <input
-                      type="checkbox"
-                      checked={s.is_terminal}
-                      onChange={(e) => setStateField(i, { is_terminal: e.target.checked })}
-                      aria-label={`Terminal: ${s.label || s.code || i + 1}`}
-                    />
+                    <label className="mobile-toggle">
+                      <input
+                        type="checkbox"
+                        checked={s.is_terminal}
+                        onChange={(e) => setStateField(i, { is_terminal: e.target.checked })}
+                        aria-label={`Terminal: ${s.label || s.code || i + 1}`}
+                      />
+                      <span>Terminal</span>
+                    </label>
                   </td>
-                  <td>
+                  <td data-label="Position">
                     <select
                       value={i}
                       onChange={(e) => moveStateTo(i, Number(e.target.value))}
@@ -1044,7 +1056,7 @@ export default function WorkflowsPanel({ projects, createRequest, onFormOpenChan
             is built in for every workflow (PM, any non-terminal state,
             reason required) and is not listed here.
           </p>
-          <table>
+          <table className="editor-table">
             <thead>
               <tr>
                 <th>From</th>
@@ -1058,8 +1070,8 @@ export default function WorkflowsPanel({ projects, createRequest, onFormOpenChan
             </thead>
             <tbody>
               {formTransitions.map((t, i) => (
-                <tr key={`${t.from}->${t.to}-${i}`}>
-                  <td>
+                <tr key={`${t.from}->${t.to}-${i}`} data-heading={`${stateLabelFor({ states: formStates } as Workflow, t.from)} → ${stateLabelFor({ states: formStates } as Workflow, t.to)}`}>
+                  <td data-label="From">
                     <select
                       value={t.from}
                       onChange={(e) => setTransitionField(i, { from: e.target.value })}
@@ -1072,7 +1084,7 @@ export default function WorkflowsPanel({ projects, createRequest, onFormOpenChan
                       ))}
                     </select>
                   </td>
-                  <td>
+                  <td data-label="To">
                     <select
                       value={t.to}
                       onChange={(e) => setTransitionField(i, { to: e.target.value })}
@@ -1085,7 +1097,7 @@ export default function WorkflowsPanel({ projects, createRequest, onFormOpenChan
                       ))}
                     </select>
                   </td>
-                  <td>
+                  <td data-label="Kind">
                     <select
                       value={t.kind}
                       onChange={(e) => setTransitionField(i, { kind: e.target.value })}
@@ -1098,22 +1110,28 @@ export default function WorkflowsPanel({ projects, createRequest, onFormOpenChan
                       ))}
                     </select>
                   </td>
-                  <td>{ROLE_LABELS[formRoles[t.from]?.role || ''] || '—'}</td>
+                  <td data-label="Role">{ROLE_LABELS[formRoles[t.from]?.role || ''] || '—'}</td>
                   <td>
-                    <input
-                      type="checkbox"
-                      checked={t.requiresReason}
-                      onChange={(e) => setTransitionField(i, { requiresReason: e.target.checked })}
-                      aria-label={`Transition ${i + 1} requires reason`}
-                    />
+                    <label className="mobile-toggle">
+                      <input
+                        type="checkbox"
+                        checked={t.requiresReason}
+                        onChange={(e) => setTransitionField(i, { requiresReason: e.target.checked })}
+                        aria-label={`Transition ${i + 1} requires reason`}
+                      />
+                      <span>Reason required</span>
+                    </label>
                   </td>
                   <td>
-                    <input
-                      type="checkbox"
-                      checked={t.requiresHandoff}
-                      onChange={(e) => setTransitionField(i, { requiresHandoff: e.target.checked })}
-                      aria-label={`Transition ${i + 1} requires handoff`}
-                    />
+                    <label className="mobile-toggle">
+                      <input
+                        type="checkbox"
+                        checked={t.requiresHandoff}
+                        onChange={(e) => setTransitionField(i, { requiresHandoff: e.target.checked })}
+                        aria-label={`Transition ${i + 1} requires handoff`}
+                      />
+                      <span>Handoff required</span>
+                    </label>
                   </td>
                   <td>
                     <button className="link" type="button" onClick={() => removeTransition(i)}>
@@ -1137,7 +1155,7 @@ export default function WorkflowsPanel({ projects, createRequest, onFormOpenChan
             hold different roles in different workflows — what matters here
             is which role is responsible for each state of this workflow.
           </p>
-          <table>
+          <table className="editor-table roles-table">
             <thead>
               <tr>
                 <th>State</th>
@@ -1149,9 +1167,9 @@ export default function WorkflowsPanel({ projects, createRequest, onFormOpenChan
               {formStates.map((s, si) => {
                 const entry = formRoles[s.code] || { role: null, responsibilities: '' };
                 return (
-                  <tr key={`${s.code || 'new'}-${si}`}>
+                  <tr key={`${s.code || 'new'}-${si}`} data-heading={s.label || s.code || '(unnamed)'}>
                     <td>{s.label || s.code || '(unnamed)'}</td>
-                    <td>
+                    <td data-label="Role">
                       <select
                         value={entry.role || ''}
                         onChange={(e) => setFormRole(s.code, e.target.value || null)}
@@ -1169,7 +1187,7 @@ export default function WorkflowsPanel({ projects, createRequest, onFormOpenChan
                         )}
                       </select>
                     </td>
-                    <td>
+                    <td data-label="Responsibilities">
                       <input
                         type="text"
                         value={entry.responsibilities}
@@ -1184,12 +1202,18 @@ export default function WorkflowsPanel({ projects, createRequest, onFormOpenChan
             </tbody>
           </table>
           {renderSectionErrors('roles')}
-          <button className="primary" type="submit" disabled={busy}>
-            {editingId ? 'Save changes' : 'Create workflow'}
-          </button>{' '}
-          <button className="link" type="button" onClick={() => setFormOpen(false)} disabled={busy}>
-            Cancel
-          </button>
+          {/* Sticky save bar on mobile (ticket 1ddcd4ed): the wrapper is
+              display: contents on desktop (no layout change) and a sticky
+              bottom bar below 700 px, so Save stays reachable without
+              scrolling back down the form. */}
+          <div className="editor-actions">
+            <button className="primary" type="submit" disabled={busy}>
+              {editingId ? 'Save changes' : 'Create workflow'}
+            </button>{' '}
+            <button className="link" type="button" onClick={() => setFormOpen(false)} disabled={busy}>
+              Cancel
+            </button>
+          </div>
         </form>
       </div>
     )}

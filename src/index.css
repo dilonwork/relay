@@ -52,6 +52,10 @@ body {
 
 .titlebar .actions { display: flex; gap: 8px; align-items: center; }
 
+/* Hamburger in the title bar (ticket 1ddcd4ed): hidden on desktop,
+   shown below 720px (see the media query below). */
+.titlebar-menu { display: none; }
+
 .actor-bar {
   display: flex;
   flex-wrap: wrap;
@@ -143,7 +147,6 @@ body {
 .content { flex: 1; min-width: 0; }
 
 /* Mobile drawer controls: hidden on desktop, shown at ≤720px. */
-.menu-button { display: none; }
 .drawer-close { display: none; }
 .sidebar-overlay { display: none; }
 
@@ -175,19 +178,21 @@ body {
   /* Shorter truncation for the title bar's current page on mobile. */
   .titlebar .crumbs .here { max-width: 200px; }
 
-  /* Hamburger button above the title bar. */
-  .menu-button {
+  /* Hamburger in the title bar (ticket 1ddcd4ed): opens the sidebar
+     drawer. Icon-only, 44px, at the left of the path. */
+  .titlebar-menu {
     display: inline-flex;
     align-items: center;
-    gap: 8px;
+    justify-content: center;
+    flex: 0 0 auto;
+    min-width: 44px;
     min-height: 44px;
-    margin-bottom: 8px;
-    padding: 8px 14px;
+    padding: 8px 10px;
     border: 1px solid #cfdbe4;
     border-radius: 6px;
     background: #fff;
     color: #0f2a3d;
-    font-size: 14px;
+    font-size: 18px;
     cursor: pointer;
   }
 
@@ -818,3 +823,153 @@ button.primary.small { min-height: 0; padding: 4px 10px; font-size: 13px; }
 .section-error { color: #b91c1c; font-size: 13px; margin: 4px 0 12px; }
 .replace-notice { background: #fef3c7; border: 1px solid #fcd34d; color: #92400e; border-radius: 6px; padding: 10px 14px; margin-bottom: 12px; }
 .workflow-preview { margin-bottom: 12px; }
+
+/* Workflow editor on mobile (ticket 1ddcd4ed, UI&UX prototype
+   "Workflow editor mobile redesign — recommendations"): below 700 px
+   the editor tables become cards, the section nav becomes a scrollable
+   tab row, and Save/Cancel becomes a sticky bottom bar. One component,
+   two layouts — the markup is the same table; only the presentation
+   changes, so above 700 px the desktop layout is byte-identical.
+
+   Breakpoint note: the app shell (hamburger drawer, 44px buttons,
+   ticket cards) switches at 720 px (ticket 7666978). The editor rules
+   below use 700 px, as the recommendations specify, so above 700 px
+   the editor stays desktop tables even in the 700–720 px band where
+   the drawer is already active (there the tables keep the existing
+   horizontal-scroll fallback inside their card).
+
+   The drawer itself is not rebuilt here: the hamburger + off-canvas
+   drawer from 7666978 already exists; this ticket only moves the
+   hamburger button into the title bar (see .titlebar-menu). */
+
+/* Toggle labels (ticket 1ddcd4ed): on desktop the label text stays
+   hidden — the table headers already name the columns — and the
+   label wraps the input inline, exactly as the bare input did. */
+.mobile-toggle { display: inline; }
+.mobile-toggle span { display: none; }
+
+/* Editor head grouping (ticket 1ddcd4ed): invisible on desktop. */
+.editor-head { display: contents; }
+
+/* Sticky save bar wrapper (ticket 1ddcd4ed): invisible on desktop,
+   so Save/Cancel render inline exactly as before. */
+.editor-actions { display: contents; }
+
+@media (max-width: 700px) {
+  /* Editor head: the flow strip stays above the tab row (prototype
+     order). Desktop: display: contents, so the grouping is invisible. */
+  .editor-head { display: flex; flex-direction: column; }
+  .editor-head .workflow-preview { order: 1; margin-bottom: 8px; }
+  .editor-head .section-nav { order: 2; }
+
+  /* Section nav as a horizontally scrollable tab row: no wrapping,
+     pill buttons, the red-dot problem markers stay inline. */
+  .editor-card .section-nav {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    gap: 6px;
+    padding-bottom: 4px;
+  }
+  .editor-card .section-nav button {
+    flex: 0 0 auto;
+    border: 1px solid #c4d0da;
+    border-radius: 999px;
+    background: #fff;
+    padding: 8px 14px;
+    min-height: 44px;
+    white-space: nowrap;
+  }
+
+  /* Tables become cards: the header row hides (each field carries its
+     own label), each row is a bordered card headed by its data-heading. */
+  .editor-table { overflow-x: visible; }
+  .editor-table thead { display: none; }
+  .editor-table tbody { display: block; }
+  .editor-table tbody tr { cursor: default; }
+  .editor-table tbody tr:hover { background: #fff; }
+  .editor-table tr {
+    display: block;
+    border: 1px solid #d9e1e8;
+    border-radius: 8px;
+    padding: 12px;
+    margin-bottom: 10px;
+    background: #fff;
+  }
+  .editor-table tr::before {
+    content: attr(data-heading);
+    display: block;
+    font-weight: 600;
+    font-size: 14px;
+    margin-bottom: 8px;
+    overflow-wrap: anywhere;
+  }
+  .editor-table td {
+    display: block;
+    padding: 0;
+    border: none;
+    margin-bottom: 10px;
+  }
+  .editor-table td:last-child { margin-bottom: 0; }
+  .editor-table td[data-label]::before {
+    content: attr(data-label);
+    display: block;
+    font-size: 12px;
+    color: #5a6b7c;
+    margin-bottom: 4px;
+  }
+  /* The Roles table's State cell is the card heading (tr::before);
+     the cell itself would only repeat it. */
+  .editor-table.roles-table td:first-child { display: none; }
+  /* Full-width 44px controls; 16px text stops iOS Safari zooming
+     into a focused input. The Code input stays monospace. */
+  .editor-table input[type="text"],
+  .editor-table select {
+    width: 100%;
+    min-height: 44px;
+    font-size: 16px;
+  }
+  .editor-table td[data-label="Code"] input { font-family: monospace; }
+  /* Toggle rows (Start / Terminal / Reason required / Handoff
+     required): the label text is the 44px tap target. */
+  .editor-table .mobile-toggle span { display: inline; }
+  .editor-table .mobile-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 44px;
+    font-size: 14px;
+    cursor: pointer;
+  }
+  .editor-table .mobile-toggle input[type="checkbox"],
+  .editor-table .mobile-toggle input[type="radio"] {
+    width: 20px;
+    height: 20px;
+    flex: 0 0 auto;
+    margin: 0;
+  }
+
+  /* Sticky save bar: Save grows to the remaining width, Cancel sits
+     beside it; the bar is flush with the card's bottom edge. */
+  .editor-actions {
+    display: flex;
+    gap: 8px;
+    position: sticky;
+    bottom: 0;
+    z-index: 5;
+    background: #fff;
+    border-top: 1px solid #e2e8ee;
+    margin: 12px -16px -16px;
+    padding: 10px 16px;
+    border-radius: 0 0 8px 8px;
+  }
+  .editor-actions .primary { flex: 1; min-height: 44px; }
+  .editor-actions .link { min-height: 44px; }
+
+  /* Room below the sticky bar so the last rows can scroll clear of it. */
+  .editor-card form { padding-bottom: 72px; }
+  /* The replace warning and grouped validation errors render
+     full-width inside the cards — they already do (block boxes), but
+     the toggle-row buttons inside them keep 44px. */
+  .editor-card .replace-notice .link { min-height: 44px; }
+}

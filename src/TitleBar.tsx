@@ -23,15 +23,25 @@ interface TitleBarProps {
   // always stays beside them.
   actions?: ReactNode;
   onRefresh: () => void;
+  // Mobile navigation (ticket 1ddcd4ed): the hamburger that opens the
+  // sidebar drawer. Rendered only when the handler is given; hidden
+  // above 720 px by CSS, so the desktop bar is unchanged. The bar
+  // otherwise keeps the 337e6a55 rule (path + page title + actions).
+  onMenuClick?: () => void;
 }
 
 // One slim title bar per page (ticket 337e6a55): it carries the path,
 // the page title (the last path segment) and the actions, and replaces
 // the old content header (H1 + tagline + Refresh) and the per-panel
 // H2s. The sidebar keeps the single "Relay" brand.
-export default function TitleBar({ segments, title, badge, actions, onRefresh }: TitleBarProps) {
+export default function TitleBar({ segments, title, badge, actions, onRefresh, onMenuClick }: TitleBarProps) {
   return (
     <div className="titlebar">
+      {onMenuClick && (
+        <button type="button" className="titlebar-menu" onClick={onMenuClick} aria-label="Open navigation">
+          <span aria-hidden="true">☰</span>
+        </button>
+      )}
       <nav className="crumbs" aria-label="Breadcrumb">
         {segments.map((s, i) => {
           const last = i === segments.length - 1;
