@@ -349,6 +349,50 @@ h3.section { margin: 14px 0 6px; font-size: 13px; color: #0f2a3d; }
 
 .tabs button.active { background: #0e7c7b; border-color: #0e7c7b; color: #fff; }
 .tabs button .count { opacity: 0.75; margin-left: 4px; }
+/* Claimable tab with work waiting: amber while it is not the active
+   tab, so the queue that needs attention stands out. */
+.tabs button.claimable:not(.active) { background: #fef3c7; border-color: #d97706; color: #92400e; }
+
+/* Tickets list toolbar (ticket 7da410a5): search + density + the
+   one-line project chip, above the tabs. */
+.tickets-toolbar { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; margin-bottom: 12px; }
+.tickets-search {
+  flex: 1 1 200px;
+  min-width: 0;
+  border: 1px solid #cfdbe4;
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 14px;
+  font-family: inherit;
+  background: #fff;
+  color: #1a2332;
+}
+.tickets-density { display: flex; gap: 6px; }
+.tickets-density button {
+  border: 1px solid #cfdbe4;
+  background: #fff;
+  border-radius: 999px;
+  padding: 4px 12px;
+  cursor: pointer;
+  font-size: 13px;
+  color: #1a2332;
+}
+.tickets-density button.active { background: #0e7c7b; border-color: #0e7c7b; color: #fff; }
+/* Project chip (ticket 7da410a5): the single-project header collapsed
+   to one line — name + ticket count, ✕ to show all projects. The
+   description lives on the Projects page. */
+.tickets-project-chip { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: #0f2a3d; }
+/* Short id under the title: the id people quote in chat, visible
+   without opening the ticket. */
+.ticket-id { font-size: 12px; }
+/* Stalled marker (ticket 7da410a5): the same 36h rule as the Gantt
+   marker, an amber dot on the Updated cell with a tooltip. */
+.stalled-dot { color: #b45309; margin-left: 4px; }
+/* Compact density (ticket 7da410a5): tighter rows for scanning long
+   queues; Comfortable is today's row height, the default. */
+.card.ticket-compact .ticket-table td { padding: 3px 8px; }
+.card.ticket-compact .ticket-card { padding: 8px 12px; }
+.ticket-card-assignee { margin-top: 4px; font-size: 13px; color: #5a6b7c; }
 
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
 th { text-align: left; color: #5a6b7c; border-bottom: 2px solid #d9e1e8; padding: 6px 8px; }
