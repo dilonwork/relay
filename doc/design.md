@@ -42,6 +42,7 @@ Tickets carry project development work through a pipeline: the PM creates a requ
 20. External Project Prompt Bundle
 21. Title Bar: Sidebar & Title Deduplication
 22. Dashboard Redesign: Attention First, Cards Second
+23. Ticket Detail Redesign: Two Columns, Description First, the Move as Buttons
 - Appendix A State Code Reference
 - Appendix B Ticket Lifecycle Example
 
@@ -1200,3 +1201,41 @@ No schema change: this is a frontend-only change. No migration was added for thi
 
 - `server/dashboard.test.js` (17 items, new file): summary totals sum every project plus Uncategorized (and are zero with no counts); entries carry one card per project in order, add the Uncategorized card only when uncategorized tickets exist, and start a project with no counts at zero; search filters by name substring case-insensitively and an empty query keeps all; the default sort is most waiting first and sorting covers in progress, done and A–Z without mutating the input; the component renders the summary strip before the cards, cards carry a progress bar, labeled counts and Open, Uncategorized is a dashed card with a no-project badge, search/sort/clear-search are present, no page title is added and the old rows are gone, the title bar carries "+ New ticket" on the Dashboard only, and the layout holds at ≤720px.
 - Frontend browser verification was not possible (no headless browser on the VM); only `tsc` + `vite build` were run. The Tester verifies the Dashboard in the browser after deploy (summary strip, cards, search/sort, "+ New ticket", mobile width).
+
+## 23. Ticket Detail Redesign: Two Columns, Description First, the Move as Buttons
+
+Implements the UI&UX prototype "Ticket detail redesign — recommendations" (Document, Prototype category; interactive reference `ticket-detail-redesign-prototype.html` in the same category; design ticket `ddf206f8` already delivered). This is the third of 9 redesign tickets (Dashboard and Tickets list delivered first); the pattern holds — attention first (journey line + handoff callout), the action visible without hunting (target buttons), facts out of the reading flow (right rail).
+
+### The page
+
+A one-line journey summary sits under the title bar — the current status plus every legal target with its role, computed from the same `targets` list the form already receives ("In test · you can move it to Deploy (Tester) or Require clarification (PM)."). Below it, two columns on desktop (single column on mobile, rail stacked below): the main column reads top-down — description lead, latest handoff as a callout, the move, history — and the right rail holds "About this ticket" plus the PM project form.
+
+The description moves out of the metadata grid into a lead paragraph at the top of the main column; the grid shrinks to the facts rail (Workflow, Source, Project, Created by, Assignee, Developer, Created, plus Updated and the ticket id). The latest handoff is a bordered callout (blue left edge) with the handoff text and a one-line "Handed off … by … (role)"; the history keeps the full record, the callout is the current instruction.
+
+The legal targets render as visible buttons (label + role), so the options are seen without opening a dropdown. Clicking one sets the same `targetStatus` state and submit path as the old select; only then do the fields appear — Reason and Handoff with required/optional marking per the target, Evidence always visible but clearly optional — and the submit button names the move ("Apply: Deploy"). An empty required field is blocked on the client with the same message the server would return (server validation stays the authority).
+
+People resolve to display names via the public user directory (below); the short id is the fallback, as before. History is 4 columns (When / Who / From → To / Result); clicking a row expands its Reason and Handoff inline.
+
+Unchanged on purpose: the title bar (path + ticket title + status badge + Refresh, no duplicate titles anywhere), the sidebar, routing, the transition submit behavior, server validation, the "no legal transition" state, and the loading state. At ≤720px the rail stacks below the main column.
+
+### Names need a directory every viewer can read
+
+The detail page resolves ids for every viewer, not just admins, but the only users endpoint was admin-only (`GET /api/admin/users`). So this ticket adds `GET /api/users` — any authenticated account may read it — returning only `{id, username, display_name}` per account (`auth.listPublicDirectory`, tested to return exactly those three fields: no roles, no project assignment, no key status, no password hash). The frontend loads it once per session when the first ticket is opened (`App` holds it, `TicketDetail` receives it as `users`); a failure never blocks the ticket — the short id is the fallback.
+
+### No migration
+
+No schema change: this is a frontend change plus one read-only endpoint. No migration was added for this ticket.
+
+### Frontend
+
+- `src/helpers.ts`: the pure Ticket detail helpers — `buildJourneyLine` (status + targets, Oxford comma for three or more, status alone with no targets), `resolveUserName` (display name, username, short id, '—' for null), `missingTransitionField` (reason before handoff, mirroring the server order), `missingFieldMessage` (the server wording with status labels). As with the Dashboard helpers, the server tests require this module directly and exercise the exact code the component runs.
+- `src/TicketDetail.tsx`: rewritten around the helpers — journey line, two-column layout, description lead, handoff callout, target buttons with conditional fields, 4-column expandable history, right rail. No page title is added (the title bar owns it) and the old `.detail-grid` description row, the "Move to" select and the 7-column history table are gone.
+- `src/App.tsx`: loads the public directory once per session when the first ticket is opened and passes it to TicketDetail as `users`.
+- `src/api.ts`: `PublicUser` type and `api.listUsers()` for `GET /api/users`.
+- `server/auth.js`: `listPublicDirectory` (exported); `server/index.js`: the `GET /api/users` route.
+- `src/index.css`: `.detail-layout` / `.detail-columns` (1fr + 250px rail), `.lead`, `.callout` (blue left edge), `.target-btns` (`.on` selected), `.req` (amber required mark), `.hist-row` / `.hist-detail`, and a ≤720px block that stacks the rail below the main column.
+
+### Tests
+
+- `server/ticketDetail.test.js` (16 items, new file): journey line with zero/one/two/three targets; name resolution (display name, username, short id, null); missing-field order (reason first) and messages; the public directory returns exactly id/username/display_name; the component renders the journey line, two columns, description lead, handoff callout, target buttons with roles, conditional fields, "Apply: <move>", 4-column expandable history, rail with names plus the PM project form; App loads the directory once and passes it down; api exposes listUsers and the server serves GET /api/users; CSS carries the layout, callout, buttons, history rows and the mobile stack.
+- Frontend browser verification was not possible (no headless browser on the VM); only `tsc` + `vite build` were run. The Tester verifies the Ticket detail in the browser after deploy (journey line, two columns, callout, target buttons with conditional fields, history expansion, names, mobile width).

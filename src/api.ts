@@ -149,6 +149,15 @@ export interface DocumentItem {
   updated_at: string;
 }
 
+// Public directory entry (ticket 978e4721): the ticket detail page
+// resolves user ids to display names. Only the three display fields —
+// no roles, no key status.
+export interface PublicUser {
+  id: string;
+  username: string;
+  display_name: string;
+}
+
 export interface User {
   id: string;
   username: string;
@@ -403,6 +412,9 @@ export const api = {
       { method: 'POST', body: JSON.stringify({ workflow_id: workflowId }) }
     ),
   adminOverview: () => request<AdminOverview>('/api/admin/overview'),
+  // Public directory: any authenticated account may read it (ticket
+  // 978e4721 — ticket detail name resolution).
+  listUsers: () => request<PublicUser[]>('/api/users'),
   adminListUsers: () => request<User[]>('/api/admin/users'),
   adminCreateUser: (payload: { username: string; password?: string; display_name: string; roles: string[]; kind?: string }) =>
     request<User>('/api/admin/users', { method: 'POST', body: JSON.stringify(payload) }),
