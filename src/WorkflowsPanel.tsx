@@ -23,15 +23,18 @@ type RolesMap = Workflow['roles'];
 
 interface WorkflowsPanelProps {
   projects: Project[];
-  // The already-loaded ticket list, for the per-workflow usage count
-  // (ticket b56b1145): a prop, no API change.
-  tickets: Ticket[];
   // Title-bar "+ New workflow" (App owns the button): each increment
   // opens a fresh create form.
   createRequest: number;
   // The panel reports the editor open state so App can hide the
   // title-bar create action while the editor is open.
   onFormOpenChange?: (open: boolean) => void;
+  // The panel reports a create request as consumed the moment it
+  // opens the form, so App resets the counter to 0 (review return,
+  // ticket b56b1145): without this, the counter stays >= 1 in App
+  // state and the panel's mount effect re-opens a blank create form
+  // on every return to the page.
+  onCreateRequestConsumed?: () => void;
 }
 
 const STATE_CODE_RE = /^[a-z][a-z0-9_]*$/;
@@ -44,8 +47,15 @@ function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value));
 }
 
-export default function WorkflowsPanel({ projects, tickets, createRequest, onFormOpenChange }: WorkflowsPanelProps) {
+export default function WorkflowsPanel({ projects, createRequest, onFormOpenChange, onCreateRequestConsumed }: WorkflowsPanelProps) {
   const [workflows, setWorkflows] = useState<Workflow[]>([]);
+  // The full unfiltered ticket list, for the per-workflow usage count
+  // (review return, ticket b56b1145): the panel loads it itself on
+  // mount, because App's ticket list is only loaded on entering the
+  // Tickets list view and is filtered by the sidebar project filter —
+  // a fresh session going straight to Admin > Workflows saw counts of
+  // 0, and a project filter silently undercounted.
+  const [allTickets, setAllTickets] = useState<Ticket[]>([]);
   const [selectedProject, setSelectedProject] = useState('all');
   // The active workflow for every project at once (ticket b56b1145):
   // the per-project line and the "Active for" column both read this map.
@@ -126,10 +136,30 @@ export default function WorkflowsPanel({ projects, tickets, createRequest, onFor
   // map (null while "All projects" is selected).
   const activeWorkflow = selectedProject === 'all' ? null : activeByProject[selectedProject] ?? null;
 
-  // Title-bar "+ New workflow" (ticket b56b1145): App increments
-  // createRequest; each increment opens a fresh create form.
+  // The usage counts load once, on mount, unfiltered: the counts
+  // only change when tickets are created or move workflows, and both
+  // happen on other pages — returning here remounts the panel. A
+  // failure leaves the counts at 0 without blocking the page (the
+  // workflows themselves load through load(), with its error path).
   useEffect(() => {
-    if (createRequest > 0) openCreate();
+    let cancelled = false;
+    api.listTickets()
+      .then((rows) => { if (!cancelled) setAllTickets(rows); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
+  // Title-bar "+ New workflow" (ticket b56b1145): App increments
+  // createRequest; each increment opens a fresh create form — and the
+  // request is consumed at once, so App resets the counter to 0. The
+  // counter is a pending request, not a latch: without the reset, the
+  // mount effect would re-open a blank create form on every return
+  // to the page (review return, ticket b56b1145).
+  useEffect(() => {
+    if (createRequest > 0) {
+      openCreate();
+      onCreateRequestConsumed?.();
+    }
     // openCreate is intentionally not a dependency: the effect runs on
     // the counter, not on the handler identity.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -635,7 +665,7 @@ export default function WorkflowsPanel({ projects, tickets, createRequest, onFor
                 </td>
                 <td>{renderFlowStrip(w.states || [])}</td>
                 <td>{activeProjectsForWorkflow(activeByProject, w.id, projects).join(', ') || '—'}</td>
-                <td>{countTicketsByWorkflow(tickets, w.id)}</td>
+                <td>{countTicketsByWorkflow(allTickets, w.id)}</td>
                 <td>
                   <button className="primary small" type="button" onClick={() => openEdit(w)} disabled={busy}>
                     Edit

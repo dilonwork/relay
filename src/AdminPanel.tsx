@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from './api';
-import type { AdminOverview, Project, Ticket, User, Workflow } from './api';
+import type { AdminOverview, Project, User, Workflow } from './api';
 import type { AdminTab } from './adminNav';
 import AdminApiKeys from './AdminApiKeys';
 import AdminOverviewPanel from './AdminOverview';
@@ -19,21 +19,21 @@ import WorkflowsPanel from './WorkflowsPanel';
 export default function AdminPanel({
   tab,
   onTabChange,
-  tickets,
   workflowsCreateRequest,
   onWorkflowsFormOpenChange,
+  onWorkflowsCreateRequestConsumed,
 }: {
   tab: AdminTab;
   onTabChange: (tab: AdminTab) => void;
-  // The already-loaded ticket list, for the Workflows usage counts
-  // (ticket b56b1145): passed through, no API change.
-  tickets: Ticket[];
   // Title-bar "+ New workflow" (ticket b56b1145): App increments this
   // counter; the Workflows sub-page opens a fresh create form per click.
   workflowsCreateRequest: number;
   // The Workflows sub-page reports its editor open state so App can
   // hide the title-bar create action while the editor is open.
   onWorkflowsFormOpenChange: (open: boolean) => void;
+  // The Workflows sub-page reports a create request as consumed, so
+  // App resets the counter (review return, ticket b56b1145).
+  onWorkflowsCreateRequestConsumed: () => void;
 }) {
   const [overview, setOverview] = useState<AdminOverview | null>(null);
   const [users, setUsers] = useState<User[]>([]);
@@ -96,9 +96,9 @@ export default function AdminPanel({
       ) : tab === 'workflows' ? (
         <WorkflowsPanel
           projects={projects}
-          tickets={tickets}
           createRequest={workflowsCreateRequest}
           onFormOpenChange={onWorkflowsFormOpenChange}
+          onCreateRequestConsumed={onWorkflowsCreateRequestConsumed}
         />
       ) : (
         <AdminApiKeys
