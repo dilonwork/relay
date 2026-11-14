@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, getToken, onUnauthorized, setToken } from './api';
-import type { LegalTransition, Project, QueueEntry, RoleAgent, Ticket, TicketWithHistory, User, Workflow } from './api';
+import type { LegalTransition, Project, PublicUser, QueueEntry, RoleAgent, Ticket, TicketWithHistory, User, Workflow } from './api';
 import { QUEUE_TABS, ROLE_LABELS, countTicketsByProject, isTerminalFor, journeyFromTransitions, stateLabelFor, statusLabel, targetsForUser } from './helpers';
 import { ADMIN_TABS, adminTabForView, adminViewForTab, isAdminView } from './adminNav';
 import type { AdminTab } from './adminNav';
@@ -77,6 +77,12 @@ export default function App() {
   const [detailMeta, setDetailMeta] = useState<LegalTransition[]>([]);
   const [detailMetaLoading, setDetailMetaLoading] = useState(false);
   const metaCacheRef = useRef<Record<string, LegalTransition[]>>({});
+  // Public directory for the ticket detail page (ticket 978e4721):
+  // resolves actor ids to display names. Loaded once per session,
+  // when the first ticket is opened; an empty list means "not loaded
+  // yet", and the detail falls back to short ids until it arrives.
+  const [detailUsers, setDetailUsers] = useState<PublicUser[]>([]);
+  const detailUsersLoadedRef = useRef(false);
   // Hash sync (below) writes with replaceState on its first run, so the
   // initial load does not add a history entry; later view changes use
   // pushState, so Back/Forward step through views.
@@ -200,6 +206,14 @@ export default function App() {
       setHandoff('');
       setArtifactsText('');
       setAssignProjectId(data.project_id || '');
+      // Public directory for name resolution on the detail page
+      // (ticket 978e4721): loaded once, fire-and-forget — the detail
+      // falls back to short ids until it arrives, and a failure here
+      // never blocks the ticket itself.
+      if (!detailUsersLoadedRef.current) {
+        detailUsersLoadedRef.current = true;
+        api.listUsers().then(setDetailUsers).catch(() => {});
+      }
       // The transition table follows the ticket's own workflow (ch. 15):
       // the built-in table for a ticket with no workflow, that
       // workflow's table otherwise.
@@ -1084,6 +1098,7 @@ export default function App() {
           handoff={handoff}
           artifactsText={artifactsText}
           busy={busy}
+          users={detailUsers}
           onAssignProjectIdChange={setAssignProjectId}
           onTargetStatusChange={setTargetStatus}
           onReasonChange={setReason}

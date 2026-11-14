@@ -103,6 +103,18 @@ app.get('/api/meta/transitions', async (req, res) => {
   }
 });
 
+// Public user directory (ticket 978e4721): any authenticated account
+// may read it — the ticket detail page resolves ids to display names
+// for every viewer. Only id/username/display_name; see
+// auth.listPublicDirectory.
+app.get('/api/users', async (req, res) => {
+  try {
+    res.json(await auth.listPublicDirectory(db));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post('/api/tickets', async (req, res) => {
   try {
     const result = await tickets.createTicket(db, {

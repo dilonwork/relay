@@ -232,7 +232,12 @@ account or password anywhere in the code.
 - **Ticket detail is its own view:** clicking a ticket (from the list, a
   Gantt bar or the claimable queue) opens the detail view with its full
   transition history and handoff notes; a back link returns to the
-  Tickets sub-page it came from.
+  Tickets sub-page it came from. The detail reads top-down in a main
+  column — description first, latest handoff as a callout, the move as
+  target buttons, history — with the ticket facts and the PM project
+  form in a right rail; people show as names (resolved from the public
+  user directory, `GET /api/users`), and history rows expand for reason
+  and handoff.
 - **URL-hash routing:** every view has a URL hash (`#/dashboard`,
   `#/tickets/list`, `#/tickets/gantt`, `#/new`, `#/documents`, `#/projects`,
   `#/admin/overview|users|workflows|keys`, `#/ticket/<id>`), so refresh
@@ -277,8 +282,8 @@ onboarding document regenerating from a live workflow edit, and the
 project prompt bundle (whole project context, base-URL resolution,
 no token in the bundle).
 
-326 tests in total: state machine 21, tickets 36, projects 16, onboarding 12, public base URL 5, auth 21,
-admin 7, API keys 8, monitor 18, workflows 30, quick-create builder 11, documents 24, document tickets 12, document render 18, gantt helpers 14, admin nav 5, view hash 8, migrations 33, role lists 4, title bar 6, dashboard redesign 17.
+342 tests in total: state machine 21, tickets 36, projects 16, onboarding 12, public base URL 5, auth 21,
+admin 7, API keys 8, monitor 18, workflows 30, quick-create builder 11, documents 24, document tickets 12, document render 18, gantt helpers 14, admin nav 5, view hash 8, migrations 33, role lists 4, title bar 6, dashboard redesign 17, ticket detail redesign 16.
 
 ## Accounts & authentication
 

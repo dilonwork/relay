@@ -465,6 +465,70 @@ export function shortId(id: string | null): string {
   return id.length > 8 ? id.slice(0, 8) : id;
 }
 
+// Ticket detail (ticket 978e4721, UI&UX prototype "Ticket detail
+// redesign — recommendations"): two-column layout, description first,
+// the move as visible target buttons, names not ids. These pure
+// helpers are the single source for that layout; TicketDetail renders
+// from them and the server tests exercise them directly.
+
+export interface JourneyTarget {
+  label: string;
+  role: string;
+}
+
+// One-line "what happens next" under the title bar: the current status
+// plus every legal target with its role. With no legal target the line
+// is just the status — the "no legal transition" note below explains.
+export function buildJourneyLine(statusLabel: string, targets: JourneyTarget[]): string {
+  if (targets.length === 0) return statusLabel;
+  const parts = targets.map((t) => `${t.label} (${t.role})`);
+  const joined =
+    parts.length === 1
+      ? parts[0]
+      : parts.length === 2
+        ? `${parts[0]} or ${parts[1]}`
+        : `${parts.slice(0, -1).join(', ')}, or ${parts[parts.length - 1]}`;
+  return `${statusLabel} · you can move it to ${joined}.`;
+}
+
+// Resolve a user id to a display name from the public directory;
+// falls back to the username, then to the short id as today.
+export function resolveUserName(
+  users: { id: string; username: string; display_name: string }[],
+  id: string | null | undefined
+): string {
+  if (!id) return '—';
+  const found = users.find((u) => u.id === id);
+  if (!found) return shortId(id);
+  return found.display_name || found.username || shortId(id);
+}
+
+// Which required field is still empty for the selected move, if any.
+// The server checks reason before handoff (stateMachine.js), so this
+// mirrors that order: a missing reason is reported first.
+export function missingTransitionField(
+  target: { requiresReason: boolean; requiresHandoff: boolean } | undefined,
+  reason: string,
+  handoff: string
+): 'reason' | 'handoff' | null {
+  if (!target) return null;
+  if (target.requiresReason && !reason.trim()) return 'reason';
+  if (target.requiresHandoff && !handoff.trim()) return 'handoff';
+  return null;
+}
+
+// The client-side empty-required message mirrors the server message
+// (stateMachine.js validateTransitionFor), with status labels in place
+// of status codes: the same message, earlier.
+export function missingFieldMessage(
+  fromLabel: string,
+  toLabel: string,
+  field: 'reason' | 'handoff'
+): string {
+  if (field === 'reason') return `Moving from ${fromLabel} to ${toLabel} requires a reason.`;
+  return `Moving from ${fromLabel} to ${toLabel} requires a handoff note describing what was produced for the next role.`;
+}
+
 // Legal targets for one role, from the server's transition table.
 // The server re-validates every attempt; this only shapes the dropdown.
 // isTerminal decides whether Cancel is offered: the PM may cancel from

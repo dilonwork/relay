@@ -143,6 +143,17 @@ async function listUsersWithKeyStatus(db) {
   });
 }
 
+// Public directory (ticket 978e4721): the ticket detail page resolves
+// actor/creator/assignee/developer ids to display names for every
+// viewer, not just admins, so any authenticated account may read it.
+// Only the three display fields are returned — no roles, no project
+// assignment, no key status, no password hash (publicUser already
+// strips the hash; this strips the rest too).
+async function listPublicDirectory(db) {
+  const users = await listUsers(db);
+  return users.map((u) => ({ id: u.id, username: u.username, display_name: u.display_name }));
+}
+
 function validateNewAccount({ username, password, roles, kind }) {
   if (!validUsername(username)) {
     return { ok: false, status: 400, error: 'bad_request', message: 'Username must be 2-64 characters of letters, digits, dot, underscore or hyphen.' };
@@ -569,6 +580,7 @@ module.exports = {
   findUserById,
   listUsers,
   listUsersWithKeyStatus,
+  listPublicDirectory,
   createUser,
   createAgent,
   createAgentTx,
