@@ -60,6 +60,24 @@ async function main() {
     }
   });
 
+  await ok('the vite dev proxy preserves the request Host (ticket 3b436bdd)', async () => {
+    // The backend uses the request Host as the bundle's public base
+    // URL fallback, so the dev server's /api proxy must pass the
+    // browser's Host through. With changeOrigin: true the backend
+    // sees localhost:<backendPort> and the bundle prints a localhost
+    // endpoint an external agent cannot reach.
+    const fs = require('node:fs');
+    const path = require('node:path');
+    const config = fs.readFileSync(path.join(__dirname, '..', 'vite.config.ts'), 'utf8');
+    const proxy = config.match(/proxy:\s*\{([\s\S]*?)\n      \}/);
+    assert.ok(proxy, 'vite.config.ts must define a dev proxy for /api');
+    // Strip line comments first: the explanation above the setting
+    // mentions the old value in prose, only the code counts.
+    const proxyBody = proxy[1].replace(/\/\/.*$/gm, '');
+    assert.match(proxyBody, /changeOrigin:\s*false/, 'the /api proxy must not rewrite the Host header');
+    assert.doesNotMatch(proxyBody, /changeOrigin:\s*true/, 'the /api proxy must not rewrite the Host header to localhost');
+  });
+
   console.log(`\n${passed} public base URL tests passed.`);
 }
 

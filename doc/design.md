@@ -1088,6 +1088,8 @@ The bundle must print the platform's base URL — the address an external agent 
 
 The routes pass the origin (`req.protocol + '://' + req.get('host')`) — not a base URL — so a configured `PUBLIC_URL` still wins. The API lives under the same origin as the app (`/api/...`), so the base URL is the app origin, not a separate API host.
 
+The request-origin fallback only works if the browser's Host actually reaches the backend. The deployed app runs behind the Vite dev server, whose `/api` proxy must preserve the Host (`changeOrigin: false` in `vite.config.ts`); with the origin rewritten the backend sees `localhost:<backendPort>` and the bundle prints a localhost endpoint no external agent can reach (ticket 3b436bdd). The proxy change is pinned by a test in `server/publicUrl.test.js`.
+
 ### Token handling: the bundle carries no key at all (judgment call)
 
 The full key must never be embedded in a generated or stored document — and the bundle goes further than the existing rule: it carries **no key value at all**, not even the masked prefix (the masked key is already in the package's `key` field). The bundle's "Connecting" section says how to authenticate (send the key in the `X-API-Key` header on every request) and where the key came from ("handed to you with this package — shown once when the project was created and not written in this document"). The full key appears in exactly one place: the creation response (each agent's `key` field) and the one-time keys box the Projects panel shows after external creation. Regenerating the package later via the GET endpoint returns the same bundle shape with no key in it — a regenerated bundle cannot leak a key it never contained. The tests assert the bundle contains neither the agent's full key nor its masked prefix.
@@ -1103,7 +1105,7 @@ No schema change: the bundle is generated on demand from the live definitions an
 ### Frontend
 
 - `src/api.ts`: `RoleAgent.onboarding` and `OnboardingPackage` gain `prompt_bundle: { markdown, generated_at, base_url }`.
-- `src/OnboardingPanel.tsx`: the package display gains section 3, "Project prompt bundle (shareable)", rendering the bundle markdown (sanitized, same renderer as the document); the chat-room section becomes section 4. The intro paragraph names the bundle.
+- `src/OnboardingPanel.tsx`: the package display gains section 3, "Project prompt bundle (shareable)", rendering the bundle markdown (sanitized, same renderer as the document); the chat-room section becomes section 4. The intro paragraph names the bundle. Section 3 has a Copy button (ticket 3b436bdd) that copies the whole bundle markdown to the clipboard: Clipboard API first, with a textarea + `execCommand` fallback, because the deployed site is plain http, not a secure context, so `navigator.clipboard` is unavailable there. The button shows "Copied" for two seconds on success; when both paths fail it shows a notice to select the bundle text and copy it manually.
 - `src/ProjectsPanel.tsx`: the creation keys-box note now mentions the bundle alongside the live onboarding document.
 
 ### Endpoints
@@ -1117,5 +1119,5 @@ No schema change: the bundle is generated on demand from the live definitions an
 
 - `server/onboarding.test.js` (12 items, was 7): the bundle assembles the whole project context (purpose, flow, per-role states with responsibilities, transitions with handoff flags, terminal states, all eight standing rules, base URL, endpoints, assignment, no token); the bundle uses the request origin when no base URL is configured; the bundle reflects a workflow edit on regeneration; the package carries the bundle with no token in it (neither the full key nor the masked prefix); the bundle rejects internal and unknown projects.
 - `server/projects.test.js` (16 items, was 15): external creation attaches the same prompt bundle to every role agent (identical markdown, origin as base URL, no token).
-- `server/publicUrl.test.js` (4 items, new file): explicit baseUrl wins with trailing slashes trimmed; `PUBLIC_URL` beats the request origin; the request origin is used when nothing is configured; the local default uses `FRONTEND_PORT` or 3000.
+- `server/publicUrl.test.js` (5 items): explicit baseUrl wins with trailing slashes trimmed; `PUBLIC_URL` beats the request origin; the request origin is used when nothing is configured; the local default uses `FRONTEND_PORT` or 3000; the Vite dev proxy preserves the request Host (`changeOrigin: false`), so the request-origin fallback resolves to the external address instead of localhost.
 - Frontend browser verification was not possible (no headless browser on the VM); only `tsc` + `vite build` were run.

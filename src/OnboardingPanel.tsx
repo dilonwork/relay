@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from './api';
 import type { OnboardingPackage, Project, User } from './api';
 import { ROLE_LABELS, formatTime } from './helpers';
@@ -26,6 +26,13 @@ export default function OnboardingPanel({ users, projects }: OnboardingPanelProp
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [copied, setCopied] = useState(false);
+  const copyTimer = useRef<number | null>(null);
+
+  // Clear the "Copied" feedback timer when the panel unmounts.
+  useEffect(() => () => {
+    if (copyTimer.current !== null) window.clearTimeout(copyTimer.current);
+  }, []);
 
   // The role agents of the selected project, in creation order.
   const projectAgents = users.filter((u) => u.kind === 'agent' && u.project_id === projectId);
@@ -39,6 +46,7 @@ export default function OnboardingPanel({ users, projects }: OnboardingPanelProp
     setLoading(true);
     setError('');
     setNotice('');
+    setCopied(false);
     try {
       setPkg(await api.getOnboardingPackage(pid, r));
     } catch (err) {
@@ -75,6 +83,51 @@ export default function OnboardingPanel({ users, projects }: OnboardingPanelProp
     if (!projectId || !role) return;
     await loadPackage(projectId, role);
     setNotice('Document regenerated from the live workflow and role definitions.');
+  }
+
+  // Fallback copy for browsers where the Clipboard API is
+  // unavailable — the deployed site is plain http, not a secure
+  // context, so navigator.clipboard is undefined there. Selects a
+  // temporary textarea and copies with execCommand; throws when the
+  // copy does not take.
+  function copyTextFallback(text: string) {
+    const area = document.createElement('textarea');
+    area.value = text;
+    area.setAttribute('readonly', '');
+    area.style.position = 'fixed';
+    area.style.opacity = '0';
+    document.body.appendChild(area);
+    area.select();
+    try {
+      if (!document.execCommand('copy')) throw new Error('execCommand copy failed');
+    } finally {
+      document.body.removeChild(area);
+    }
+  }
+
+  // Copy the whole project prompt bundle markdown to the clipboard
+  // (ticket 3b436bdd): Clipboard API first, textarea fallback when
+  // it is unavailable or fails, manual-copy notice when both fail.
+  async function handleCopyBundle() {
+    if (!pkg) return;
+    const text = pkg.prompt_bundle.markdown;
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        copyTextFallback(text);
+      }
+    } catch {
+      try {
+        copyTextFallback(text);
+      } catch {
+        setNotice('Copy failed — select the bundle text and copy it manually.');
+        return;
+      }
+    }
+    setCopied(true);
+    if (copyTimer.current !== null) window.clearTimeout(copyTimer.current);
+    copyTimer.current = window.setTimeout(() => setCopied(false), 2000);
   }
 
   return (
@@ -163,7 +216,10 @@ export default function OnboardingPanel({ users, projects }: OnboardingPanelProp
                 <p className="muted">
                   Generated {formatTime(pkg.prompt_bundle.generated_at)} from the live project, workflow
                   and role definitions. One document with the whole project context — hand this to the
-                  external user as-is; it carries no token (the key travels with the creation handoff).
+                  external user as-is; it carries no token (the key travels with the creation handoff).{' '}
+                  <button type="button" className="link" onClick={() => void handleCopyBundle()} disabled={loading}>
+                    {copied ? 'Copied' : 'Copy bundle'}
+                  </button>
                 </p>
                 <div
                   className="document-markdown"
