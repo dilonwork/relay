@@ -8,6 +8,11 @@ import {
   isValidReplanReason,
 } from './documentTickets';
 import {
+  countDocumentsByCategory,
+  groupDocumentsByCategory,
+  visibleDocuments,
+} from './helpers';
+import {
   detectDocumentKind,
   HTML_PREVIEW_SANDBOX,
   renderMarkdownToHtml,
@@ -42,6 +47,12 @@ interface DocumentsPanelProps {
   canMutate: boolean;
   // Bumped by App's header Refresh button.
   refreshKey: number;
+  // Bumped by App's title-bar "+ New document" action; every bump
+  // opens a fresh create form (ticket b2d67623).
+  createRequest: number;
+  // The panel reports the create form's open state so App hides the
+  // title-bar action while the form is open.
+  onCreateOpenChange?: (open: boolean) => void;
   onOpenTicket: (id: string) => void;
   onError: (msg: string) => void;
   onNotice: (msg: string) => void;
@@ -122,6 +133,8 @@ export default function DocumentsPanel(props: DocumentsPanelProps) {
     isPm,
     canMutate,
     refreshKey,
+    createRequest,
+    onCreateOpenChange,
     onOpenTicket,
     onError,
     onNotice,
@@ -134,6 +147,13 @@ export default function DocumentsPanel(props: DocumentsPanelProps) {
   // Client-side category filter: the list loads per project filter
   // and narrows here, so switching categories needs no request.
   const [categoryFilter, setCategoryFilter] = useState('all');
+  // Client-side title search: substring, case-insensitive, no request.
+  const [query, setQuery] = useState('');
+  // Which groups the user collapsed by hand. Groups default to
+  // open for Prototype and collapsed for everything else; a group
+  // with no override follows that default, so the default never
+  // fights a toggle the user already made.
+  const [collapsedOverrides, setCollapsedOverrides] = useState<Record<string, boolean>>({});
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   // New-document form.
@@ -180,6 +200,23 @@ export default function DocumentsPanel(props: DocumentsPanelProps) {
     loadDocuments();
   }, [loadDocuments, refreshKey]);
 
+  // Title-bar "+ New document" (ticket b2d67623): App bumps
+  // createRequest per click, and the panel opens a fresh create form
+  // per bump. The counter, not a boolean, so two clicks in a row
+  // (open, close, open) still fire.
+  useEffect(() => {
+    if (createRequest > 0) openCreate();
+    // openCreate is defined below; the effect only needs to run when
+    // the counter changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [createRequest]);
+
+  // Report the create form's open state so App hides the title-bar
+  // action while the form is open.
+  useEffect(() => {
+    onCreateOpenChange?.(showCreate);
+  }, [showCreate, onCreateOpenChange]);
+
   function categoryNameFor(categoryId: string): string {
     return categories.find((c) => c.id === categoryId)?.name || '—';
   }
@@ -189,14 +226,38 @@ export default function DocumentsPanel(props: DocumentsPanelProps) {
     return projects.find((p) => p.id === projectId)?.name || '—';
   }
 
-  const visible = categoryFilter === 'all'
-    ? documents
-    : documents.filter((d) => d.category_id === categoryFilter);
+  // The list the page shows: category chip + title search, both
+  // client-side over the documents already loaded.
+  const visible = visibleDocuments(documents, categoryFilter, query);
+  const categoryCounts = countDocumentsByCategory(documents);
+  const groups = groupDocumentsByCategory(visible, categories);
+
+  // A group is collapsed when the user collapsed it by hand, or —
+  // with no override — when it is not the Prototype group: the
+  // Prototype group opens expanded by default, the rest start
+  // collapsed.
+  function isGroupCollapsed(group: { categoryId: string; name: string }): boolean {
+    const override = collapsedOverrides[group.categoryId];
+    if (override !== undefined) return override;
+    return group.name !== 'Prototype';
+  }
 
   // The default category for a new document is Prototype when it
   // exists, otherwise the first category in the list.
   const defaultCategoryId =
     categories.find((c) => c.name === 'Prototype')?.id || categories[0]?.id || '';
+
+  // Open the create form, pre-filled the same way the old in-page
+  // button did: Prototype as the category, and the project from the
+  // current project filter when it names one, else the first project.
+  // The submit stays disabled until a project is picked (ticket
+  // 8f52044c). The form's own fields keep their current values on
+  // reopen — a cancelled draft is not wiped.
+  function openCreate() {
+    setShowCreate(true);
+    setNewCategoryId(defaultCategoryId);
+    setNewProjectId(projectFilter !== 'all' && projectFilter !== 'none' ? projectFilter : (projects[0]?.id || ''));
+  }
 
   async function handleCreateCategory(e: React.FormEvent) {
     e.preventDefault();
@@ -377,307 +438,331 @@ export default function DocumentsPanel(props: DocumentsPanelProps) {
   return (
     <>
       <div className="card">
-        <p className="muted">
-          Documents produced by the platform, filed by category. A Prototype document can be sent
-          to implementation as a new ticket, or marked Not OK to open a re-planning ticket.
-        </p>
-        <div className="form-row">
-          <div>
-            <label className="field" htmlFor="doc-category-filter">Category</label>
-            <select
-              id="doc-category-filter"
-              value={categoryFilter}
-              onChange={(e) => setCategoryFilter(e.target.value)}
-            >
-              <option value="all">All categories</option>
-              {categories.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="field" htmlFor="doc-project-filter">Project</label>
-            <select
-              id="doc-project-filter"
-              value={projectFilter}
-              onChange={(e) => onProjectFilterChange(e.target.value)}
-            >
-              <option value="all">All projects</option>
-              <option value="none">Unassigned</option>
-              {projects.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-          </div>
-          {canMutate && (
-            <div>
-              <label className="field">Add category</label>
-              {!showCategory ? (
-                <button type="button" className="link" onClick={() => setShowCategory(true)} title="Add a category">
-                  + New category
-                </button>
-              ) : (
-                <form onSubmit={handleCreateCategory}>
-                  <input
-                    type="text"
-                    value={newCategoryName}
-                    onChange={(e) => setNewCategoryName(e.target.value)}
-                    placeholder="Category name"
-                    aria-label="New category name"
-                  />
-                  <button className="primary" type="submit" disabled={busy || !newCategoryName.trim()}>
-                    Add
-                  </button>{' '}
-                  <button type="button" className="link" onClick={() => { setShowCategory(false); setNewCategoryName(''); }}>
-                    Cancel
-                  </button>
-                </form>
-              )}
+        {/* New-document form (ticket b2d67623): the separate
+            "File a document" card is gone — the form now opens as a
+            panel on this page, from the title-bar "+ New document"
+            action. Fields, validation and submit behavior are
+            unchanged. */}
+        {canMutate && showCreate && (
+          <form onSubmit={handleCreate}>
+            <h3 className="section">New document</h3>
+            <div className="form-row">
+              <div>
+                <label className="field" htmlFor="doc-new-title">Title</label>
+                <input
+                  id="doc-new-title"
+                  type="text"
+                  value={newTitle}
+                  onChange={(e) => setNewTitle(e.target.value)}
+                  placeholder="Document title"
+                />
+              </div>
+              <div>
+                <label className="field" htmlFor="doc-new-category">Category</label>
+                <select
+                  id="doc-new-category"
+                  value={newCategoryId}
+                  onChange={(e) => setNewCategoryId(e.target.value)}
+                >
+                  {categories.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="field" htmlFor="doc-new-project">Project (required)</label>
+                <select
+                  id="doc-new-project"
+                  value={newProjectId}
+                  onChange={(e) => setNewProjectId(e.target.value)}
+                >
+                  {projects.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
+            <label className="field" htmlFor="doc-new-content">Content (Markdown)</label>
+            <textarea
+              id="doc-new-content"
+              value={newContent}
+              onChange={(e) => setNewContent(e.target.value)}
+              placeholder="Paste the document content here, or upload a .md / .txt file below."
+            />
+            <label className="field" htmlFor="doc-new-file">Or upload a file (.md / .txt)</label>
+            <input
+              id="doc-new-file"
+              type="file"
+              accept=".md,.markdown,.txt"
+              onChange={handleFileChange}
+            />
+            {uploadedName && <p className="muted">Loaded from {uploadedName}.</p>}
+            <button className="primary" type="submit" disabled={busy || !newTitle.trim() || !newCategoryId || !newProjectId}>
+              File document
+            </button>{' '}
+            <button
+              type="button"
+              className="link"
+              onClick={() => {
+                setShowCreate(false);
+                setNewTitle('');
+                setNewContent('');
+                setUploadedName('');
+              }}
+            >
+              Cancel
+            </button>
+          </form>
+        )}
+
+        {/* Category chips with counts (ticket b2d67623): the Category
+            select is gone — chips are the filing system, and switching
+            one costs no request. The dashed "+ Category" chip opens
+            the same add-category form the filter row used to hold. */}
+        <div className="chiprow" role="group" aria-label="Filter by category">
+          <button
+            type="button"
+            className={categoryFilter === 'all' ? 'chip active' : 'chip'}
+            onClick={() => setCategoryFilter('all')}
+          >
+            All ({documents.length})
+          </button>
+          {categories.map((c) => (
+            <button
+              key={c.id}
+              type="button"
+              className={categoryFilter === c.id ? 'chip active' : 'chip'}
+              onClick={() => setCategoryFilter(c.id)}
+            >
+              {c.name} ({categoryCounts[c.id] ?? 0})
+            </button>
+          ))}
+          {canMutate && (
+            <button type="button" className="chip dashed" onClick={() => setShowCategory(true)} title="Add a category">
+              + Category
+            </button>
           )}
+        </div>
+        {canMutate && showCategory && (
+          <form onSubmit={handleCreateCategory}>
+            <input
+              type="text"
+              value={newCategoryName}
+              onChange={(e) => setNewCategoryName(e.target.value)}
+              placeholder="Category name"
+              aria-label="New category name"
+            />
+            <button className="primary" type="submit" disabled={busy || !newCategoryName.trim()}>
+              Add
+            </button>{' '}
+            <button type="button" className="link" onClick={() => { setShowCategory(false); setNewCategoryName(''); }}>
+              Cancel
+            </button>
+          </form>
+        )}
+
+        {/* Toolbar (ticket b2d67623): search + project filter share one
+            row with the showing count. The Project select stays — the
+            list loads per project filter — but compact, without the
+            labelled form-row field it used to be. */}
+        <div className="documents-toolbar">
+          <input
+            className="documents-search"
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search documents"
+            aria-label="Search documents by title"
+          />
+          <select
+            aria-label="Project filter"
+            value={projectFilter}
+            onChange={(e) => onProjectFilterChange(e.target.value)}
+          >
+            <option value="all">All projects</option>
+            <option value="none">Unassigned</option>
+            {projects.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+          <span className="muted">Showing {visible.length} of {documents.length}</span>
         </div>
 
         {loading && documents.length === 0 ? (
           <p className="muted">Loading documents…</p>
-        ) : visible.length === 0 ? (
+        ) : documents.length === 0 ? (
           <p className="muted">No documents here yet.</p>
+        ) : visible.length === 0 ? (
+          <p className="muted">No documents match.</p>
         ) : (
-          <table>
-            <thead>
-              <tr>
-                <th>Title</th>
-                <th>Category</th>
-                <th>Project</th>
-                <th>Created</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {visible.map((doc) => {
-                const isPrototype = categoryNameFor(doc.category_id) === 'Prototype';
-                const expanded = expandedId === doc.id;
-                return (
-                  <Fragment key={doc.id}>
-                    <tr>
-                      <td>
-                        <button type="button" className="link" onClick={() => setExpandedId(expanded ? null : doc.id)} title={expanded ? 'Hide content' : 'Show content'}>
-                          {doc.title}
-                        </button>{' '}
-                        <ImplementationBadge doc={doc} onOpenTicket={onOpenTicket} />
-                      </td>
-                      <td>
-                        <span className="badge">{categoryNameFor(doc.category_id)}</span>
-                      </td>
-                      <td>{projectNameFor(doc.project_id)}</td>
-                      <td>{new Date(doc.created_at).toLocaleDateString()}</td>
-                      <td>
-                        <button type="button" className="link" onClick={() => handleDownload(doc)}>
-                          Download
-                        </button>
-                        {isPrototype && (
-                          <>
-                            {' '}
-                            <button
-                              type="button"
-                              className="link"
-                              onClick={() => handleImplement(doc)}
-                              disabled={!isPm || implementingId === doc.id || !!doc.implementation_status}
-                              title={
-                                !isPm
-                                  ? 'Only the PM may open an implementation ticket'
-                                  : doc.implementation_status === 'implemented'
-                                    ? 'Already implemented — open the implementation ticket from the badge'
-                                    : doc.implementation_status === 'in_progress'
-                                      ? 'Implementation already in progress — open it from the badge'
-                                      : 'Open a ticket to implement this prototype'
-                              }
-                            >
-                              Implement
-                            </button>
-                            {' '}
-                            <button
-                              type="button"
-                              className="link"
-                              onClick={() => handleNotOk(doc)}
-                              disabled={!isPm || notOkBusy}
-                              title={isPm ? 'Mark this prototype as not OK and open a re-planning ticket' : 'Only the PM may open a re-planning ticket'}
-                            >
-                              Not OK
-                            </button>
-                          </>
-                        )}
-                        {canMutate && (
-                          <>
-                            {' '}
-                            <button type="button" className="link" onClick={() => handleDelete(doc)} disabled={busy}>
-                              Delete
-                            </button>
-                          </>
-                        )}
-                      </td>
-                    </tr>
-                    {expanded && (
-                      <tr>
-                        <td colSpan={5}>
-                          {doc.implementation_status && doc.implementation_ticket_id && (
-                            <p style={{ marginTop: 0 }}>
-                              Implementation:{' '}
-                              <ImplementationBadge doc={doc} onOpenTicket={onOpenTicket} />{' '}
-                              <button type="button" className="link" onClick={() => onOpenTicket(doc.implementation_ticket_id as string)}>
-                                View implementation ticket
-                              </button>
-                            </p>
-                          )}
-                          {renderDocumentContent(doc, isPrototype)}
-                          {isPrototype && notOkId === doc.id && isPm && (
-                            <form
-                              onSubmit={(e) => {
-                                e.preventDefault();
-                                void handleNotOkSubmit(doc);
-                              }}
-                              style={{ marginTop: '1rem' }}
-                            >
-                              <p className="muted">
-                                This prototype is not OK: describe what needs re-planning. Submitting
-                                opens a re-planning ticket on the Prototype flow.
-                              </p>
-                              <label className="field" htmlFor={`doc-not-ok-reason-${doc.id}`}>
-                                What is not OK? (required)
-                              </label>
-                              <textarea
-                                id={`doc-not-ok-reason-${doc.id}`}
-                                value={notOkReason}
-                                onChange={(e) => setNotOkReason(e.target.value)}
-                                placeholder="What is not OK about this prototype, and what should change?"
-                              />
-                              <button
-                                className="primary"
-                                type="submit"
-                                disabled={notOkBusy || !isValidReplanReason(notOkReason)}
-                              >
-                                Open re-planning ticket
-                              </button>{' '}
-                              <button
-                                type="button"
-                                className="link"
-                                onClick={() => {
-                                  setNotOkId(null);
-                                  setNotOkReason('');
-                                }}
-                              >
-                                Cancel
-                              </button>
-                            </form>
-                          )}
-                          {isPrototype && !isPm && (
-                            <p className="muted">Only accounts holding the PM role may open an implementation or re-planning ticket.</p>
-                          )}
-                        </td>
-                      </tr>
+          groups.map((group) => {
+            const collapsed = isGroupCollapsed(group);
+            return (
+              <div key={group.categoryId} className="doc-group">
+                <button
+                  type="button"
+                  className="doc-group-header"
+                  onClick={() =>
+                    setCollapsedOverrides((prev) => ({ ...prev, [group.categoryId]: !collapsed }))
+                  }
+                  aria-expanded={!collapsed}
+                >
+                  {collapsed ? '▸' : '▾'} {group.name} ({group.docs.length})
+                </button>
+                {!collapsed && (
+                  <>
+                    {group.name === 'Prototype' && (
+                      <p className="muted doc-group-hint">
+                        A Prototype can be sent to implementation or marked Not OK.
+                      </p>
                     )}
-                  </Fragment>
-                );
-              })}
-            </tbody>
-          </table>
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Title</th>
+                          <th>Project</th>
+                          <th>Created</th>
+                          <th>Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {group.docs.map((doc) => {
+                          const isPrototype = categoryNameFor(doc.category_id) === 'Prototype';
+                          const expanded = expandedId === doc.id;
+                          return (
+                            <Fragment key={doc.id}>
+                              <tr>
+                                <td>
+                                  <button type="button" className="link" onClick={() => setExpandedId(expanded ? null : doc.id)} title={expanded ? 'Hide content' : 'Show content'}>
+                                    {doc.title}
+                                  </button>{' '}
+                                  <ImplementationBadge doc={doc} onOpenTicket={onOpenTicket} />
+                                </td>
+                                <td>{projectNameFor(doc.project_id)}</td>
+                                <td>{new Date(doc.created_at).toLocaleDateString()}</td>
+                                <td>
+                                  <button type="button" className="link" onClick={() => handleDownload(doc)}>
+                                    Download
+                                  </button>
+                                  {isPrototype && (
+                                    <>
+                                      {' '}
+                                      <button
+                                        type="button"
+                                        className="primary small"
+                                        onClick={() => handleImplement(doc)}
+                                        disabled={!isPm || implementingId === doc.id || !!doc.implementation_status}
+                                        title={
+                                          !isPm
+                                            ? 'Only the PM may open an implementation ticket'
+                                            : doc.implementation_status === 'implemented'
+                                              ? 'Already implemented — open the implementation ticket from the badge'
+                                              : doc.implementation_status === 'in_progress'
+                                                ? 'Implementation already in progress — open it from the badge'
+                                                : 'Open a ticket to implement this prototype'
+                                        }
+                                      >
+                                        Implement
+                                      </button>
+                                      {' '}
+                                      <button
+                                        type="button"
+                                        className="amber-outline"
+                                        onClick={() => handleNotOk(doc)}
+                                        disabled={!isPm || notOkBusy}
+                                        title={isPm ? 'Mark this prototype as not OK and open a re-planning ticket' : 'Only the PM may open a re-planning ticket'}
+                                      >
+                                        Not OK
+                                      </button>
+                                    </>
+                                  )}
+                                  {canMutate && (
+                                    <>
+                                      {' '}
+                                      <button type="button" className="link" onClick={() => handleDelete(doc)} disabled={busy}>
+                                        Delete
+                                      </button>
+                                    </>
+                                  )}
+                                </td>
+                              </tr>
+                              {expanded && (
+                                <tr>
+                                  <td colSpan={4}>
+                                    {doc.implementation_status && doc.implementation_ticket_id && (
+                                      <p style={{ marginTop: 0 }}>
+                                        Implementation:{' '}
+                                        <ImplementationBadge doc={doc} onOpenTicket={onOpenTicket} />{' '}
+                                        <button type="button" className="link" onClick={() => onOpenTicket(doc.implementation_ticket_id as string)}>
+                                          View implementation ticket
+                                        </button>
+                                      </p>
+                                    )}
+                                    {renderDocumentContent(doc, isPrototype)}
+                                    {isPrototype && notOkId === doc.id && isPm && (
+                                      <form
+                                        onSubmit={(e) => {
+                                          e.preventDefault();
+                                          void handleNotOkSubmit(doc);
+                                        }}
+                                        style={{ marginTop: '1rem' }}
+                                      >
+                                        <p className="muted">
+                                          This prototype is not OK: describe what needs re-planning. Submitting
+                                          opens a re-planning ticket on the Prototype flow.
+                                        </p>
+                                        <label className="field" htmlFor={`doc-not-ok-reason-${doc.id}`}>
+                                          What is not OK? (required)
+                                        </label>
+                                        <textarea
+                                          id={`doc-not-ok-reason-${doc.id}`}
+                                          value={notOkReason}
+                                          onChange={(e) => setNotOkReason(e.target.value)}
+                                          placeholder="What is not OK about this prototype, and what should change?"
+                                        />
+                                        <button
+                                          className="primary"
+                                          type="submit"
+                                          disabled={notOkBusy || !isValidReplanReason(notOkReason)}
+                                        >
+                                          Open re-planning ticket
+                                        </button>{' '}
+                                        <button
+                                          type="button"
+                                          className="link"
+                                          onClick={() => {
+                                            setNotOkId(null);
+                                            setNotOkReason('');
+                                          }}
+                                        >
+                                          Cancel
+                                        </button>
+                                      </form>
+                                    )}
+                                    {isPrototype && !isPm && (
+                                      <p className="muted">Only accounts holding the PM role may open an implementation or re-planning ticket.</p>
+                                    )}
+                                  </td>
+                                </tr>
+                              )}
+                            </Fragment>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </>
+                )}
+              </div>
+            );
+          })
         )}
       </div>
-
-      {canMutate && (
-        <div className="card">
-          <h3 className="section">File a document</h3>
-          {!showCreate ? (
-            <button type="button" className="primary" onClick={() => {
-              setShowCreate(true);
-              setNewCategoryId(defaultCategoryId);
-              // Filing requires a project (ticket 8f52044c): pre-fill
-              // the current project filter when it names one, else
-              // the first project; the submit stays disabled until
-              // a project is picked.
-              setNewProjectId(projectFilter !== 'all' && projectFilter !== 'none' ? projectFilter : (projects[0]?.id || ''));
-            }}>
-              + New document
-            </button>
-          ) : (
-            <form onSubmit={handleCreate}>
-              <div className="form-row">
-                <div>
-                  <label className="field" htmlFor="doc-new-title">Title</label>
-                  <input
-                    id="doc-new-title"
-                    type="text"
-                    value={newTitle}
-                    onChange={(e) => setNewTitle(e.target.value)}
-                    placeholder="Document title"
-                  />
-                </div>
-                <div>
-                  <label className="field" htmlFor="doc-new-category">Category</label>
-                  <select
-                    id="doc-new-category"
-                    value={newCategoryId}
-                    onChange={(e) => setNewCategoryId(e.target.value)}
-                  >
-                    {categories.map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label className="field" htmlFor="doc-new-project">Project (required)</label>
-                  <select
-                    id="doc-new-project"
-                    value={newProjectId}
-                    onChange={(e) => setNewProjectId(e.target.value)}
-                  >
-                    {projects.map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-              <label className="field" htmlFor="doc-new-content">Content (Markdown)</label>
-              <textarea
-                id="doc-new-content"
-                value={newContent}
-                onChange={(e) => setNewContent(e.target.value)}
-                placeholder="Paste the document content here, or upload a .md / .txt file below."
-              />
-              <label className="field" htmlFor="doc-new-file">Or upload a file (.md / .txt)</label>
-              <input
-                id="doc-new-file"
-                type="file"
-                accept=".md,.markdown,.txt"
-                onChange={handleFileChange}
-              />
-              {uploadedName && <p className="muted">Loaded from {uploadedName}.</p>}
-              <button className="primary" type="submit" disabled={busy || !newTitle.trim() || !newCategoryId || !newProjectId}>
-                File document
-              </button>{' '}
-              <button
-                type="button"
-                className="link"
-                onClick={() => {
-                  setShowCreate(false);
-                  setNewTitle('');
-                  setNewContent('');
-                  setUploadedName('');
-                }}
-              >
-                Cancel
-              </button>
-            </form>
-          )}
-        </div>
-      )}
     </>
   );
 }

@@ -813,6 +813,24 @@ button.link {
 button.link.danger { color: #b91c1c; }
 button.link.amber { color: #b45309; }
 button.primary.small { min-height: 0; padding: 4px 10px; font-size: 13px; }
+
+/* Documents redesign (ticket b2d67623): amber-outlined button for
+   the Not OK action — visible, distinct, and clearly a different
+   kind of action from the dark Implement button. */
+button.amber-outline { border: 1px solid #d97706; color: #92400e; background: #fff; border-radius: 5px; padding: 4px 10px; font-size: 13px; cursor: pointer; }
+button.amber-outline:disabled { opacity: 0.5; cursor: default; }
+/* The "+ Category" chip is dashed, so it reads as an action, not a
+   filter. */
+.chip.dashed { border-style: dashed; }
+/* Toolbar: search + project filter share one row with the showing
+   count, same rhythm as the tickets toolbar. */
+.documents-toolbar { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; margin-bottom: 12px; }
+.documents-search { flex: 1 1 200px; }
+/* Collapsible category group header: the category name and count,
+   one button, no extra chrome. */
+.doc-group-header { display: flex; align-items: center; gap: 6px; width: 100%; text-align: left; background: none; border: none; border-bottom: 1px solid #e2e8ee; padding: 8px 2px; font-size: 14px; font-weight: 600; color: #0f2a3d; cursor: pointer; }
+.doc-group { margin-bottom: 8px; }
+.doc-group-hint { margin: 6px 0 8px; }
 .workflow-active-line { margin: 0 0 12px; }
 .section-nav { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-bottom: 12px; }
 .section-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-left: 4px; vertical-align: middle; }
