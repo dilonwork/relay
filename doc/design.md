@@ -1130,7 +1130,7 @@ Implements the UI&UX prototype "Sidebar & title deduplication — recommendation
 
 ### The title bar (judgment call)
 
-`src/TitleBar.tsx` renders the bar: a breadcrumb nav (the path) on the left, actions on the right. The path IS the page title — the last segment is the current page (bold, not a link, `aria-current="page"`), there is no separate title element. Earlier segments navigate up. The actions are Refresh on every page, plus the ticket status badge on the detail page (next to Refresh, so the state is visible without scrolling).
+`src/TitleBar.tsx` renders the bar: a breadcrumb nav (the path) on the left, actions on the right. The path IS the page title — the last segment is the current page (bold, not a link, `aria-current="page"`), there is no separate title element. Earlier segments navigate up. The actions are Refresh on every page, plus the ticket status badge on the detail page (next to Refresh, so the state is visible without scrolling) and page-specific actions in the same slot — the Dashboard carries a "+ New ticket" button there (ch. 22).
 
 Path map (computed in `App.tsx` from the same state the view rendering uses, so the bar and the panel agree): Dashboard → `Dashboard`; Tickets list → `Tickets / All tickets`; Gantt → `Tickets / Gantt`; New ticket → `Tickets / New ticket`; Documents → `Documents`; Projects → `Projects`; Admin sub-pages → `Admin / <tab label>` (the `Admin` segment goes to Overview); Ticket detail → `Tickets / <ticket title>` (the `Tickets` segment returns to the sub-page the detail was opened from). Long ticket titles truncate with an ellipsis (`max-width: 420px`, `200px` at ≤720px); the full title stays in the `title` attribute. Refresh behavior is unchanged (per-view reload, plus reloading the open detail); it only moved into the bar's action slot.
 
@@ -1152,7 +1152,7 @@ No schema change: this is a frontend-only change. No migration was added for thi
 
 ### Frontend
 
-- `src/TitleBar.tsx` (new): the `TitleBar` component (`segments`, `title`, `badge`, `onRefresh`).
+- `src/TitleBar.tsx` (new): the `TitleBar` component (`segments`, `title`, `badge`, `actions`, `onRefresh`). `actions` is the page-specific slot in the action row (ch. 22 adds the Dashboard "+ New ticket" button there; Refresh always stays beside it).
 - `src/App.tsx`: the `<header>` block is replaced by `<TitleBar>`; the per-view Refresh logic moves into `handleRefresh` unchanged; `titleBarSegments()` computes the path; the detail status badge moves from the detail card into the bar.
 - `src/TicketDetail.tsx`: the Back links, the title H2 and the Status row in the detail grid are gone (the badge lives in the title bar now); the `onBack` prop is removed.
 - `src/index.css`: the `header` rules are replaced by `.titlebar` / `.crumbs` / `.here` / `.sep` / `.actions`; `h3.section` styles the demoted section headings; the now-dead `.card h2` rule is removed.
@@ -1161,3 +1161,41 @@ No schema change: this is a frontend-only change. No migration was added for thi
 
 - `server/titleBar.test.js` (6 items, new file): TitleBar renders a breadcrumb nav with a Refresh action; App renders the TitleBar with the ticket title and status badge; the old content header is gone; no panel H2 remains anywhere in `src`; the Back to tickets links are gone; the title bar path map covers every view.
 - Frontend browser verification was not possible (no headless browser on the VM); only `tsc` + `vite build` were run. The Tester verifies every view in the browser after deploy (detail, Gantt, Admin sub-pages, mobile width).
+
+## 22. Dashboard Redesign: Attention First, Cards Second
+
+Implements the UI&UX prototype "Dashboard redesign — recommendations" (Document, Prototype category; interactive reference `dashboard-redesign-prototype.html` in the same category; design ticket `f374b464` already delivered). This is the first of 9 redesign tickets (Dashboard, Tickets list, Ticket detail, Gantt, Projects, Documents, New ticket, Admin - Overview, Admin - Users), and the pattern it establishes is the template the other eight follow unless a page's own audit says otherwise.
+
+### The pattern
+
+- **Attention first:** the page answers "what needs attention?" before listing anything — a system-wide summary strip, computed from the same per-project counts the page already receives.
+- **Cards with visible actions:** rows become cards with a progress signal, labeled counts, and a visible action; the whole card stays clickable with the same navigation.
+- **Search + sort:** a small toolbar covers the list once it grows.
+- **Title bar untouched:** the bar keeps its single title + Refresh (ch. 21); page-specific quick actions go in its action slot, they do not redo the bar.
+
+### The Dashboard
+
+The summary strip is four stat cards — Waiting (highlighted amber when above zero), In progress, Done, Total tickets — computed by summing every per-project bucket including Uncategorized. Below it, a toolbar with a search box (project-name substring, case-insensitive) and a sort select (Most waiting / Most in progress / Most done / A–Z; default Most waiting first). An empty search shows "No projects match" with a Clear search action.
+
+Each project is a card: name + Internal/External type badge (the `badge` vocabulary from Projects, plain for Internal, `delivered` for External), muted description, a thin done-progress bar (done / total), three labeled counts (in progress / waiting / done, waiting amber when above zero), and a footer with "% done · N tickets" plus a visible "Open →" action. Clicking a card opens that project's Gantt view exactly as before (`onSelectProject` unchanged).
+
+Uncategorized keeps the same card shape but is visually a bucket, not a project: dashed border, muted background, and a "no project" badge. The "+ New ticket" button lives in the title bar's action slot (App passes it through; Refresh stays beside it).
+
+Unchanged on purpose: the title bar (single "Dashboard" title + Refresh, no duplicate titles anywhere), the sidebar, routing, `onSelectProject`, and the data shapes (`Project`, `ProjectTicketCounts`). Loading ("Loading projects…") and empty ("No projects yet…") states still work. At ≤720px the stat cards go 2-up and the project cards go single column.
+
+### No migration
+
+No schema change: this is a frontend-only change. No migration was added for this ticket.
+
+### Frontend
+
+- `src/helpers.ts`: the pure Dashboard helpers — `sumProjectCounts` (system totals), `buildDashboardEntries` (one card entry per project plus the Uncategorized entry when `counts['none']` exists), `filterDashboardEntries` (name substring), `sortDashboardEntries` (waiting / active / done / A–Z). `DashboardSort` and `DashboardCardEntry` are exported for the component. As with the Gantt helpers, the server tests require this module directly and exercise the exact code the component runs.
+- `src/Dashboard.tsx`: rewritten around the helpers — summary strip, toolbar, card grid, empty-search state. No page title is added (the title bar owns it) and the old `.dashboard-list` rows are gone.
+- `src/TitleBar.tsx`: new optional `actions` prop, rendered in the action row between the badge and Refresh.
+- `src/App.tsx`: passes the "+ New ticket" button as `actions` when (and only when) the current view is the Dashboard; it opens the New ticket page (`setMainView('new')`).
+- `src/index.css`: the old `.dashboard-list` / `.dashboard-row` rules are replaced by `.dashboard-stats` / `.dashboard-stat` (`.hot` amber), `.dashboard-toolbar`, `.dashboard-grid`, `.dashboard-card` (`.uncategorized` dashed + muted), the progress bar, the labeled counts and the footer; `.titlebar .actions button.primary` drops the form `margin-top` so the button aligns with Refresh; a ≤720px block collapses the strip to 2-up and the grid to one column.
+
+### Tests
+
+- `server/dashboard.test.js` (17 items, new file): summary totals sum every project plus Uncategorized (and are zero with no counts); entries carry one card per project in order, add the Uncategorized card only when uncategorized tickets exist, and start a project with no counts at zero; search filters by name substring case-insensitively and an empty query keeps all; the default sort is most waiting first and sorting covers in progress, done and A–Z without mutating the input; the component renders the summary strip before the cards, cards carry a progress bar, labeled counts and Open, Uncategorized is a dashed card with a no-project badge, search/sort/clear-search are present, no page title is added and the old rows are gone, the title bar carries "+ New ticket" on the Dashboard only, and the layout holds at ≤720px.
+- Frontend browser verification was not possible (no headless browser on the VM); only `tsc` + `vite build` were run. The Tester verifies the Dashboard in the browser after deploy (summary strip, cards, search/sort, "+ New ticket", mobile width).

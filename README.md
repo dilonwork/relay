@@ -277,8 +277,8 @@ onboarding document regenerating from a live workflow edit, and the
 project prompt bundle (whole project context, base-URL resolution,
 no token in the bundle).
 
-309 tests in total: state machine 21, tickets 36, projects 16, onboarding 12, public base URL 5, auth 21,
-admin 7, API keys 8, monitor 18, workflows 30, quick-create builder 11, documents 24, document tickets 12, document render 18, gantt helpers 14, admin nav 5, view hash 8, migrations 33, role lists 4, title bar 6.
+326 tests in total: state machine 21, tickets 36, projects 16, onboarding 12, public base URL 5, auth 21,
+admin 7, API keys 8, monitor 18, workflows 30, quick-create builder 11, documents 24, document tickets 12, document render 18, gantt helpers 14, admin nav 5, view hash 8, migrations 33, role lists 4, title bar 6, dashboard redesign 17.
 
 ## Accounts & authentication
 
@@ -629,12 +629,20 @@ each sub-page owns its own form state and handlers.
 
 ## Dashboard
 
-- **Default page:** the app lands on the Dashboard, a project overview
-  listing every project with its ticket counts (in progress / waiting /
-  done, computed from `GET /api/tickets`).
-- **Project view:** clicking a project opens the Tickets > Gantt
-  sub-page for that project; All tickets shows the ticket table for
-  the same project. Uncategorized tickets get their own row.
+- **Default page:** the app lands on the Dashboard, a project overview.
+  A summary strip answers "what needs attention?" first — system-wide
+  Waiting (highlighted when above zero), In progress, Done and Total
+  tickets, computed from `GET /api/tickets`.
+- **Project cards:** each project is a card with an Internal/External
+  type badge, a done-progress bar, three labeled counts and a visible
+  "Open →" action; clicking a card opens the Tickets > Gantt sub-page
+  for that project. Uncategorized tickets get their own dashed card
+  with a "no project" badge.
+- **Search + sort:** a toolbar filters projects by name and sorts by
+  most waiting / in progress / done first or A–Z (default: most
+  waiting first); an empty search shows a clear-search empty state.
+- **Quick action:** a "+ New ticket" button sits in the title bar's
+  action slot, beside Refresh. The title bar itself is unchanged.
 - The Dashboard is a sidebar item alongside Tickets, New ticket,
   Projects and Admin.
 

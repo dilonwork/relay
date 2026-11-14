@@ -371,6 +371,94 @@ export function countTicketsByProject(
   return out;
 }
 
+// Dashboard (ticket 4c7601fb, UI&UX prototype "Dashboard redesign —
+// recommendations"): the landing page answers "what needs attention?"
+// first with a system-wide summary, then shows one card per project.
+// These pure helpers are the single source for that layout; Dashboard
+// renders from them and the server tests exercise them directly.
+
+export type DashboardSort = 'waiting' | 'active' | 'done' | 'az';
+
+export interface DashboardCardEntry {
+  id: string;
+  name: string;
+  // 'internal' | 'external' for a real project; null for Uncategorized.
+  type: string | null;
+  description: string;
+  counts: ProjectTicketCounts;
+  uncategorized: boolean;
+}
+
+// System-wide totals: the summary strip sums every per-project bucket,
+// including Uncategorized.
+export function sumProjectCounts(
+  counts: Record<string, ProjectTicketCounts>
+): ProjectTicketCounts {
+  const total = { ...EMPTY_COUNTS };
+  for (const c of Object.values(counts)) {
+    total.active += c.active;
+    total.pending += c.pending;
+    total.done += c.done;
+    total.total += c.total;
+  }
+  return total;
+}
+
+// One card entry per project, in the given order, plus the
+// Uncategorized entry when there are tickets with no project. A project
+// with no counts yet starts at zero.
+export function buildDashboardEntries(
+  projects: Project[],
+  counts: Record<string, ProjectTicketCounts>
+): DashboardCardEntry[] {
+  const entries: DashboardCardEntry[] = projects.map((p) => ({
+    id: p.id,
+    name: p.name,
+    type: p.type,
+    description: p.description || '',
+    counts: counts[p.id] || { ...EMPTY_COUNTS },
+    uncategorized: false,
+  }));
+  const uncategorized = counts['none'];
+  if (uncategorized) {
+    entries.push({
+      id: 'none',
+      name: 'Uncategorized',
+      type: null,
+      description: 'Tickets with no project yet.',
+      counts: uncategorized,
+      uncategorized: true,
+    });
+  }
+  return entries;
+}
+
+// Name-substring filter, case-insensitive; an empty query keeps all.
+export function filterDashboardEntries(
+  entries: DashboardCardEntry[],
+  query: string
+): DashboardCardEntry[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return [...entries];
+  return entries.filter((e) => e.name.toLowerCase().includes(q));
+}
+
+// Most waiting / in progress / done first (highest first), or A–Z by
+// name. Sorts a copy; the input order is untouched.
+export function sortDashboardEntries(
+  entries: DashboardCardEntry[],
+  sort: DashboardSort
+): DashboardCardEntry[] {
+  const out = [...entries];
+  if (sort === 'az') {
+    out.sort((a, b) => a.name.localeCompare(b.name));
+    return out;
+  }
+  const key = sort === 'waiting' ? 'pending' : sort;
+  out.sort((a, b) => b.counts[key] - a.counts[key]);
+  return out;
+}
+
 // Actor ids are user UUIDs now; show a short prefix, full value on hover.
 export function shortId(id: string | null): string {
   if (!id) return '—';

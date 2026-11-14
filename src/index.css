@@ -419,26 +419,85 @@ button.link {
 
 .muted { color: #5a6b7c; font-size: 13px; }
 
-/* Dashboard: project overview rows. */
-.dashboard-list { display: flex; flex-direction: column; gap: 8px; }
-.dashboard-row {
+/* Dashboard: attention-first overview (ticket 4c7601fb, UI&UX prototype
+   "Dashboard redesign — recommendations"). The summary strip answers
+   "what needs attention?" before the project list; projects are cards
+   in a responsive grid with a done-progress bar and a visible Open
+   action. Uncategorized is a dashed card, clearly not a project. */
+.dashboard-stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  margin: 4px 0 12px;
+}
+.dashboard-stat {
+  border: 1px solid #d9e1e8;
+  border-radius: 6px;
+  padding: 10px 12px;
+  background: #fff;
+}
+.dashboard-stat-num { font-size: 22px; font-weight: 700; line-height: 1.1; color: #0f2a3d; }
+.dashboard-stat-label { font-size: 12px; color: #5a6b7c; }
+.dashboard-stat.hot { border-color: #f59e0b; background: #fffbeb; }
+.dashboard-stat.hot .dashboard-stat-num { color: #b45309; }
+
+.dashboard-toolbar { display: flex; gap: 8px; align-items: center; margin: 10px 0; flex-wrap: wrap; }
+.dashboard-toolbar input[type="text"] { width: 200px; }
+.dashboard-toolbar select { width: auto; }
+
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 10px;
+}
+.dashboard-card {
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
-  gap: 2px;
-  width: 100%;
+  gap: 6px;
   text-align: left;
   background: #fff;
-  border: 1px solid #cfdbe4;
+  border: 1px solid #d9e1e8;
   border-radius: 8px;
   padding: 12px 14px;
   cursor: pointer;
   font-size: 14px;
+  font-family: inherit;
   color: #1a2332;
 }
-.dashboard-row:hover { background: #eef6f6; }
-.dashboard-row h3 { margin: 0; font-size: 15px; color: #0f2a3d; }
-.dashboard-row .dashboard-counts { color: #5a6b7c; font-size: 13px; }
+.dashboard-card:hover { border-color: #0f2a3d; }
+.dashboard-card.uncategorized { border-style: dashed; background: #fbfcfd; }
+.dashboard-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+.dashboard-card-head h3 { margin: 0; font-size: 15px; color: #0f2a3d; }
+.dashboard-desc { font-size: 12px; color: #5a6b7c; min-height: 15px; }
+.dashboard-bar-track {
+  height: 6px;
+  background: #e2e8ee;
+  border-radius: 999px;
+  overflow: hidden;
+}
+.dashboard-bar-fill { display: block; height: 100%; background: #16a34a; border-radius: 999px; }
+.dashboard-counts3 { display: flex; gap: 12px; font-size: 12px; }
+.dashboard-counts3 b { font-size: 14px; }
+.dashboard-counts3 .wait b { color: #b45309; }
+.dashboard-foot { display: flex; justify-content: space-between; align-items: center; margin-top: 2px; }
+.dashboard-empty { text-align: center; padding: 36px 10px; color: #5a6b7c; }
+.dashboard-empty b { display: block; font-size: 15px; color: #0f2a3d; margin-bottom: 4px; }
+
+/* The title bar's action slot: a primary button there must not carry
+   the form margin-top, or it drops below Refresh. */
+.titlebar .actions button.primary { margin-top: 0; }
+
+/* Dashboard at ≤720px: the stat cards go 2-up and the project cards
+   go single column, so the summary strip wraps cleanly. */
+@media (max-width: 720px) {
+  .dashboard-stats { grid-template-columns: repeat(2, 1fr); }
+  .dashboard-grid { grid-template-columns: 1fr; }
+}
 
 /* Gantt view: shared time axis, one bar per ticket. */
 

@@ -18,6 +18,10 @@ interface TitleBarProps {
   // Extra actions shown next to Refresh, e.g. the ticket status badge
   // on the detail page.
   badge?: ReactNode;
+  // Page-specific actions in the bar's action slot, e.g. the
+  // "+ New ticket" button on the Dashboard (ticket 4c7601fb). Refresh
+  // always stays beside them.
+  actions?: ReactNode;
   onRefresh: () => void;
 }
 
@@ -25,7 +29,7 @@ interface TitleBarProps {
 // the page title (the last path segment) and the actions, and replaces
 // the old content header (H1 + tagline + Refresh) and the per-panel
 // H2s. The sidebar keeps the single "Relay" brand.
-export default function TitleBar({ segments, title, badge, onRefresh }: TitleBarProps) {
+export default function TitleBar({ segments, title, badge, actions, onRefresh }: TitleBarProps) {
   return (
     <div className="titlebar">
       <nav className="crumbs" aria-label="Breadcrumb">
@@ -52,6 +56,7 @@ export default function TitleBar({ segments, title, badge, onRefresh }: TitleBar
       </nav>
       <div className="actions">
         {badge}
+        {actions}
         <button type="button" className="link" onClick={onRefresh}>
           Refresh
         </button>
