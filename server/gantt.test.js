@@ -5,14 +5,21 @@
 // TicketGantt; node requires the .ts file directly (type stripping),
 // so the tests exercise the exact code the component runs.
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const {
   ALL_STATUSES,
   GANTT_STALLED_AFTER_MS,
   barPositionInWindow,
   countGanttByStatus,
+  dayTicks,
   filterGanttTickets,
+  formatDayLabel,
+  formatStalledAge,
+  ganttSummary,
   groupGanttTicketsByStatus,
   isStalledTicket,
+  segmentsFromTransitions,
   zoomWindow,
 } = require('../src/helpers.ts');
 
@@ -44,6 +51,23 @@ function ticket(overrides) {
 
 const NOW = new Date('2026-11-13T12:00:00.000Z').getTime();
 const hoursAgo = (h) => new Date(NOW - h * 3600 * 1000).toISOString();
+
+function transition(overrides) {
+  return {
+    id: 'cccccccc-0000-4000-8000-000000000000',
+    ticket_id: 'aaaaaaaa-0000-4000-8000-000000000000',
+    actor_id: 'u1',
+    actor_role: 'leader',
+    from_status: null,
+    to_status: 'requirement',
+    reason: '',
+    handoff: '',
+    artifacts: [],
+    result: 'applied',
+    created_at: '2026-11-08T00:00:00.000Z',
+    ...overrides,
+  };
+}
 
 (async () => {
   console.log('gantt helpers');
@@ -209,6 +233,186 @@ const hoursAgo = (h) => new Date(NOW - h * 3600 * 1000).toISOString();
 
   await ok('ALL_STATUSES still lists the 14 built-in states', () => {
     assert.equal(ALL_STATUSES.length, 14);
+  });
+
+  // Gantt redesign (ticket 2b62f706): segmented bars, day axis,
+  // summary line.
+
+  await ok('segments split a terminal ticket by status, ending at updated_at', () => {
+    const t = ticket({
+      status: 'delivered',
+      created_at: '2026-11-08T00:00:00.000Z',
+      updated_at: '2026-11-12T00:00:00.000Z',
+    });
+    const trs = [
+      transition({ from_status: null, to_status: 'requirement', created_at: '2026-11-08T00:00:00.000Z' }),
+      transition({ from_status: 'requirement', to_status: 'in_dev', created_at: '2026-11-09T00:00:00.000Z' }),
+      transition({ from_status: 'in_dev', to_status: 'pending_review', created_at: '2026-11-11T00:00:00.000Z' }),
+      transition({ from_status: 'pending_review', to_status: 'delivered', created_at: '2026-11-12T00:00:00.000Z' }),
+    ];
+    const segs = segmentsFromTransitions(trs, t);
+    // The delivered slice is zero-length (entered at updated_at), so
+    // it carries no time and is dropped; the bar ends with the status
+    // the time was actually spent in.
+    assert.deepEqual(segs.map((s) => s.status), ['requirement', 'in_dev', 'pending_review']);
+    assert.equal(segs[0].startMs, new Date('2026-11-08T00:00:00.000Z').getTime());
+    assert.equal(segs[0].endMs, new Date('2026-11-09T00:00:00.000Z').getTime());
+    assert.equal(segs[1].startMs, new Date('2026-11-09T00:00:00.000Z').getTime());
+    assert.equal(segs[1].endMs, new Date('2026-11-11T00:00:00.000Z').getTime());
+    assert.equal(segs[2].endMs, new Date('2026-11-12T00:00:00.000Z').getTime());
+  });
+
+  await ok('segments for an open ticket run the last slice to now', () => {
+    const t = ticket({
+      status: 'in_dev',
+      created_at: '2026-11-08T00:00:00.000Z',
+      updated_at: '2026-11-10T00:00:00.000Z',
+    });
+    const trs = [
+      transition({ from_status: null, to_status: 'requirement', created_at: '2026-11-08T00:00:00.000Z' }),
+      transition({ from_status: 'requirement', to_status: 'in_dev', created_at: '2026-11-09T00:00:00.000Z' }),
+    ];
+    const segs = segmentsFromTransitions(trs, t, undefined, NOW);
+    assert.deepEqual(segs.map((s) => s.status), ['requirement', 'in_dev']);
+    assert.equal(segs[1].startMs, new Date('2026-11-09T00:00:00.000Z').getTime());
+    assert.equal(segs[1].endMs, NOW);
+  });
+
+  await ok('no history, or a history that does not end at the current status, falls back to one slice', () => {
+    const t = ticket({
+      status: 'in_dev',
+      created_at: '2026-11-08T00:00:00.000Z',
+      updated_at: '2026-11-10T00:00:00.000Z',
+    });
+    assert.deepEqual(segmentsFromTransitions([], t, undefined, NOW), [
+      {
+        status: 'in_dev',
+        startMs: new Date('2026-11-08T00:00:00.000Z').getTime(),
+        endMs: NOW,
+      },
+    ]);
+    const stale = [
+      transition({ from_status: null, to_status: 'requirement', created_at: '2026-11-08T00:00:00.000Z' }),
+      transition({ from_status: 'requirement', to_status: 'pending_review', created_at: '2026-11-09T00:00:00.000Z' }),
+    ];
+    assert.deepEqual(
+      segmentsFromTransitions(stale, t, undefined, NOW).map((s) => s.status),
+      ['in_dev']
+    );
+  });
+
+  await ok('a status revisited later opens a new slice; a no-op transition opens none', () => {
+    const t = ticket({
+      status: 'in_dev',
+      created_at: '2026-11-08T00:00:00.000Z',
+      updated_at: '2026-11-10T00:00:00.000Z',
+    });
+    const trs = [
+      transition({ from_status: null, to_status: 'requirement', created_at: '2026-11-08T00:00:00.000Z' }),
+      transition({ from_status: 'requirement', to_status: 'in_dev', created_at: '2026-11-09T00:00:00.000Z' }),
+      transition({ from_status: 'in_dev', to_status: 'in_dev', created_at: '2026-11-09T12:00:00.000Z' }),
+      transition({ from_status: 'in_dev', to_status: 'pending_review', created_at: '2026-11-10T00:00:00.000Z' }),
+      transition({ from_status: 'pending_review', to_status: 'in_dev', created_at: '2026-11-10T12:00:00.000Z' }),
+    ];
+    const segs = segmentsFromTransitions(trs, t, undefined, NOW);
+    assert.deepEqual(segs.map((s) => s.status), ['requirement', 'in_dev', 'pending_review', 'in_dev']);
+  });
+
+  await ok('day ticks fall on local-midnight boundaries inside the window', () => {
+    const day = (d, h = 6) => new Date(2026, 10, d, h).getTime();
+    const ticks = dayTicks({ min: day(8), max: day(11) });
+    assert.equal(ticks.length, 3);
+    ticks.forEach((t) => {
+      const d = new Date(t);
+      assert.equal(d.getHours(), 0);
+      assert.equal(d.getMinutes(), 0);
+    });
+    assert.equal(new Date(ticks[0]).getDate(), 9);
+    assert.equal(new Date(ticks[2]).getDate(), 11);
+  });
+
+  await ok('day ticks thin to at most eight on a wide window', () => {
+    const ticks = dayTicks({
+      min: new Date(2026, 10, 1, 6).getTime(),
+      max: new Date(2026, 11, 1, 6).getTime(),
+    });
+    assert.ok(ticks.length <= 8);
+    assert.ok(ticks.length >= 2);
+    // The first tick is the first boundary inside the window.
+    assert.equal(new Date(ticks[0]).getDate(), 2);
+  });
+
+  await ok('a window inside one day gets a single tick at its start', () => {
+    const min = new Date(2026, 10, 8, 10).getTime();
+    assert.deepEqual(dayTicks({ min, max: min + 3600 * 1000 }), [min]);
+  });
+
+  await ok('day labels read "Nov 8" style', () => {
+    assert.equal(formatDayLabel(new Date(2026, 10, 8, 12).getTime()), 'Nov 8');
+    assert.notEqual(formatDayLabel(new Date(2026, 10, 9, 12).getTime()), 'Nov 8');
+  });
+
+  await ok('summary counts stalled tickets and names the oldest by updated_at', () => {
+    const rows = [
+      ticket({ id: 'aaaaaaaa-0000-4000-8000-000000000001', title: 'Old stuck', status: 'in_dev', updated_at: hoursAgo(50) }),
+      ticket({ id: 'aaaaaaaa-0000-4000-8000-000000000002', title: 'New stuck', status: 'in_dev', updated_at: hoursAgo(40) }),
+      ticket({ id: 'aaaaaaaa-0000-4000-8000-000000000003', title: 'Moving', status: 'in_dev', updated_at: hoursAgo(10) }),
+    ];
+    const s = ganttSummary(rows, undefined, NOW);
+    assert.equal(s.stalledCount, 2);
+    assert.equal(s.oldest.ticket.title, 'Old stuck');
+    assert.equal(s.oldest.ageMs, 50 * 3600 * 1000);
+  });
+
+  await ok('summary is empty when nothing is stalled', () => {
+    const s = ganttSummary(
+      [ticket({ status: 'in_dev', updated_at: hoursAgo(10) })],
+      undefined,
+      NOW
+    );
+    assert.equal(s.stalledCount, 0);
+    assert.equal(s.oldest, null);
+  });
+
+  await ok('stalled age reads in days, then hours', () => {
+    assert.equal(formatStalledAge(4 * 24 * 3600 * 1000), '4 days');
+    assert.equal(formatStalledAge(24 * 3600 * 1000), '1 day');
+    assert.equal(formatStalledAge(36 * 3600 * 1000), '1 day');
+    assert.equal(formatStalledAge(5 * 3600 * 1000), '5 hours');
+    assert.equal(formatStalledAge(3600 * 1000), '1 hour');
+  });
+
+  await ok('component renders the redesign: two-row toolbar, summary, segments, project chip; journey line gone', () => {
+    const ganttSrc = fs.readFileSync(path.join(__dirname, '../src/TicketGantt.tsx'), 'utf8');
+    assert.ok(ganttSrc.includes('className="gantt-row"'));
+    assert.ok(ganttSrc.includes('className="gantt-summary"'));
+    assert.ok(ganttSrc.includes('className="gantt-project-chip"'));
+    assert.ok(ganttSrc.includes('className="gantt-segment"'));
+    assert.ok(ganttSrc.includes('className="gantt-end-dot"'));
+    assert.ok(ganttSrc.includes('dayTicks(window)'));
+    assert.ok(ganttSrc.includes('segmentsFromTransitions('));
+    assert.ok(ganttSrc.includes('formatStalledAge('));
+    assert.ok(ganttSrc.includes('Showing {visible.length} of {ganttTickets.length}'));
+    assert.ok(!ganttSrc.includes('gantt-journey'));
+    assert.ok(!ganttSrc.includes('formatAxisTime'));
+    assert.ok(!ganttSrc.includes('journeys'));
+    assert.ok(!ganttSrc.includes('TicketProjectHeader'));
+    const appSrc = fs.readFileSync(path.join(__dirname, '../src/App.tsx'), 'utf8');
+    assert.ok(appSrc.includes('histories={histories}'));
+    assert.ok(!appSrc.includes('journeyFromTransitions'));
+    const helpersSrc = fs.readFileSync(path.join(__dirname, '../src/helpers.ts'), 'utf8');
+    assert.ok(!helpersSrc.includes('formatAxisTime'));
+    assert.ok(!helpersSrc.includes('journeyFromTransitions'));
+  });
+
+  await ok('styles cover the new elements and the journey line is gone', () => {
+    const cssSrc = fs.readFileSync(path.join(__dirname, '../src/index.css'), 'utf8');
+    assert.ok(cssSrc.includes('.gantt-row'));
+    assert.ok(cssSrc.includes('.gantt-summary'));
+    assert.ok(cssSrc.includes('.gantt-project-chip'));
+    assert.ok(cssSrc.includes('.gantt-segment'));
+    assert.ok(cssSrc.includes('.gantt-end-dot'));
+    assert.ok(!cssSrc.includes('.gantt-journey'));
   });
 
   console.log(`\n${passed} gantt tests passed.`);
