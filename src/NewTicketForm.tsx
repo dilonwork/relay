@@ -47,7 +47,6 @@ export default function NewTicketForm(props: NewTicketFormProps) {
 
   return (
     <div className="card">
-      <h2>New ticket</h2>
       <form onSubmit={onSubmit}>
         <div className="form-row">
           <div>

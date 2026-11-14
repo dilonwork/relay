@@ -39,6 +39,8 @@ Tickets carry project development work through a pipeline: the PM creates a requ
 17. Documents (Filing Cabinet)
 18. Users Split: Humans and Agents + Onboarding
 19. Global Workflows, Project Workflow Choice, Removal of the Default Concept
+20. External Project Prompt Bundle
+21. Title Bar: Sidebar & Title Deduplication
 - Appendix A State Code Reference
 - Appendix B Ticket Lifecycle Example
 
@@ -1121,3 +1123,41 @@ No schema change: the bundle is generated on demand from the live definitions an
 - `server/projects.test.js` (16 items, was 15): external creation attaches the same prompt bundle to every role agent (identical markdown, origin as base URL, no token).
 - `server/publicUrl.test.js` (5 items): explicit baseUrl wins with trailing slashes trimmed; `PUBLIC_URL` beats the request origin; the request origin is used when nothing is configured; the local default uses `FRONTEND_PORT` or 3000; the Vite dev proxy preserves the request Host (`changeOrigin: false`), so the request-origin fallback resolves to the external address instead of localhost.
 - Frontend browser verification was not possible (no headless browser on the VM); only `tsc` + `vite build` were run.
+
+## 21. Title Bar: Sidebar & Title Deduplication
+
+Implements the UI&UX prototype "Sidebar & title deduplication — recommendations" (Document, Prototype category; interactive reference `sidebar-titlebar-prototype.html` in the same category). One slim title bar per page replaces the old content header and the per-panel H2s, so "Relay" appears exactly once on every page (the sidebar brand) and each page shows exactly one page title.
+
+### The title bar (judgment call)
+
+`src/TitleBar.tsx` renders the bar: a breadcrumb nav (the path) on the left, actions on the right. The path IS the page title — the last segment is the current page (bold, not a link, `aria-current="page"`), there is no separate title element. Earlier segments navigate up. The actions are Refresh on every page, plus the ticket status badge on the detail page (next to Refresh, so the state is visible without scrolling).
+
+Path map (computed in `App.tsx` from the same state the view rendering uses, so the bar and the panel agree): Dashboard → `Dashboard`; Tickets list → `Tickets / All tickets`; Gantt → `Tickets / Gantt`; New ticket → `Tickets / New ticket`; Documents → `Documents`; Projects → `Projects`; Admin sub-pages → `Admin / <tab label>` (the `Admin` segment goes to Overview); Ticket detail → `Tickets / <ticket title>` (the `Tickets` segment returns to the sub-page the detail was opened from). Long ticket titles truncate with an ellipsis (`max-width: 420px`, `200px` at ≤720px); the full title stays in the `title` attribute. Refresh behavior is unchanged (per-view reload, plus reloading the open detail); it only moved into the bar's action slot.
+
+### What went away
+
+- The content `<header>` (H1 "Relay" + tagline + Refresh) on all views, and the Gantt special case that hid the H1 there — the exception disappears with the header.
+- The per-panel H2s that duplicated the sidebar label: Dashboard, All tickets, Gantt, New ticket, Documents, Projects, Users, API keys, System overview, Workflows, Onboarding package, and the ticket-title H2 on the detail page.
+- The `← Back to tickets` links on the detail page — the `Tickets` segment in the title bar navigates back.
+
+### What stayed
+
+- The sidebar, unchanged: brand "Relay", nav groups, project filter, user card. The setup/login screens keep their own H1 (they have no sidebar, so it is the only "Relay" there).
+- Section headings inside a page (Latest handoff, Transition, Create user, File a document, Tickets by status, and the rest) — demoted one level, H2 → H3 with the `section` class (`h3.section`, 13px), so the title bar stays the single H1-equivalent. The Workflows panel's existing H3 section headings take the same class.
+- Routing / view state (`mainView`, `viewHash`) — the title bar reads the same state, it adds no routes.
+
+### No migration
+
+No schema change: this is a frontend-only change. No migration was added for this ticket.
+
+### Frontend
+
+- `src/TitleBar.tsx` (new): the `TitleBar` component (`segments`, `title`, `badge`, `onRefresh`).
+- `src/App.tsx`: the `<header>` block is replaced by `<TitleBar>`; the per-view Refresh logic moves into `handleRefresh` unchanged; `titleBarSegments()` computes the path; the detail status badge moves from the detail card into the bar.
+- `src/TicketDetail.tsx`: the Back links, the title H2 and the Status row in the detail grid are gone (the badge lives in the title bar now); the `onBack` prop is removed.
+- `src/index.css`: the `header` rules are replaced by `.titlebar` / `.crumbs` / `.here` / `.sep` / `.actions`; `h3.section` styles the demoted section headings; the now-dead `.card h2` rule is removed.
+
+### Tests
+
+- `server/titleBar.test.js` (6 items, new file): TitleBar renders a breadcrumb nav with a Refresh action; App renders the TitleBar with the ticket title and status badge; the old content header is gone; no panel H2 remains anywhere in `src`; the Back to tickets links are gone; the title bar path map covers every view.
+- Frontend browser verification was not possible (no headless browser on the VM); only `tsc` + `vite build` were run. The Tester verifies every view in the browser after deploy (detail, Gantt, Admin sub-pages, mobile width).

@@ -486,7 +486,6 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
 
   return (
     <div className="card">
-      <h2>Workflows</h2>
       <p className="muted">
         A workflow is a state machine: its states, the transitions between
         them, and the role responsible for each state. A workflow belongs
@@ -588,7 +587,7 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
         </button>
       ) : (
         <form onSubmit={handleSubmit}>
-          <h3>{editingId ? 'Edit workflow' : 'New workflow'}</h3>
+          <h3 className="section">{editingId ? 'Edit workflow' : 'New workflow'}</h3>
           <div className="form-row">
             <div>
               <label className="field" htmlFor="workflow-name">Name</label>
@@ -619,7 +618,7 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
 
           {!editingId && (
             <>
-              <h3>Start from</h3>
+              <h3 className="section">Start from</h3>
               <p className="muted">
                 New workflows start blank — add states below, apply a
                 template, or use Quick create to chain states into a
@@ -649,7 +648,7 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
                 </div>
               </div>
 
-              <h3>Quick create</h3>
+              <h3 className="section">Quick create</h3>
               <p className="muted">
                 Type state names in order and pick who owns each one;
                 Generate chains them into a linear flow (first state is
@@ -763,7 +762,7 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
             </>
           )}
 
-          <h3>States</h3>
+          <h3 className="section">States</h3>
           <p className="muted">
             Order is the flow order (top to bottom). Exactly one state is
             the start; at least one is terminal. Codes are lowercase
@@ -856,7 +855,7 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
             + Add state
           </button>
 
-          <h3>Transitions</h3>
+          <h3 className="section">Transitions</h3>
           <p className="muted">
             A transition moves a ticket from one state to another. The role
             shown is the from-state&apos;s role (from the Roles table below)
@@ -949,7 +948,7 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
             + Add transition
           </button>
 
-          <h3>Roles &amp; responsibilities</h3>
+          <h3 className="section">Roles &amp; responsibilities</h3>
           <p className="muted">
             One role owns each state in this workflow. The same person may
             hold different roles in different workflows — what matters here

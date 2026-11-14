@@ -28,8 +28,6 @@ interface TicketDetailProps {
   onArtifactsTextChange: (value: string) => void;
   onAssignProject: (e: React.FormEvent) => void;
   onTransition: (e: React.FormEvent) => void;
-  // Returns to the Tickets list.
-  onBack: () => void;
   projectName: (id: string | null) => string;
 }
 
@@ -57,16 +55,12 @@ export default function TicketDetail(props: TicketDetailProps) {
     onArtifactsTextChange,
     onAssignProject,
     onTransition,
-    onBack,
     projectName,
   } = props;
 
   if (!detail) {
     return (
       <div className="card">
-        <button className="link" onClick={onBack}>
-          ← Back to tickets
-        </button>
         <p className="muted">Loading ticket…</p>
       </div>
     );
@@ -78,15 +72,7 @@ export default function TicketDetail(props: TicketDetailProps) {
 
   return (
     <div className="card">
-      <button className="link" onClick={onBack}>
-        ← Back to tickets
-      </button>
-      <h2>{detail.title}</h2>
       <dl className="detail-grid">
-        <dt>Status</dt>
-        <dd>
-          <span className={`badge ${detail.status}`}>{label(detail.status)}</span>
-        </dd>
         <dt>Workflow</dt>
         <dd>{workflow ? workflow.name : 'Default development flow'}</dd>
         <dt>Source</dt>
@@ -107,7 +93,7 @@ export default function TicketDetail(props: TicketDetailProps) {
 
       {latestHandoff && (
         <>
-          <h2>Latest handoff</h2>
+          <h3 className="section">Latest handoff</h3>
           <p>{latestHandoff.handoff}</p>
           <p className="muted">
             Handed off {formatTime(latestHandoff.created_at)} by{' '}
@@ -126,7 +112,7 @@ export default function TicketDetail(props: TicketDetailProps) {
 
       {isPm && (
         <>
-          <h2>Project</h2>
+          <h3 className="section">Project</h3>
           <form onSubmit={onAssignProject}>
             <div className="form-row">
               <div>
@@ -152,7 +138,7 @@ export default function TicketDetail(props: TicketDetailProps) {
         </>
       )}
 
-      <h2>Transition</h2>
+      <h3 className="section">Transition</h3>
       {targetsLoading ? (
         <p className="muted">Loading transitions…</p>
       ) : targets.length === 0 ? (
@@ -212,7 +198,7 @@ export default function TicketDetail(props: TicketDetailProps) {
         </form>
       )}
 
-      <h2>History</h2>
+      <h3 className="section">History</h3>
       {detail.transitions.length === 0 ? (
         <p className="muted">No transitions recorded.</p>
       ) : (

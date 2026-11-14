@@ -118,7 +118,6 @@ export default function ProjectsPanel(props: ProjectsPanelProps) {
 
   return (
     <div className="card">
-      <h2>Projects</h2>
       {projects.length === 0 ? (
         <p className="muted">
           No projects yet. Create one below — tickets can then belong to it.
@@ -232,7 +231,7 @@ export default function ProjectsPanel(props: ProjectsPanelProps) {
         </p>
         {isExternal && (
           <div style={{ marginTop: 12 }}>
-            <h2>Role agents that will be created</h2>
+            <h3 className="section">Role agents that will be created</h3>
             <p className="muted">One agent per role in the flow. Each gets its own API key and onboarding package.</p>
             {previewRoles.length === 0 ? (
               <p className="muted">Role agents will be created from the built-in 14-state flow.</p>

@@ -12,7 +12,6 @@ interface AdminOverviewProps {
 export default function AdminOverview({ overview, adminError, adminNotice }: AdminOverviewProps) {
   return (
     <div className="card">
-      <h2>System overview</h2>
       {adminError && <div className="banner error">{adminError}</div>}
       {adminNotice && <div className="banner notice">{adminNotice}</div>}
       {!overview ? (
@@ -29,7 +28,7 @@ export default function AdminOverview({ overview, adminError, adminNotice }: Adm
             <dt>Transitions</dt>
             <dd>{overview.transitions.total}</dd>
           </dl>
-          <h2>Tickets by status</h2>
+          <h3 className="section">Tickets by status</h3>
           <table>
             <thead>
               <tr>
@@ -46,7 +45,7 @@ export default function AdminOverview({ overview, adminError, adminNotice }: Adm
               ))}
             </tbody>
           </table>
-          <h2>Recent audit entries</h2>
+          <h3 className="section">Recent audit entries</h3>
           {overview.transitions.recent.length === 0 ? (
             <p className="muted">No transitions recorded yet.</p>
           ) : (
