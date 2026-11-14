@@ -282,8 +282,8 @@ onboarding document regenerating from a live workflow edit, and the
 project prompt bundle (whole project context, base-URL resolution,
 no token in the bundle).
 
-342 tests in total: state machine 21, tickets 36, projects 16, onboarding 12, public base URL 5, auth 21,
-admin 7, API keys 8, monitor 18, workflows 30, quick-create builder 11, documents 24, document tickets 12, document render 18, gantt helpers 14, admin nav 5, view hash 8, migrations 33, role lists 4, title bar 6, dashboard redesign 17, ticket detail redesign 16.
+357 tests in total: state machine 21, tickets 36, projects 16, onboarding 12, public base URL 5, auth 21,
+admin 7, API keys 8, monitor 18, workflows 30, quick-create builder 11, documents 24, document tickets 12, document render 18, gantt helpers 14, admin nav 5, view hash 8, migrations 33, role lists 4, title bar 6, dashboard redesign 17, ticket detail redesign 16, projects redesign 15.
 
 ## Accounts & authentication
 
@@ -446,20 +446,19 @@ each sub-page owns its own form state and handlers.
 
 ## Projects
 
-- **Project list:** projects are a formal list every ticket belongs to.
-  The PM or an Admin creates a project (name + description); project
-  names are unique. A ticket created without a project is
-  *uncategorized* and can be assigned later by the PM. The list shows
-  each project's type and agent count.
+- **Project list:** projects are cards, not a table — name + Internal/External badge, one-line description + workflow, and labelled ticket/agent counts with an amber waiting/stalled signal when either is above zero. A search box filters by name with an "N of M projects" count. Clicking a card filters the ticket list to that project. The create form is hidden behind a "+ New project" button in the title bar and opens as a panel on the same page; Cancel closes it without creating anything. The waiting/stalled signals are computed client-side from the unfiltered ticket load (the same source as the Dashboard counts): waiting is the pending bucket, stalled is the 36-hour working-state rule. See the design doc, ch. 24.
 - **Project types:** a project is `internal` (ours, the default) or
   `external` (a client project). Creating an external project
   auto-creates one role agent per role in the configured flow —
   username `<project-slug>-<role>`, each with its own API key and
   onboarding package — in a single transaction; for the default flow
   that is six agents (leader, pm, engineer, reviewer, tester,
-  deployer). The full keys are shown once, in a banner after creation,
-  with a Copy button per key. Creating an internal project creates no
-  agents. See the design doc, ch. 18.
+  deployer). The type is picked as one of two cards (Internal /
+  External) and an external creation previews the role agents as
+  username chips. The full keys are shown once, in a distinct green
+  success panel with a Copy button per key (the form is not visible at
+  the same time); Done closes the panel. Creating an internal project
+  creates no agents. See the design doc, ch. 18.
 - **Single-project view:** the ticket list has a project filter (all
   projects / uncategorized / one project). Picking a project shows only
   its tickets, with the project name, description and ticket count on

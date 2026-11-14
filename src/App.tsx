@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, getToken, onUnauthorized, setToken } from './api';
 import type { LegalTransition, Project, PublicUser, QueueEntry, RoleAgent, Ticket, TicketWithHistory, User, Workflow } from './api';
-import { QUEUE_TABS, ROLE_LABELS, countTicketsByProject, isTerminalFor, journeyFromTransitions, stateLabelFor, statusLabel, targetsForUser } from './helpers';
+import { QUEUE_TABS, ROLE_LABELS, countProjectAttention, countTicketsByProject, isTerminalFor, journeyFromTransitions, stateLabelFor, statusLabel, targetsForUser } from './helpers';
 import { ADMIN_TABS, adminTabForView, adminViewForTab, isAdminView } from './adminNav';
 import type { AdminTab } from './adminNav';
 import { gateView, hashToView, viewToHash } from './viewHash';
@@ -103,6 +103,13 @@ export default function App() {
   const [newProjectDescription, setNewProjectDescription] = useState('');
   const [newProjectType, setNewProjectType] = useState('internal');
   const [newProjectWorkflowId, setNewProjectWorkflowId] = useState('');
+  // Whether the create form is open (behind the title bar's
+  // "+ New project" action, ticket a4fdfbd1); App owns it because the
+  // button lives in the title bar, not in the panel.
+  const [creatingProject, setCreatingProject] = useState(false);
+  // Every ticket, unfiltered, for the Projects page attention signals
+  // (same load as the Dashboard; see loadProjectTickets).
+  const [projectTickets, setProjectTickets] = useState<Ticket[]>([]);
   // Role agents created with the last external project, with each
   // API key shown exactly once (cleared when the admin closes the
   // box or creates another project).
@@ -360,10 +367,28 @@ export default function App() {
     setMobileNavOpen(false);
   }, [mainView]);
 
+  // Projects data: every ticket, unfiltered, so the per-project
+  // waiting/stalled signals are computed from the same source as the
+  // ticket lists (ticket a4fdfbd1). Same load as the Dashboard; a
+  // failure leaves the signals at zero rather than blocking the page
+  // (the ticket lists themselves are the authority).
+  const loadProjectTickets = useCallback(async () => {
+    try {
+      setProjectTickets(await api.listTickets());
+    } catch {
+      setProjectTickets([]);
+    }
+  }, []);
+
   useEffect(() => {
     if (authState !== 'app' || mainView !== 'dashboard') return;
     loadDashboard();
   }, [mainView, authState, loadDashboard]);
+
+  useEffect(() => {
+    if (authState !== 'app' || mainView !== 'projects') return;
+    loadProjectTickets();
+  }, [mainView, authState, loadProjectTickets]);
 
   useEffect(() => {
     if (authState !== 'app') return;
@@ -520,6 +545,10 @@ export default function App() {
       setNewProjectDescription('');
       setNewProjectType('internal');
       setNewProjectWorkflowId('');
+      // The form closes on success: an external creation shows the
+      // keys success panel instead (driven by createdAgents), an
+      // internal one just leaves the notice.
+      setCreatingProject(false);
       if (created.agents.length > 0) {
         setCreatedAgents(created.agents);
         setNotice(`Project created: ${created.project.name} with ${created.agents.length} role agents. Copy their API keys now — each is shown only once.`);
@@ -604,7 +633,10 @@ export default function App() {
   // per-view reload, unchanged from the old content header.
   function handleRefresh() {
     if (mainView === 'dashboard') loadDashboard();
-    else if (mainView === 'tickets-gantt') loadGantt();
+    else if (mainView === 'projects') {
+      loadProjectTickets();
+      loadProjects();
+    } else if (mainView === 'tickets-gantt') loadGantt();
     else if (mainView === 'documents') setDocumentsRefreshKey((k) => k + 1);
     else loadTickets(tab);
     if (selectedId) loadDetail(selectedId);
@@ -807,6 +839,7 @@ export default function App() {
       ? projects.find((p) => p.id === projectFilter)
       : undefined;
   const dashboardCounts = countTicketsByProject(dashboardTickets, workflowById);
+  const projectAttention = countProjectAttention(projectTickets, workflowById);
 
   function projectName(id: string | null): string {
     if (!id) return '—';
@@ -1013,6 +1046,13 @@ export default function App() {
             <button type="button" className="primary" onClick={() => setMainView('new')}>
               + New ticket
             </button>
+          ) : mainView === 'projects' && canManageProjects && !createdAgents ? (
+            // Hidden while the one-time keys panel is up: the keys are
+            // the only thing on screen until the PM closes the panel,
+            // so starting another creation must not dismiss them.
+            <button type="button" className="primary" onClick={() => setCreatingProject(true)}>
+              + New project
+            </button>
           ) : undefined
         }
         onRefresh={handleRefresh}
@@ -1049,6 +1089,9 @@ export default function App() {
         <ProjectsPanel
           projects={projects}
           projectFilter={projectFilter}
+          attention={projectAttention}
+          creating={creatingProject}
+          onCreatingChange={setCreatingProject}
           newProjectName={newProjectName}
           newProjectDescription={newProjectDescription}
           newProjectType={newProjectType}

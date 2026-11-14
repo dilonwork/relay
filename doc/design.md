@@ -43,6 +43,7 @@ Tickets carry project development work through a pipeline: the PM creates a requ
 21. Title Bar: Sidebar & Title Deduplication
 22. Dashboard Redesign: Attention First, Cards Second
 23. Ticket Detail Redesign: Two Columns, Description First, the Move as Buttons
+24. Projects Redesign: The List Is the Page, Creation Behind an Action
 - Appendix A State Code Reference
 - Appendix B Ticket Lifecycle Example
 
@@ -1239,3 +1240,37 @@ No schema change: this is a frontend change plus one read-only endpoint. No migr
 
 - `server/ticketDetail.test.js` (16 items, new file): journey line with zero/one/two/three targets; name resolution (display name, username, short id, null); missing-field order (reason first) and messages; the public directory returns exactly id/username/display_name; the component renders the journey line, two columns, description lead, handoff callout, target buttons with roles, conditional fields, "Apply: <move>", 4-column expandable history, rail with names plus the PM project form; App loads the directory once and passes it down; api exposes listUsers and the server serves GET /api/users; CSS carries the layout, callout, buttons, history rows and the mobile stack.
 - Frontend browser verification was not possible (no headless browser on the VM); only `tsc` + `vite build` were run. The Tester verifies the Ticket detail in the browser after deploy (journey line, two columns, callout, target buttons with conditional fields, history expansion, names, mobile width).
+
+## 24. Projects Redesign: The List Is the Page, Creation Behind an Action
+
+Implements the UI&UX prototype "Projects redesign — recommendations" (Document, Prototype category; interactive reference `projects-redesign-prototype.html` in the same category; design ticket `80b796f8` already delivered). This is the fifth of 9 redesign tickets (Dashboard, Tickets list, Ticket detail, Gantt delivered first); the pattern holds — the list is the page, attention first (waiting/stalled signals), creation behind a visible action, and the one-time keys treated as the highest-stakes content on the page.
+
+### The page
+
+The 6-column table is gone. Each project is a card — name + Internal/External badge, one-line description + workflow, labelled ticket/agent counts — with an amber waiting/stalled signal when either is above zero. Clicking a card filters the ticket list to that project and switches to Tickets, exactly as the old row click did. A search box above the grid filters by name substring with an "N of M projects" count; an empty search shows "No projects match" with a Clear search action.
+
+The create form is hidden until the title bar's "+ New project" action opens it as a panel on the same page (not a modal — the page stays put, and the list stays visible behind the form). Cancel closes it without creating anything. The type is picked as one of two compact cards (Internal / External) with a one-line description each — the paragraph radio labels are gone — and picking External reveals the role-agent preview as username chips (`<slug>-<role> · <Role>`, same `slugify` + `flowRoles` logic, rendering only). Name, Description, the Workflow select and the submit behavior are unchanged; the "new tickets follow the chosen workflow" note is shortened to one line under the select.
+
+After creating an external project the form is replaced by a distinct success panel (green border): "External project created — role agent API keys, shown only once", one key per row with a Copy button, the chat room, and the onboarding note. The keys are the only thing on screen until the PM closes the panel with "Done — back to projects"; the "+ New project" button is hidden while the panel is up, so starting another creation cannot dismiss keys that have not been copied yet. An internal creation just closes the form and leaves the notice.
+
+Unchanged on purpose: the title bar (path + page title + Refresh, plus the "+ New project" action; no duplicate titles anywhere), the sidebar, routing, PM/admin-only access, the workflow choice rules (Global workflows only at creation), the one-time key semantics, and the onboarding documents (Admin → Onboarding). At ≤720px the cards go single column and the type cards stack.
+
+### Waiting/stalled: computed client-side, no new endpoint
+
+The waiting/stalled signals need a per-project rollup the table did not carry (`ticket_count` is a total). The rollup is computed client-side from the unfiltered ticket load (`GET /api/tickets`, the same load the Dashboard uses): waiting is the pending bucket (requirement, pending_*, needs_* — tickets waiting on someone), stalled is the Gantt stall rule (`isStalledTicket`, 36 hours in a working state). App loads the tickets when the Projects view is entered (`loadProjectTickets`, same pattern as `loadDashboard`/`loadGantt`) and passes the rollup as `attention`; a failed load leaves the signals at zero rather than blocking the page. No new endpoint was added.
+
+### No migration
+
+No schema change: this is a frontend change only. No migration was added for this ticket.
+
+### Frontend
+
+- `src/helpers.ts`: the pure Projects helpers — `countProjectAttention` (waiting = pending bucket, stalled = `isStalledTicket`, keyed by project id, uncategorized skipped), `filterProjectsByName` (case-insensitive substring), `slugifyProjectName` (the server's `<project-slug>` rule), `previewAgentUsernames` (`<slug>-<role>` in flow order). As with the Dashboard helpers, the server tests require this module directly and exercise the exact code the component runs.
+- `src/ProjectsPanel.tsx`: rewritten around the helpers — card grid with labelled counts and waiting/stalled signals, search with the "N of M projects" count, create form behind `creating` (type cards, username chips), keys success panel (returned before the form/list render, so it is the only thing on screen). No page title is added (the title bar owns it) and the 6-column table, the paragraph radio labels, the preview table and the old keys banner are gone.
+- `src/App.tsx`: `creatingProject` state (owned here because the button lives in the title bar), `projectTickets` + `loadProjectTickets` on entering the Projects view, `projectAttention` passed to the panel, "+ New project" in the TitleBar `actions` slot (hidden while the keys panel is up), Refresh reloads the project tickets and the project list, and `handleCreateProject` closes the form on success (the keys panel is driven by `createdAgents` alone).
+- `src/index.css`: `.projects-toolbar`, `.projects-grid`, `.project-card` (`.selected`), `.project-desc`, `.project-counts` (`.wait` amber), `.projects-typecards` / `.typecard` (`.on` selected), `.chiprow` / `.chip`, `.projects-success` (green border), `.projects-keyrow`, and a ≤720px block that stacks the cards and the type cards.
+
+### Tests
+
+- `server/projectsRedesign.test.js` (15 items, new file): attention rollup (waiting bucket, stalled rule, 36-hour boundary, uncategorized skipped, custom-workflow definition, empty list); name search (case-insensitive, empty query); slugify (server rule, empty → 'project'); preview usernames (slug-role in flow order); the panel renders cards not a table, hides the form until creating, the keys panel wins over the form, search with count, type cards, username chips, no duplicate page titles; App loads project tickets, passes the attention rollup and the creating flag, and wires the title-bar action; CSS carries the grid, cards, type cards, chips, success panel and the mobile rules.
+- Frontend browser verification was not possible (no headless browser on the VM); only `tsc` + `vite build` were run. The Tester verifies the Projects page in the browser after deploy (cards with signals, search, "+ New project" panel, type cards, username chips, keys success panel with Copy, mobile width).

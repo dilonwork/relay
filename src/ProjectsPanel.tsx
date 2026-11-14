@@ -2,10 +2,21 @@ import { useEffect, useState } from 'react';
 import { api } from './api';
 import type { Project, RoleAgent, Workflow } from './api';
 import { ROLE_LABELS } from './helpers';
+import type { ProjectAttention } from './helpers';
+import { filterProjectsByName, previewAgentUsernames } from './helpers';
 
 interface ProjectsPanelProps {
   projects: Project[];
   projectFilter: string;
+  // Per-project waiting/stalled rollup, computed in App from the
+  // unfiltered ticket load (the same source as the Dashboard counts);
+  // a project missing here has no waiting or stalled tickets.
+  attention: Record<string, ProjectAttention>;
+  // The create form is hidden until "+ New project" (title bar) opens
+  // it; Cancel closes it without creating anything. App owns the flag
+  // because the button lives in the title bar.
+  creating: boolean;
+  onCreatingChange: (value: boolean) => void;
   newProjectName: string;
   newProjectDescription: string;
   newProjectType: string;
@@ -48,17 +59,13 @@ function builtinFlowRoles(workflows: Workflow[]): string[] {
   return builtin ? flowRoles(builtin) : [];
 }
 
-// Project slug preview: the same rule the server uses for role agent
-// usernames (<project-slug>-<role>).
-function slugify(name: string): string {
-  const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-  return slug || 'project';
-}
-
 export default function ProjectsPanel(props: ProjectsPanelProps) {
   const {
     projects,
     projectFilter,
+    attention,
+    creating,
+    onCreatingChange,
     newProjectName,
     newProjectDescription,
     newProjectType,
@@ -75,9 +82,10 @@ export default function ProjectsPanel(props: ProjectsPanelProps) {
   } = props;
   const [workflows, setWorkflows] = useState<Workflow[]>([]);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const [query, setQuery] = useState('');
 
   // The workflows list is loaded when the panel mounts: the project
-  // table shows each project's chosen workflow, and the create form
+  // cards show each project's chosen workflow, and the create form
   // offers the Global workflows to choose from.
   const [workflowsLoaded, setWorkflowsLoaded] = useState(false);
   async function ensureWorkflows() {
@@ -92,7 +100,7 @@ export default function ProjectsPanel(props: ProjectsPanelProps) {
   useEffect(() => {
     void ensureWorkflows();
     // Load once on mount; the list is small and the panel needs it
-    // for the table and the create form.
+    // for the cards and the create form.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -106,6 +114,7 @@ export default function ProjectsPanel(props: ProjectsPanelProps) {
       ? flowRoles(chosenWorkflow)
       : builtinFlowRoles(workflows)
     : [];
+  const previewUsernames = previewAgentUsernames(newProjectName, previewRoles);
 
   async function handleCopyKey(username: string, key: string) {
     try {
@@ -116,198 +125,237 @@ export default function ProjectsPanel(props: ProjectsPanelProps) {
     }
   }
 
+  function workflowName(id: string | null): string {
+    if (!id) return 'None';
+    return workflows.find((w) => w.id === id)?.name || '—';
+  }
+
+  // After creating an external project the keys get their own success
+  // panel — the only thing on screen until the PM closes it. The
+  // create form and the list stay hidden while the keys are shown, so
+  // the one-time keys never compete with anything else.
+  if (createdAgents && createdAgents.length > 0) {
+    return (
+      <div className="projects-success">
+        <h3>External project created — role agent API keys, shown only once</h3>
+        <p className="muted">
+          Copy each key now; they will never be shown again.
+        </p>
+        {createdAgents.map((a) => (
+          <div className="projects-keyrow" key={a.user.id}>
+            <b>{a.user.username}</b>
+            <span className="muted">({ROLE_LABELS[a.user.roles[0]] || a.user.roles[0]})</span>
+            <code>{a.key}</code>
+            <span className="muted">{a.onboarding.chat_room}</span>
+            <button
+              type="button"
+              className="link"
+              onClick={() => void handleCopyKey(a.user.username, a.key)}
+            >
+              {copiedKey === a.user.username ? 'Copied' : 'Copy'}
+            </button>
+          </div>
+        ))}
+        <p className="muted" style={{ margin: '8px 0 0' }}>
+          Each agent also has a live onboarding document (generated from the current workflow and role
+          definitions), the project prompt bundle (the whole project context in one shareable
+          document), and a chat-room recommendation — see Admin → Onboarding.
+        </p>
+        <p>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => {
+              onClearCreatedAgents();
+              onCreatingChange(false);
+            }}
+          >
+            Done — back to projects
+          </button>
+        </p>
+      </div>
+    );
+  }
+
+  // The list is the page: project cards with labelled counts and an
+  // amber waiting/stalled signal, a search box with an "N of M
+  // projects" count, and the create form behind "+ New project"
+  // (ticket a4fdfbd1, UI&UX prototype "Projects redesign —
+  // recommendations").
+  const visible = filterProjectsByName(projects, query);
+
   return (
-    <div className="card">
+    <div>
+      {creating && (
+        <div className="card">
+          <h3 className="section" style={{ marginTop: 0 }}>New project</h3>
+          <form onSubmit={onCreateProject}>
+            <div className="form-row">
+              <div>
+                <label className="field" htmlFor="new-project-name">Name</label>
+                <input
+                  id="new-project-name"
+                  type="text"
+                  value={newProjectName}
+                  onChange={(e) => onNewProjectNameChange(e.target.value)}
+                  placeholder="e.g. WebTracker"
+                />
+              </div>
+              <div>
+                <label className="field" htmlFor="new-project-description">Description</label>
+                <input
+                  id="new-project-description"
+                  type="text"
+                  value={newProjectDescription}
+                  onChange={(e) => onNewProjectDescriptionChange(e.target.value)}
+                  placeholder="What this project is for"
+                />
+              </div>
+            </div>
+            <span className="field">Project type</span>
+            <div className="projects-typecards">
+              <button
+                type="button"
+                className={`typecard${newProjectType !== 'external' ? ' on' : ''}`}
+                aria-pressed={newProjectType !== 'external'}
+                onClick={() => onNewProjectTypeChange('internal')}
+              >
+                <b>Internal</b>
+                <span>Uses internal agents, assigned later. No onboarding package.</span>
+              </button>
+              <button
+                type="button"
+                className={`typecard${isExternal ? ' on' : ''}`}
+                aria-pressed={isExternal}
+                onClick={() => onNewProjectTypeChange('external')}
+              >
+                <b>External</b>
+                <span>One role agent per role in the flow, each with an onboarding package.</span>
+              </button>
+            </div>
+            <div className="form-row">
+              <div>
+                <label className="field" htmlFor="new-project-workflow">Workflow</label>
+                <select
+                  id="new-project-workflow"
+                  value={newProjectWorkflowId}
+                  onChange={(e) => onNewProjectWorkflowIdChange(e.target.value)}
+                >
+                  <option value="">No workflow chosen (built-in 14-state flow)</option>
+                  {globalWorkflows.map((w) => (
+                    <option key={w.id || `global-${w.name}`} value={w.id || ''}>
+                      {w.name} ({(w.states || []).length} states)
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            <p className="muted">
+              New tickets follow the chosen workflow unless they name another one.
+            </p>
+            {isExternal && (
+              <div style={{ marginTop: 12 }}>
+                <p className="muted">
+                  Role agents that will be created — one per role, each with its own API key and
+                  onboarding package:
+                </p>
+                {previewRoles.length === 0 ? (
+                  <p className="muted">Role agents will be created from the built-in 14-state flow.</p>
+                ) : (
+                  <div className="chiprow">
+                    {previewUsernames.map((username, i) => (
+                      <span className="chip" key={username}>
+                        {username} · {ROLE_LABELS[previewRoles[i]] || previewRoles[i]}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+            <p>
+              <button className="primary" type="submit" disabled={busy || !newProjectName.trim()}>
+                Create project
+              </button>{' '}
+              <button type="button" className="secondary" onClick={() => onCreatingChange(false)}>
+                Cancel
+              </button>
+            </p>
+          </form>
+        </div>
+      )}
+
+      <div className="projects-toolbar">
+        <input
+          type="search"
+          aria-label="Search projects"
+          placeholder="Search projects…"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+        <span className="muted">
+          {visible.length} of {projects.length} projects
+        </span>
+      </div>
+
       {projects.length === 0 ? (
         <p className="muted">
-          No projects yet. Create one below — tickets can then belong to it.
+          No projects yet. Use + New project to create one — tickets can then belong to it.
         </p>
+      ) : visible.length === 0 ? (
+        <div className="dashboard-empty">
+          <b>No projects match</b>
+          Nothing matches “{query}”.
+          <br />
+          <button type="button" className="link" onClick={() => setQuery('')}>
+            Clear search
+          </button>
+        </div>
       ) : (
-        <table>
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Type</th>
-              <th>Description</th>
-              <th>Workflow</th>
-              <th>Tickets</th>
-              <th>Agents</th>
-            </tr>
-          </thead>
-          <tbody>
-            {projects.map((p) => (
-              <tr
+        <div className="projects-grid">
+          {visible.map((p) => {
+            const attn = attention[p.id] || { waiting: 0, stalled: 0 };
+            return (
+              <button
                 key={p.id}
-                className={projectFilter === p.id ? 'selected' : ''}
+                className={`project-card${projectFilter === p.id ? ' selected' : ''}`}
                 onClick={() => onSelectProject(p.id)}
+                title={`Open ${p.name}`}
               >
-                <td>{p.name}</td>
-                <td>
+                <span className="project-card-head">
+                  <h3>{p.name}</h3>
                   {p.type === 'external' ? (
                     <span className="badge delivered">External</span>
                   ) : (
                     <span className="badge">Internal</span>
                   )}
-                </td>
-                <td>{p.description || '—'}</td>
-                <td>
-                  {p.workflow_id
-                    ? workflows.find((w) => w.id === p.workflow_id)?.name || '—'
-                    : 'None'}
-                </td>
-                <td>{p.ticket_count ?? 0}</td>
-                <td>{p.agent_count ?? 0}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-      <form onSubmit={onCreateProject}>
-        <div className="form-row">
-          <div>
-            <label className="field" htmlFor="new-project-name">Name</label>
-            <input
-              id="new-project-name"
-              type="text"
-              value={newProjectName}
-              onChange={(e) => onNewProjectNameChange(e.target.value)}
-              placeholder="e.g. WebTracker"
-            />
-          </div>
-          <div>
-            <label className="field" htmlFor="new-project-description">Description</label>
-            <input
-              id="new-project-description"
-              type="text"
-              value={newProjectDescription}
-              onChange={(e) => onNewProjectDescriptionChange(e.target.value)}
-              placeholder="What this project is for"
-            />
-          </div>
-        </div>
-        <span className="field">Project type</span>
-        <div className="checkbox-row">
-          <label>
-            <input
-              type="radio"
-              name="new-project-type"
-              value="internal"
-              checked={newProjectType !== 'external'}
-              onChange={() => onNewProjectTypeChange('internal')}
-            />
-            Internal — uses internal agents, assigned to the project later. No onboarding package is generated.
-          </label>
-          <label>
-            <input
-              type="radio"
-              name="new-project-type"
-              value="external"
-              checked={isExternal}
-              onChange={() => onNewProjectTypeChange('external')}
-            />
-            External — created together with one role agent per role in the configured flow, plus an onboarding package for each role agent.
-          </label>
-        </div>
-        <div className="form-row">
-          <div>
-            <label className="field" htmlFor="new-project-workflow">Workflow</label>
-            <select
-              id="new-project-workflow"
-              value={newProjectWorkflowId}
-              onChange={(e) => onNewProjectWorkflowIdChange(e.target.value)}
-            >
-              <option value="">No workflow chosen (built-in 14-state flow)</option>
-              {globalWorkflows.map((w) => (
-                <option key={w.id || `global-${w.name}`} value={w.id || ''}>
-                  {w.name} ({(w.states || []).length} states)
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
-        <p className="muted">
-          New tickets on this project follow the chosen workflow unless they name another one.
-          Without a chosen workflow, new tickets need an explicit workflow.
-        </p>
-        {isExternal && (
-          <div style={{ marginTop: 12 }}>
-            <h3 className="section">Role agents that will be created</h3>
-            <p className="muted">One agent per role in the flow. Each gets its own API key and onboarding package.</p>
-            {previewRoles.length === 0 ? (
-              <p className="muted">Role agents will be created from the built-in 14-state flow.</p>
-            ) : (
-              <table>
-                <thead>
-                  <tr>
-                    <th>Agent username</th>
-                    <th>Role</th>
-                    <th>Onboarding package</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {previewRoles.map((r) => (
-                    <tr key={r}>
-                      <td>{slugify(newProjectName.trim() || 'project')}-{r}</td>
-                      <td>{ROLE_LABELS[r] || r}</td>
-                      <td>Token + live onboarding document + chat-room recommendation</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
-        )}
-        <button className="primary" type="submit" disabled={busy || !newProjectName.trim()}>
-          Create project
-        </button>
-        <span className="muted"> Click a project to view only its tickets.</span>
-      </form>
-
-      {createdAgents && createdAgents.length > 0 && (
-        <div className="banner notice" style={{ marginTop: 12 }}>
-          <strong>External project created — role agent API keys, shown only once. Copy each key now; they will never be shown again.</strong>
-          <table style={{ marginTop: 8 }}>
-            <thead>
-              <tr>
-                <th>Agent</th>
-                <th>Role</th>
-                <th>API key</th>
-                <th>Chat room</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {createdAgents.map((a) => (
-                <tr key={a.user.id}>
-                  <td>{a.user.username}</td>
-                  <td>{ROLE_LABELS[a.user.roles[0]] || a.user.roles[0]}</td>
-                  <td>
-                    <code>{a.key}</code>
-                  </td>
-                  <td>{a.onboarding.chat_room}</td>
-                  <td>
-                    <button
-                      type="button"
-                      className="link"
-                      onClick={() => void handleCopyKey(a.user.username, a.key)}
-                    >
-                      {copiedKey === a.user.username ? 'Copied' : 'Copy'}
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <p className="muted" style={{ margin: '8px 0 0' }}>
-            Each agent also has a live onboarding document (generated from the current workflow and role
-            definitions), the project prompt bundle (the whole project context in one shareable
-            document), and a chat-room recommendation — see Admin → Onboarding.
-          </p>
-          <button type="button" className="link" onClick={onClearCreatedAgents}>
-            Close
-          </button>
+                </span>
+                <span className="project-desc">
+                  {p.description || '—'} · {workflowName(p.workflow_id)}
+                </span>
+                <span className="project-counts">
+                  <span>
+                    <b>{p.ticket_count ?? 0}</b> tickets
+                  </span>
+                  <span>
+                    <b>{p.agent_count ?? 0}</b> agents
+                  </span>
+                  {attn.waiting > 0 && (
+                    <span className="wait">
+                      <b>{attn.waiting}</b> waiting
+                    </span>
+                  )}
+                  {attn.stalled > 0 && (
+                    <span className="wait">
+                      <b>{attn.stalled}</b> stalled
+                    </span>
+                  )}
+                </span>
+              </button>
+            );
+          })}
         </div>
       )}
+      <p className="muted">Click a project to view only its tickets.</p>
     </div>
   );
 }
