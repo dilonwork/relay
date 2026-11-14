@@ -1119,9 +1119,9 @@ export default function App() {
         <AdminPanel
           tab={adminTabForView(mainView) || 'overview'}
           onTabChange={(t: AdminTab) => setMainView(adminViewForTab(t))}
-          tickets={tickets}
           workflowsCreateRequest={workflowsCreateRequest}
           onWorkflowsFormOpenChange={setWorkflowsFormOpen}
+          onWorkflowsCreateRequestConsumed={() => setWorkflowsCreateRequest(0)}
         />
       ) : mainView === 'documents' ? (
         <DocumentsPanel

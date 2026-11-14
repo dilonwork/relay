@@ -196,14 +196,31 @@ const validForm = {
     assert.ok(!src.includes('Roles per state'));
   });
 
-  await ok('the title bar owns Create and App forwards the tickets through AdminPanel', () => {
-    const app = fs.readFileSync(path.join(__dirname, '..', 'src', 'App.tsx'), 'utf8');
-    assert.ok(app.includes('+ New workflow'));
-    assert.ok(app.includes('workflowsCreateRequest'));
-    assert.ok(app.includes("mainView === 'admin-workflows'"));
+  await ok('the usage counts come from the panel’s own unfiltered load, not the App ticket list', () => {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'WorkflowsPanel.tsx'), 'utf8');
+    // The panel loads the full list itself on mount: App's list is only
+    // loaded on entering the Tickets list view and is project-filtered.
+    assert.ok(src.includes('api.listTickets()'));
+    assert.ok(src.includes('const [allTickets, setAllTickets] = useState<Ticket[]>([])'));
+    assert.ok(src.includes('countTicketsByWorkflow(allTickets, w.id)'));
+    assert.ok(!src.includes('tickets: Ticket[]'), 'the tickets prop is gone');
     const admin = fs.readFileSync(path.join(__dirname, '..', 'src', 'AdminPanel.tsx'), 'utf8');
-    assert.ok(admin.includes('tickets={tickets}'));
-    assert.ok(admin.includes('createRequest={workflowsCreateRequest}'));
+    assert.ok(!admin.includes('tickets={tickets}'), 'AdminPanel no longer passes tickets through');
+    const app = fs.readFileSync(path.join(__dirname, '..', 'src', 'App.tsx'), 'utf8');
+    const adminUsage = app.slice(app.indexOf('<AdminPanel'), app.indexOf('/>', app.indexOf('<AdminPanel')));
+    assert.ok(!adminUsage.includes('tickets='), 'App no longer feeds tickets into AdminPanel');
+  });
+
+  await ok('a consumed create request resets the counter, so returning to the page opens nothing', () => {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'WorkflowsPanel.tsx'), 'utf8');
+    assert.ok(src.includes('onCreateRequestConsumed?: () => void'));
+    assert.ok(src.includes('onCreateRequestConsumed?.()'));
+    const admin = fs.readFileSync(path.join(__dirname, '..', 'src', 'AdminPanel.tsx'), 'utf8');
+    assert.ok(admin.includes('onCreateRequestConsumed={onWorkflowsCreateRequestConsumed}'));
+    const app = fs.readFileSync(path.join(__dirname, '..', 'src', 'App.tsx'), 'utf8');
+    assert.ok(app.includes('onWorkflowsCreateRequestConsumed={() => setWorkflowsCreateRequest(0)}'));
+    assert.ok(app.includes('+ New workflow'));
+    assert.ok(app.includes("mainView === 'admin-workflows'"));
   });
 
   await ok('the stylesheet carries the flow strip, section dots, and the validation and replace boxes', () => {
