@@ -110,6 +110,12 @@ export default function App() {
   // "+ New project" action, ticket a4fdfbd1); App owns it because the
   // button lives in the title bar, not in the panel.
   const [creatingProject, setCreatingProject] = useState(false);
+  // Admin - Workflows (ticket b56b1145): the title bar owns
+  // "+ New workflow"; each click increments the request counter the
+  // panel watches, and the panel reports the editor open state back so
+  // the button hides while the editor is open.
+  const [workflowsCreateRequest, setWorkflowsCreateRequest] = useState(0);
+  const [workflowsFormOpen, setWorkflowsFormOpen] = useState(false);
   // Every ticket, unfiltered, for the Projects page attention signals
   // (same load as the Dashboard; see loadProjectTickets).
   const [projectTickets, setProjectTickets] = useState<Ticket[]>([]);
@@ -1070,6 +1076,16 @@ export default function App() {
             <button type="button" className="primary" onClick={() => setCreatingProject(true)}>
               + New project
             </button>
+          ) : mainView === 'admin-workflows' && isAdmin && !workflowsFormOpen ? (
+            // Admin - Workflows (ticket b56b1145): Create moves to the
+            // title bar, same pattern as the other redesigned pages.
+            <button
+              type="button"
+              className="primary"
+              onClick={() => setWorkflowsCreateRequest((n) => n + 1)}
+            >
+              + New workflow
+            </button>
           ) : undefined
         }
         onRefresh={handleRefresh}
@@ -1089,6 +1105,9 @@ export default function App() {
         <AdminPanel
           tab={adminTabForView(mainView) || 'overview'}
           onTabChange={(t: AdminTab) => setMainView(adminViewForTab(t))}
+          tickets={tickets}
+          workflowsCreateRequest={workflowsCreateRequest}
+          onWorkflowsFormOpenChange={setWorkflowsFormOpen}
         />
       ) : mainView === 'documents' ? (
         <DocumentsPanel

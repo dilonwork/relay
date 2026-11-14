@@ -1,20 +1,37 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from './api';
-import type { Project, Workflow, WorkflowState, WorkflowTemplate, WorkflowTransition } from './api';
+import type { Project, Ticket, Workflow, WorkflowState, WorkflowTemplate, WorkflowTransition } from './api';
 import { buildLinearFlow } from './workflowQuickCreate';
 import {
   KIND_LABELS,
   ROLE_LABELS,
+  WORKFLOW_FORM_SECTIONS,
   WORKFLOW_KINDS,
   WORKFLOW_ROLES,
+  activeProjectsForWorkflow,
+  countTicketsByWorkflow,
+  moveStateToPosition,
   slugStateCode,
   stateLabelFor,
+  validateWorkflowForm,
+  workflowFlowStrip,
+  type WorkflowFormProblem,
+  type WorkflowFormSection,
 } from './helpers';
 
 type RolesMap = Workflow['roles'];
 
 interface WorkflowsPanelProps {
   projects: Project[];
+  // The already-loaded ticket list, for the per-workflow usage count
+  // (ticket b56b1145): a prop, no API change.
+  tickets: Ticket[];
+  // Title-bar "+ New workflow" (App owns the button): each increment
+  // opens a fresh create form.
+  createRequest: number;
+  // The panel reports the editor open state so App can hide the
+  // title-bar create action while the editor is open.
+  onFormOpenChange?: (open: boolean) => void;
 }
 
 const STATE_CODE_RE = /^[a-z][a-z0-9_]*$/;
@@ -27,26 +44,28 @@ function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value));
 }
 
-// Compact summary of a workflow's role map: how many states each role
-// owns (terminal states have no role), over the workflow's own states.
-function roleSummary(w: Workflow): string {
-  const counts: Record<string, number> = {};
-  for (const s of w.states || []) {
-    const role = w.roles[s.code] ? w.roles[s.code].role : null;
-    const key = role || '—';
-    counts[key] = (counts[key] || 0) + 1;
-  }
-  return WORKFLOW_ROLES.map((r) => `${ROLE_LABELS[r]} ${counts[r] || 0}`).join(' · ');
-}
-
-export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
+export default function WorkflowsPanel({ projects, tickets, createRequest, onFormOpenChange }: WorkflowsPanelProps) {
   const [workflows, setWorkflows] = useState<Workflow[]>([]);
   const [selectedProject, setSelectedProject] = useState('all');
-  const [activeWorkflow, setActiveWorkflow] = useState<Workflow | null>(null);
+  // The active workflow for every project at once (ticket b56b1145):
+  // the per-project line and the "Active for" column both read this map.
+  const [activeByProject, setActiveByProject] = useState<Record<string, Workflow | null>>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
+  // Grouped validation problems for the editor (null = never validated:
+  // the section navigation shows no dots until the first submit).
+  const [validationProblems, setValidationProblems] = useState<WorkflowFormProblem[] | null>(null);
+  // Form-scoped errors (validation summary is separate): template /
+  // quick-create / save failures live in the editor card, while the
+  // list card keeps the load errors.
+  const [formError, setFormError] = useState('');
+  // A template or quick-create over existing states waits for an
+  // inline Replace / Keep mine choice instead of a browser confirm.
+  const [replacePending, setReplacePending] = useState<
+    { kind: 'template'; template: WorkflowTemplate } | { kind: 'quick' } | null
+  >(null);
 
   // Create / edit form state. editingId null means creating a new
   // workflow; formOpen false hides the form.
@@ -78,23 +97,95 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
       const projectId = selectedProject === 'all' ? undefined : selectedProject;
       const rows = await api.listWorkflows(projectId);
       setWorkflows(rows);
-      if (projectId) {
-        const active = await api.getActiveWorkflow(projectId);
-        setActiveWorkflow(active.workflow);
-      } else {
-        setActiveWorkflow(null);
-      }
+      // The active workflow for every project, in parallel — the
+      // per-project line and the "Active for" column both read this map,
+      // so checking a project's choice never needs a filter switch.
+      const entries = await Promise.all(
+        projects.map(async (p) => {
+          try {
+            const res = await api.getActiveWorkflow(p.id);
+            return [p.id, res.workflow] as const;
+          } catch {
+            return [p.id, null] as const;
+          }
+        })
+      );
+      setActiveByProject(Object.fromEntries(entries));
     } catch (err) {
       if ((err as { status?: number }).status === 401) return; // handled by onUnauthorized
       setError(err instanceof Error ? err.message : 'Failed to load workflows.');
     } finally {
       setLoading(false);
     }
-  }, [selectedProject]);
+  }, [selectedProject, projects]);
 
   useEffect(() => {
     load();
   }, [load]);
+  // The active workflow of the selected project, from the per-project
+  // map (null while "All projects" is selected).
+  const activeWorkflow = selectedProject === 'all' ? null : activeByProject[selectedProject] ?? null;
+
+  // Title-bar "+ New workflow" (ticket b56b1145): App increments
+  // createRequest; each increment opens a fresh create form.
+  useEffect(() => {
+    if (createRequest > 0) openCreate();
+    // openCreate is intentionally not a dependency: the effect runs on
+    // the counter, not on the handler identity.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [createRequest]);
+
+  // Report the editor open state so App can hide the title-bar create
+  // action while the editor is open.
+  useEffect(() => {
+    onFormOpenChange?.(formOpen);
+  }, [formOpen, onFormOpenChange]);
+
+  // A workflow's flow as a chip strip (ticket b56b1145): the state
+  // labels in flow order joined by arrows, terminal states green,
+  // "+N more" past five; the editor preview passes the full length.
+  function renderFlowStrip(states: WorkflowState[], maxShown = 5) {
+    const { chips, more } = workflowFlowStrip(states, maxShown);
+    if (chips.length === 0) return <span className="muted">No states yet</span>;
+    return (
+      <span className="flow-strip">
+        {chips.map((c, i) => (
+          <span key={i}>
+            {i > 0 && (
+              <span className="flow-arrow" aria-hidden="true">
+                {' → '}
+              </span>
+            )}
+            <span className={`flow-chip${c.terminal ? ' terminal' : ''}`}>{c.label}</span>
+          </span>
+        ))}
+        {more > 0 && <span className="flow-more">+{more} more</span>}
+      </span>
+    );
+  }
+
+  // Validation problems for one editor section (empty until validated).
+  function problemsFor(section: WorkflowFormSection): WorkflowFormProblem[] {
+    return (validationProblems || []).filter((p) => p.section === section);
+  }
+
+  function renderSectionErrors(section: WorkflowFormSection) {
+    const list = problemsFor(section);
+    if (list.length === 0) return null;
+    return (
+      <>
+        {list.map((p, i) => (
+          <p key={i} className="section-error">
+            {p.message}
+          </p>
+        ))}
+      </>
+    );
+  }
+
+  function scrollToSection(section: WorkflowFormSection) {
+    document.getElementById(`workflow-section-${section}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
 
   function projectName(id: string | null): string {
     if (!id) return 'Global';
@@ -120,6 +211,9 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
     setFormOpen(true);
     setError('');
     setNotice('');
+    setFormError('');
+    setValidationProblems(null);
+    setReplacePending(null);
     loadExamples();
   }
 
@@ -139,17 +233,35 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
   // --- Start from: templates and Quick create (create mode only) ---
 
   function applyTemplate(t: WorkflowTemplate) {
-    if (
-      formStates.length > 0 &&
-      !window.confirm('Replace the current states, transitions and roles with this template?')
-    ) {
+    if (formStates.length > 0) {
+      // Replacing hand-entered states gets an inline choice, not a
+      // browser confirm (ticket b56b1145).
+      setReplacePending({ kind: 'template', template: t });
       return;
     }
+    applyTemplateNow(t);
+  }
+
+  function applyTemplateNow(t: WorkflowTemplate) {
     setFormStates(clone(t.states).sort((a, b) => a.sort_order - b.sort_order));
     setFormTransitions(clone(t.transitions));
     setFormRoles(clone(t.roles));
     setNotice(`Template applied: ${t.name}. Adjust it below, then save.`);
-    setError('');
+    setFormError('');
+  }
+
+  // The inline replace choice (ticket b56b1145): "Replace them" applies
+  // the pending template or quick-create flow; "Keep mine" drops it.
+  function confirmReplace() {
+    const pending = replacePending;
+    setReplacePending(null);
+    if (!pending) return;
+    if (pending.kind === 'template') applyTemplateNow(pending.template);
+    else applyQuickGenerateNow();
+  }
+
+  function cancelReplace() {
+    setReplacePending(null);
   }
 
   function setQuickRow(index: number, patch: { label?: string; role?: string }) {
@@ -165,22 +277,26 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
   }
 
   function handleQuickGenerate() {
-    const result = buildLinearFlow(quickRows);
-    if (!result.ok) {
-      setError(result.error);
+    if (formStates.length > 0) {
+      // Replacing hand-entered states gets an inline choice, not a
+      // browser confirm (ticket b56b1145).
+      setReplacePending({ kind: 'quick' });
       return;
     }
-    if (
-      formStates.length > 0 &&
-      !window.confirm('Replace the current states, transitions and roles with the generated linear flow?')
-    ) {
+    applyQuickGenerateNow();
+  }
+
+  function applyQuickGenerateNow() {
+    const result = buildLinearFlow(quickRows);
+    if (!result.ok) {
+      setFormError(result.error);
       return;
     }
     setFormStates(result.states);
     setFormTransitions(result.transitions);
     setFormRoles(result.roles);
     setNotice(`Linear flow generated: ${result.states.length} states, ${result.transitions.length} transitions.`);
-    setError('');
+    setFormError('');
   }
 
   // Advanced (Quick create): add one backward transition to the flow
@@ -191,19 +307,19 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
     const from = advFrom || formStates[formStates.length - 1]?.code || '';
     const to = advTo || formStates[formStates.length - 2]?.code || '';
     if (formStates.length < 2 || !from || !to) {
-      setError('Add at least two states before adding a backward transition.');
+      setFormError('Add at least two states before adding a backward transition.');
       return;
     }
     if (from === to) {
-      setError('A backward transition must go to a different state.');
+      setFormError('A backward transition must go to a different state.');
       return;
     }
     if (!formStates.some((s) => s.code === from) || !formStates.some((s) => s.code === to)) {
-      setError('Both states of a backward transition must exist in the States table.');
+      setFormError('Both states of a backward transition must exist in the States table.');
       return;
     }
     if (formTransitions.some((t) => t.from === from && t.to === to)) {
-      setError(`A transition ${from} → ${to} already exists.`);
+      setFormError(`A transition ${from} → ${to} already exists.`);
       return;
     }
     setFormTransitions((prev) => [
@@ -211,7 +327,7 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
       { from, to, role: formRoles[from]?.role || 'leader', requiresReason: true, requiresHandoff: false, kind: 'backward', selfCheck: false },
     ]);
     setNotice(`Backward transition added: ${from} → ${to} (reason required).`);
-    setError('');
+    setFormError('');
   }
 
   function openEdit(w: Workflow) {
@@ -224,6 +340,9 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
     setFormOpen(true);
     setError('');
     setNotice('');
+    setFormError('');
+    setValidationProblems(null);
+    setReplacePending(null);
   }
 
   // --- States editing ---
@@ -265,14 +384,8 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
     }
   }
 
-  function moveState(index: number, delta: number) {
-    setFormStates((prev) => {
-      const next = [...prev];
-      const target = index + delta;
-      if (target < 0 || target >= next.length) return prev;
-      [next[index], next[target]] = [next[target], next[index]];
-      return next;
-    });
+  function moveStateTo(index: number, target: number) {
+    setFormStates((prev) => moveStateToPosition(prev, index, target));
   }
 
   function addState() {
@@ -334,68 +447,21 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
     setFormRoles((prev) => ({ ...prev, [code]: { ...(prev[code] || { role: null, responsibilities: '' }), responsibilities } }));
   }
 
-  // Client-side validation mirroring the server rules (design doc
-  // ch. 15); the server re-validates and its message wins on save.
-  function validateForm(): string | null {
-    if (!formName.trim()) return 'Name is required.';
-    if (formStates.length === 0) return 'Add at least one state.';
-    const codes = new Set<string>();
-    for (const s of formStates) {
-      if (!s.label.trim()) return 'Every state needs a label.';
-      if (!s.code || !STATE_CODE_RE.test(s.code)) {
-        return `State "${s.label || '(unnamed)'}" needs a code: lowercase snake_case, e.g. user_requirement.`;
-      }
-      if (codes.has(s.code)) return `Duplicate state code: ${s.code}.`;
-      codes.add(s.code);
-    }
-    if (formStates.filter((s) => s.is_start).length !== 1) {
-      return 'Exactly one state must be the start state.';
-    }
-    if (!formStates.some((s) => s.is_terminal)) {
-      return 'At least one state must be terminal.';
-    }
-    for (const s of formStates) {
-      const entry = formRoles[s.code];
-      if (!entry) return `State ${s.code} has no role entry.`;
-      if (s.is_terminal) {
-        if (entry.role !== null) return `Terminal state ${s.code} must have no role.`;
-      } else if (!WORKFLOW_ROLES.includes(entry.role || '')) {
-        return `State ${s.code} needs a role.`;
-      }
-      if (!entry.responsibilities || !entry.responsibilities.trim()) {
-        return `State ${s.code} needs a responsibilities note.`;
-      }
-    }
-    const seen = new Set<string>();
-    for (const t of formTransitions) {
-      if (!codes.has(t.from) || !codes.has(t.to)) return 'Every transition must use states from the list above.';
-      if (t.from === t.to) return 'A transition must not loop back to the same state.';
-      if (!WORKFLOW_KINDS.includes(t.kind)) return `Unknown transition kind: ${t.kind}.`;
-      if ((t.kind === 'backward' || t.kind === 'return') && !t.requiresReason) {
-        return `A ${t.kind} transition (${t.from} → ${t.to}) must require a reason.`;
-      }
-      const key = `${t.from}->${t.to}`;
-      if (seen.has(key)) return `Duplicate transition: ${t.from} → ${t.to}.`;
-      seen.add(key);
-    }
-    for (const s of formStates) {
-      if (s.is_terminal) continue;
-      if (!formTransitions.some((t) => t.from === s.code)) {
-        return `State ${s.code} is not terminal but has no outgoing transition.`;
-      }
-    }
-    return null;
-  }
-
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    setError('');
+    setFormError('');
     setNotice('');
-    const problem = validateForm();
-    if (problem) {
-      setError(problem);
-      return;
-    }
+    // Grouped validation (ticket b56b1145): every problem at once, by
+    // section — the summary box and the per-section error text render
+    // them; the name no longer gates the submit button alone.
+    const problems = validateWorkflowForm({
+      name: formName,
+      states: formStates,
+      transitions: formTransitions,
+      roles: formRoles,
+    });
+    setValidationProblems(problems);
+    if (problems.length > 0) return;
     const states = formStates.map((s, i) => ({ ...s, sort_order: i }));
     // The stored transition role is derived from the from-state's role
     // in the roles map (ch. 15); the server re-derives it on save.
@@ -424,10 +490,11 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
         });
         setNotice(`Workflow created: ${created.name}`);
       }
+      setValidationProblems(null);
       setFormOpen(false);
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to save workflow.');
+      setFormError(err instanceof Error ? err.message : 'Failed to save workflow.');
     } finally {
       setBusy(false);
     }
@@ -485,18 +552,13 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
   const selectedProjectName = selectedProject === 'all' ? null : projectName(selectedProject);
 
   return (
+    <>
     <div className="card">
       <p className="muted">
-        A workflow is a state machine: its states, the transitions between
-        them, and the role responsible for each state. A workflow belongs
-        to one project, or is Global (usable by every project). Each
-        project chooses one workflow; new tickets follow it unless they
-        name another workflow. A project with no workflow chosen needs an
-        explicit workflow on every new ticket. There is no default
-        workflow.
+        A workflow is a state machine: states, transitions, and the role for each state. Each project chooses one.
       </p>
       {error && <div className="banner error">{error}</div>}
-      {notice && <div className="banner notice">{notice}</div>}
+      {!formOpen && notice && <div className="banner notice">{notice}</div>}
 
       <div className="form-row">
         <div>
@@ -521,7 +583,7 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
               {activeWorkflow ? activeWorkflow.name : 'No workflow chosen'}
               {activeWorkflow && (
                 <button
-                  className="link"
+                  className="link amber"
                   type="button"
                   onClick={handleClearWorkflow}
                   disabled={busy}
@@ -531,22 +593,35 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
                 </button>
               )}
             </p>
+            {activeWorkflow && (
+              <p className="muted" style={{ margin: '0.25rem 0' }}>
+                New tickets will need an explicit workflow.
+              </p>
+            )}
           </div>
         )}
       </div>
 
+      {projects.length > 0 && (
+        <p className="muted workflow-active-line">
+          {projects
+            .map((p) => `${p.name}: ${activeByProject[p.id]?.name || 'No workflow chosen'}`)
+            .join(' · ')}
+        </p>
+      )}
+
       {loading ? (
         <p className="muted">Loading workflows…</p>
       ) : workflows.length === 0 ? (
-        <p className="muted">No workflows yet. Create one below.</p>
+        <p className="muted">No workflows yet. Create one from the title bar.</p>
       ) : (
         <table>
           <thead>
             <tr>
               <th>Name</th>
-              <th>Project</th>
-              <th>States</th>
-              <th>Roles per state</th>
+              <th>Flow</th>
+              <th>Active for</th>
+              <th>Tickets</th>
               <th>Actions</th>
             </tr>
           </thead>
@@ -555,13 +630,14 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
               <tr key={w.id || `global-${w.name}`}>
                 <td>
                   {w.name}{' '}
-                  {selectedProject !== 'all' && activeWorkflow?.id === w.id && <span className="badge">Active</span>}
+                  {selectedProject !== 'all' && activeWorkflow?.id === w.id && <span className="badge">Active</span>}{' '}
+                  <span className="chip">{projectName(w.project_id)}</span>
                 </td>
-                <td>{projectName(w.project_id)}</td>
-                <td>{(w.states || []).length}</td>
-                <td>{roleSummary(w)}</td>
+                <td>{renderFlowStrip(w.states || [])}</td>
+                <td>{activeProjectsForWorkflow(activeByProject, w.id, projects).join(', ') || '—'}</td>
+                <td>{countTicketsByWorkflow(tickets, w.id)}</td>
                 <td>
-                  <button className="link" type="button" onClick={() => openEdit(w)} disabled={busy}>
+                  <button className="primary small" type="button" onClick={() => openEdit(w)} disabled={busy}>
                     Edit
                   </button>{' '}
                   {selectedProject !== 'all' &&
@@ -571,7 +647,7 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
                         Set active
                       </button>
                     )}{' '}
-                  <button className="link" type="button" onClick={() => handleDelete(w)} disabled={busy}>
+                  <button className="link danger" type="button" onClick={() => handleDelete(w)} disabled={busy}>
                     Delete
                   </button>
                 </td>
@@ -580,14 +656,65 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
           </tbody>
         </table>
       )}
+    </div>
 
-      {!formOpen ? (
-        <button className="primary" type="button" onClick={openCreate} disabled={busy}>
-          Create workflow
-        </button>
-      ) : (
+    {formOpen && (
+      <div className="card">
         <form onSubmit={handleSubmit}>
-          <h3 className="section">{editingId ? 'Edit workflow' : 'New workflow'}</h3>
+          <h3 className="section">{editingId ? `Edit — ${formName || 'workflow'}` : 'New workflow'}</h3>
+          {/* Section navigation (ticket b56b1145): jumps to each editor
+              section; a red dot marks a section with validation problems,
+              green when clean (dots appear after the first submit). */}
+          <nav className="section-nav" aria-label="Editor sections">
+            {WORKFLOW_FORM_SECTIONS.map((sec) => {
+              const sectionProblems = problemsFor(sec.key);
+              const dot =
+                validationProblems === null ? null : sectionProblems.length > 0 ? 'bad' : 'ok';
+              return (
+                <button key={sec.key} type="button" className="link" onClick={() => scrollToSection(sec.key)}>
+                  {sec.label}
+                  {dot && (
+                    <span
+                      className={`section-dot ${dot}`}
+                      aria-label={dot === 'bad' ? 'has problems' : 'clean'}
+                    />
+                  )}
+                </button>
+              );
+            })}
+          </nav>
+          {/* Read-only flow preview (ticket b56b1145 P2): the same chip
+              strip, full length, so the admin sees the shape while editing. */}
+          {formStates.length > 0 && (
+            <p className="workflow-preview">
+              <span className="muted">Flow preview: </span>
+              {renderFlowStrip(formStates, formStates.length)}
+            </p>
+          )}
+          {/* Grouped validation summary (ticket b56b1145): every problem,
+              by section — not just the first one. */}
+          {validationProblems && validationProblems.length > 0 && (
+            <div className="validation-summary" role="alert">
+              <strong>
+                {validationProblems.length} problem{validationProblems.length > 1 ? 's' : ''} to fix:
+              </strong>
+              {WORKFLOW_FORM_SECTIONS.filter((sec) => problemsFor(sec.key).length > 0).map((sec) => (
+                <div key={sec.key}>
+                  <strong>{sec.label}:</strong>
+                  <ul>
+                    {problemsFor(sec.key).map((prob, i) => (
+                      <li key={i}>{prob.message}</li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
+            </div>
+          )}
+          {formError && <div className="banner error">{formError}</div>}
+          {notice && <div className="banner notice">{notice}</div>}
+          <h3 className="section" id="workflow-section-basics">
+            Basics
+          </h3>
           <div className="form-row">
             <div>
               <label className="field" htmlFor="workflow-name">Name</label>
@@ -615,10 +742,28 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
               </select>
             </div>
           </div>
+          {renderSectionErrors('basics')}
 
           {!editingId && (
             <>
-              <h3 className="section">Start from</h3>
+              <h3 className="section" id="workflow-section-start">
+                Start from
+              </h3>
+              {/* Inline replace warning (ticket b56b1145): applying a
+                  template or generating a flow over entered states asks
+                  here — no browser confirm dialog. */}
+              {replacePending && (
+                <div className="replace-notice" role="alert">
+                  This will replace the {formStates.length} state{formStates.length === 1 ? '' : 's'} you
+                  have entered.{' '}
+                  <button className="link" type="button" onClick={confirmReplace}>
+                    Replace them
+                  </button>{' '}
+                  <button className="link" type="button" onClick={cancelReplace}>
+                    Keep mine
+                  </button>
+                </div>
+              )}
               <p className="muted">
                 New workflows start blank — add states below, apply a
                 template, or use Quick create to chain states into a
@@ -762,7 +907,9 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
             </>
           )}
 
-          <h3 className="section">States</h3>
+          <h3 className="section" id="workflow-section-states">
+            States
+          </h3>
           <p className="muted">
             Order is the flow order (top to bottom). Exactly one state is
             the start; at least one is terminal. Codes are lowercase
@@ -775,7 +922,7 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
                 <th>Code</th>
                 <th>Start</th>
                 <th>Terminal</th>
-                <th>Order</th>
+                <th>Position</th>
                 <th />
               </tr>
             </thead>
@@ -830,17 +977,17 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
                     />
                   </td>
                   <td>
-                    <button className="link" type="button" onClick={() => moveState(i, -1)} disabled={i === 0}>
-                      ↑
-                    </button>{' '}
-                    <button
-                      className="link"
-                      type="button"
-                      onClick={() => moveState(i, 1)}
-                      disabled={i === formStates.length - 1}
+                    <select
+                      value={i}
+                      onChange={(e) => moveStateTo(i, Number(e.target.value))}
+                      aria-label={`Move ${s.label || s.code || i + 1} to position`}
                     >
-                      ↓
-                    </button>
+                      {formStates.map((_, pos) => (
+                        <option key={pos} value={pos}>
+                          {pos + 1}
+                        </option>
+                      ))}
+                    </select>
                   </td>
                   <td>
                     <button className="link" type="button" onClick={() => removeState(i)}>
@@ -854,8 +1001,11 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
           <button className="link" type="button" onClick={addState}>
             + Add state
           </button>
+          {renderSectionErrors('states')}
 
-          <h3 className="section">Transitions</h3>
+          <h3 className="section" id="workflow-section-transitions">
+            Transitions
+          </h3>
           <p className="muted">
             A transition moves a ticket from one state to another. The role
             shown is the from-state&apos;s role (from the Roles table below)
@@ -947,8 +1097,11 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
           <button className="link" type="button" onClick={addTransition} disabled={formStates.length < 2}>
             + Add transition
           </button>
+          {renderSectionErrors('transitions')}
 
-          <h3 className="section">Roles &amp; responsibilities</h3>
+          <h3 className="section" id="workflow-section-roles">
+            Roles &amp; responsibilities
+          </h3>
           <p className="muted">
             One role owns each state in this workflow. The same person may
             hold different roles in different workflows — what matters here
@@ -1000,14 +1153,16 @@ export default function WorkflowsPanel({ projects }: WorkflowsPanelProps) {
               })}
             </tbody>
           </table>
-          <button className="primary" type="submit" disabled={busy || !formName.trim()}>
+          {renderSectionErrors('roles')}
+          <button className="primary" type="submit" disabled={busy}>
             {editingId ? 'Save changes' : 'Create workflow'}
           </button>{' '}
           <button className="link" type="button" onClick={() => setFormOpen(false)} disabled={busy}>
             Cancel
           </button>
         </form>
-      )}
-    </div>
+      </div>
+    )}
+    </>
   );
 }
