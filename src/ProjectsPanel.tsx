@@ -301,7 +301,8 @@ export default function ProjectsPanel(props: ProjectsPanelProps) {
           </table>
           <p className="muted" style={{ margin: '8px 0 0' }}>
             Each agent also has a live onboarding document (generated from the current workflow and role
-            definitions) and a chat-room recommendation — see Admin → Onboarding.
+            definitions), the project prompt bundle (the whole project context in one shareable
+            document), and a chat-room recommendation — see Admin → Onboarding.
           </p>
           <button type="button" className="link" onClick={onClearCreatedAgents}>
             Close

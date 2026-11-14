@@ -401,6 +401,35 @@ async function main() {
     assert.equal(list[0].agent_count, 6);
   });
 
+  await ok('external creation attaches the same prompt bundle to every role agent', async () => {
+    const db = new FakeDb();
+    const saved = process.env.PUBLIC_URL;
+    try {
+      delete process.env.PUBLIC_URL;
+      const res = await projects.createProject(db, {
+        actorId: 'pm-1', actorRoles: ['pm'], name: 'Acme Support', description: 'External client project.', type: 'external',
+        origin: 'http://129.146.97.44:3000',
+      });
+      assert.equal(res.ok, true, JSON.stringify(res));
+      assert.equal(res.agents.length, 6);
+      const first = res.agents[0].onboarding.prompt_bundle;
+      assert.ok(first, 'each agent package carries the bundle');
+      assert.equal(first.base_url, 'http://129.146.97.44:3000');
+      assert.ok(first.generated_at, 'bundle carries a generated-at timestamp');
+      assert.ok(first.markdown.includes('# Project prompt — Acme Support'));
+      assert.ok(first.markdown.includes('External client project.'));
+      assert.ok(first.markdown.includes('GET http://129.146.97.44:3000/api/queue'));
+      for (const a of res.agents) {
+        // One bundle per project, not per role: identical text for all.
+        assert.equal(a.onboarding.prompt_bundle.markdown, first.markdown, 'bundle is identical for every role agent');
+        assert.ok(!a.onboarding.prompt_bundle.markdown.includes(a.key), 'bundle never contains the token');
+      }
+    } finally {
+      if (saved === undefined) delete process.env.PUBLIC_URL;
+      else process.env.PUBLIC_URL = saved;
+    }
+  });
+
   await ok('internal creation creates no agents', async () => {
     const db = new FakeDb();
     const res = await projects.createProject(db, {

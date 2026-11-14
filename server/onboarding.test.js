@@ -308,6 +308,139 @@ async function main() {
     assert.ok(!after.document.markdown.includes('Pick up the ticket and start development.'));
   });
 
+  await ok('buildProjectPromptBundle assembles the whole project context in one document', async () => {
+    const db = new FakeDb();
+    const project = db.seedProject('Acme Support', 'external');
+    project.description = 'External client project.';
+    const flow = db.seedGlobalWorkflow();
+    project.workflow_id = flow.id;
+    const saved = process.env.PUBLIC_URL;
+    try {
+      delete process.env.PUBLIC_URL;
+      const bundle = await onboarding.buildProjectPromptBundle(db, {
+        projectId: project.id,
+        baseUrl: 'http://relay.example:3000/',
+      });
+      assert.equal(bundle.ok, true, JSON.stringify(bundle));
+      assert.equal(bundle.workflow_name, 'Default');
+      assert.equal(bundle.base_url, 'http://relay.example:3000');
+      assert.deepEqual(bundle.roles, ['leader', 'pm', 'engineer', 'reviewer', 'tester', 'deployer']);
+      assert.ok(bundle.bundle.generated_at, 'generated-at timestamp present');
+      const md = bundle.bundle.markdown;
+      assert.ok(md.includes('# Project prompt — Acme Support'));
+      assert.ok(md.includes('External client project.'), 'bundle carries the project purpose');
+      assert.ok(md.includes('**Base URL:** http://relay.example:3000'));
+      assert.ok(md.includes(`**Generated:** ${bundle.bundle.generated_at}`));
+      assert.ok(md.includes('### Engineer'), 'bundle groups states by role');
+      assert.ok(md.includes('**Pending dev** — Pick up the ticket and start development.'));
+      assert.ok(md.includes('**In dev** — Implement the plan, then hand it over for review with a handoff note.'));
+      assert.ok(md.includes('### Transitions'), 'bundle lists the transitions');
+      assert.ok(md.includes('**In dev** → **Pending review**'));
+      assert.ok(md.includes('requires a handoff note'), 'bundle flags handoff-required transitions');
+      assert.ok(md.includes('Terminal states: Delivered, Cancelled'), 'bundle names the terminal states');
+      assert.ok(md.includes('Check the queue every 5 minutes'), 'bundle carries the standing rules');
+      assert.ok(md.includes('Relay is English-only'), 'bundle carries the English-only rule');
+      assert.ok(md.includes('every 12 hours'), 'bundle carries the 12-hour rules sync');
+      assert.ok(md.includes('develop branch'), 'bundle carries the develop-branch rule');
+      assert.ok(md.includes('`X-API-Key`'), 'bundle explains header auth');
+      assert.ok(md.includes('GET http://relay.example:3000/api/queue'), 'bundle lists endpoints with the base URL');
+      assert.ok(md.includes('POST http://relay.example:3000/api/tickets/:id/transitions'), 'bundle lists the transition endpoint');
+      assert.ok(!md.includes('rl_'), 'the bundle never contains a token');
+      assert.ok(md.includes('You are joining the project **Acme Support**'), 'bundle names the assignment');
+    } finally {
+      if (saved === undefined) delete process.env.PUBLIC_URL;
+      else process.env.PUBLIC_URL = saved;
+    }
+  });
+
+  await ok('the bundle uses the request origin when no base URL is configured', async () => {
+    const db = new FakeDb();
+    const project = db.seedProject('Acme Support', 'external');
+    db.seedGlobalWorkflow();
+    const saved = process.env.PUBLIC_URL;
+    try {
+      delete process.env.PUBLIC_URL;
+      const bundle = await onboarding.buildProjectPromptBundle(db, {
+        projectId: project.id,
+        origin: 'http://129.146.97.44:3000',
+      });
+      assert.equal(bundle.ok, true, JSON.stringify(bundle));
+      assert.equal(bundle.base_url, 'http://129.146.97.44:3000');
+      assert.ok(bundle.bundle.markdown.includes('GET http://129.146.97.44:3000/api/queue'));
+    } finally {
+      if (saved === undefined) delete process.env.PUBLIC_URL;
+      else process.env.PUBLIC_URL = saved;
+    }
+  });
+
+  await ok('the bundle reflects a workflow edit on regeneration', async () => {
+    const db = new FakeDb();
+    const project = db.seedProject('Acme Support', 'external');
+    const created = await workflows.createWorkflow(db, {
+      actorId: 'admin-1', actorRoles: ['admin'], name: 'Acme flow', projectId: project.id,
+      roles: workflows.BUILTIN_WORKFLOW_ROLES,
+      states: sm.BUILTIN_STATES,
+      transitions: sm.BUILTIN_DEFINITION.transitions,
+    });
+    assert.equal(created.ok, true, JSON.stringify(created));
+    const setActive = await workflows.setActiveWorkflow(db, {
+      actorId: 'admin-1', actorRoles: ['admin'], projectId: project.id, workflowId: created.workflow.id,
+    });
+    assert.equal(setActive.ok, true, JSON.stringify(setActive));
+    const before = await onboarding.buildProjectPromptBundle(db, { projectId: project.id, baseUrl: 'http://localhost:3000' });
+    assert.equal(before.ok, true, JSON.stringify(before));
+    assert.equal(before.workflow_name, 'Acme flow');
+    assert.ok(before.bundle.markdown.includes('Pick up the ticket and start development.'));
+    assert.ok(!before.bundle.markdown.includes('UPDATED RESPONSIBILITY'));
+    const editedRoles = JSON.parse(JSON.stringify(workflows.BUILTIN_WORKFLOW_ROLES));
+    editedRoles.pending_dev.responsibilities = 'UPDATED RESPONSIBILITY: pick up and start.';
+    const updated = await workflows.updateWorkflow(db, created.workflow.id, {
+      actorId: 'admin-1', actorRoles: ['admin'], roles: editedRoles,
+    });
+    assert.equal(updated.ok, true, JSON.stringify(updated));
+    const after = await onboarding.buildProjectPromptBundle(db, { projectId: project.id, baseUrl: 'http://localhost:3000' });
+    assert.equal(after.ok, true, JSON.stringify(after));
+    assert.ok(after.bundle.markdown.includes('UPDATED RESPONSIBILITY: pick up and start.'));
+    assert.ok(!after.bundle.markdown.includes('Pick up the ticket and start development.'));
+  });
+
+  await ok('the package carries the prompt bundle with no token in it', async () => {
+    const db = new FakeDb();
+    const project = db.seedProject('Acme Support', 'external');
+    const agent = await auth.createAgent(db, {
+      username: 'acme-support-engineer', displayName: 'Acme Support Engineer', role: 'engineer', projectId: project.id,
+    });
+    assert.equal(agent.ok, true, JSON.stringify(agent));
+    const saved = process.env.PUBLIC_URL;
+    try {
+      delete process.env.PUBLIC_URL;
+      const pkg = await onboarding.getOnboardingPackage(db, { projectId: project.id, role: 'engineer' });
+      assert.equal(pkg.ok, true, JSON.stringify(pkg));
+      assert.ok(pkg.prompt_bundle, 'package carries the bundle');
+      assert.equal(pkg.prompt_bundle.base_url, 'http://localhost:3000');
+      assert.ok(pkg.prompt_bundle.markdown.includes('# Project prompt — Acme Support'));
+      assert.ok(pkg.prompt_bundle.generated_at, 'bundle carries a generated-at timestamp');
+      assert.ok(!pkg.prompt_bundle.markdown.includes(agent.key), 'the bundle never contains the token');
+      assert.ok(!pkg.prompt_bundle.markdown.includes(pkg.key.masked), 'the bundle carries no key value at all');
+    } finally {
+      if (saved === undefined) delete process.env.PUBLIC_URL;
+      else process.env.PUBLIC_URL = saved;
+    }
+  });
+
+  await ok('the bundle rejects internal and unknown projects', async () => {
+    const db = new FakeDb();
+    const internal = db.seedProject('Relay', 'internal');
+    const notExternal = await onboarding.buildProjectPromptBundle(db, { projectId: internal.id, baseUrl: 'http://localhost:3000' });
+    assert.equal(notExternal.ok, false);
+    assert.equal(notExternal.status, 400);
+    assert.equal(notExternal.error, 'not_external');
+    const unknown = await onboarding.buildProjectPromptBundle(db, { projectId: 'no-such-project', baseUrl: 'http://localhost:3000' });
+    assert.equal(unknown.ok, false);
+    assert.equal(unknown.status, 400);
+    assert.equal(unknown.error, 'unknown_project');
+  });
+
   await ok('internal projects, unknown projects and unknown roles are rejected; a missing agent is 404', async () => {
     const db = new FakeDb();
     const internal = db.seedProject('Relay', 'internal');

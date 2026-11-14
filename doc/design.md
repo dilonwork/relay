@@ -937,17 +937,18 @@ The Users sub-page has two subtabs, Humans and Agents, sharing the same componen
 
 The package lives on a new Admin sub-page, Onboarding (the fifth Admin tab: Overview / Users / Onboarding / Workflows / API keys), not in the Projects panel — the package is admin-only and the Projects panel is visible to PMs too. The endpoint is `GET /api/admin/projects/:id/onboarding/:role`, under `/api/admin`, so the `requireAdmin` middleware enforces admin-only. The panel picks an external project, then a role agent, and shows the package.
 
-The package has three parts (`server/onboarding.js`, `getOnboardingPackage`):
+The package has four parts (`server/onboarding.js`, `getOnboardingPackage`):
 
 1. **API key (masked).** The agent's latest active key, shown as `key_prefix + "…"`. The full key is **not** returned here: the server never stores it, so it cannot be revealed later. The full key's only showing is the handoff at creation time — the one-time key banner in the create-agent form, or the one-time keys box after external project creation. That is the secure reading of the prototype's "full key shown here as the handoff": the handoff *is* the creation response.
 2. **Live onboarding document.** Generated on every request from the project's *live* workflow and role definitions — never a frozen snapshot. The document (`buildOnboardingDocument`) carries a `Generated:` timestamp, the role and project, the flow name, the chat-room recommendation, the work-mode bullets (check the queue every 5 minutes; one ticket at a time; clarify instead of guessing; test locally first, then deploy; never print an API key), and "What you own in this flow": the states the role owns in the project's chosen workflow (or the built-in flow when none is chosen), each with its responsibilities sentence from the workflow's roles map. A **Regenerate** button re-fetches the package; because generation re-reads the live definitions each time, a workflow edit shows up in the regenerated document — the onboarding test proves this by editing a responsibilities sentence through the workflow service and asserting the new text appears and the old text is gone. The document itself never contains a token, for internal agents or external ones.
-3. **Chat-room recommendation.** The same `"<Project> <Role>"` display label, with the steps to join it. Display only — no chat system exists.
+3. **Project prompt bundle** (ticket 883eee58, Ch. 20). The whole project context in one shareable document — purpose, workflow, roles, standing rules, and how to connect — generated live from the same definitions, the same bundle for every role agent. It carries no token at all, not even a masked prefix.
+4. **Chat-room recommendation.** The same `"<Project> <Role>"` display label, with the steps to join it. Display only — no chat system exists.
 
 The endpoint answers 400 `not_external` for an internal project, 400 `unknown_project` / `unknown_role` for a missing project or role, and 404 `agent_not_found` when the project has no agent holding that role. The onboarding document generation is also reused at external creation time: each created agent's package document is built inside the creation transaction, from the same live definitions.
 
 ### Cadences: no scheduler
 
-The prototype's Cadences tab (5-minute ticket check, 12-hour rules sync) is **not** a Relay feature: no scheduler, cron, or background job is added. The 5-minute queue check and the 12-hour rules sync are duty-chat operating rules — how the on-call agents use Relay — not something Relay runs. They appear in Relay only as text in the onboarding document's work-mode section. The only live-definition requirement is the doc generation in the section above.
+The prototype's Cadences tab (5-minute ticket check, 12-hour rules sync) is **not** a Relay feature: no scheduler, cron, or background job is added. The 5-minute queue check and the 12-hour rules sync are duty-chat operating rules — how the on-call agents use Relay — not something Relay runs. They appear in Relay only as text: the 5-minute check in the onboarding document's work-mode section, the 12-hour sync in the project prompt bundle's standing rules (Ch. 20). The only live-definition requirement is the doc generation in the section above.
 
 ### Endpoints
 
@@ -957,8 +958,8 @@ The prototype's Cadences tab (5-minute ticket check, 12-hour rules sync) is **no
 | `GET` | `/api/admin/users` | User list now returns `kind` per account and, for agents, `key_status` (`has_active_key`, `last_used_at`); humans get `key_status: null`. |
 | `POST` | `/api/admin/users` | Create a user; now accepts `kind` (default human). Agent + password 400; human password still min 8. |
 | `PATCH` | `/api/admin/users/:id` | Update a user; now accepts `kind` (see Kind correction above). |
-| `POST` | `/api/projects` | Create a project; now accepts `type` (`internal` default, `external`). External creation returns `{project, agents: [{user, key, onboarding}]}`; internal returns `{project, agents: []}`. |
-| `GET` | `/api/admin/projects/:id/onboarding/:role` | Onboarding package (admin only). Returns `{agent, role, role_label, key: {masked, key_prefix, last_used_at}, document: {markdown, generated_at}, chat_room}`. 400 `not_external` / `unknown_project` / `unknown_role`; 404 `agent_not_found`. |
+| `POST` | `/api/projects` | Create a project; now accepts `type` (`internal` default, `external`). External creation returns `{project, agents: [{user, key, onboarding}]}` (each `onboarding` also carries the shared `prompt_bundle`, Ch. 20); internal returns `{project, agents: []}`. |
+| `GET` | `/api/admin/projects/:id/onboarding/:role` | Onboarding package (admin only). Returns `{agent, role, role_label, key: {masked, key_prefix, last_used_at}, document: {markdown, generated_at}, prompt_bundle: {markdown, generated_at, base_url}, chat_room}`. 400 `not_external` / `unknown_project` / `unknown_role`; 404 `agent_not_found`. |
 
 ### Compatibility
 
@@ -1044,4 +1045,77 @@ Existing users, keys, and projects keep working through the defaults: existing a
 - `server/monitor.test.js` (18 items): the FakeDb now carries projects with `workflow_id`; the "notify_role follows the ticket project active workflow" test still passes via the chosen-workflow mechanism.
 - `server/migrations.test.js` (33 items, was 32): migration 020 checks — `workflow_id` column + FK + index, the two backfills before the drops, the drops of `is_default` / `is_active`, and the 018-style DO-block guard for the FK; migration 021 checks — the partial unique index on Global workflow names (`idx_workflows_global_name_unique`, `(name) WHERE project_id IS NULL`); the 010 seed INSERT guard test and the 013 seed UPDATE guard assertions (both guarded on `is_default` existing, so the full 001-021 run is safe to re-run after 020).
 - `server/roles.test.js` (4 items): the "default 14-state flow" test is renamed "the built-in 14-state flow".
+- Frontend browser verification was not possible (no headless browser on the VM); only `tsc` + `vite build` were run.
+
+---
+
+## 20. External Project Prompt Bundle
+
+> This chapter implements ticket 883eee58: for an External Project, the onboarding package contains a single shareable Project prompt bundle — the entire Project prompt (the complete instructions and context for working on the project) in one document, generated in real time from the live definitions.
+
+### Why a bundle, and why project-level
+
+The per-role onboarding document (Ch. 18) is role-specific: it tells one agent what it owns in the flow. An external user joining a project needs more than their own slice — the project's purpose, the whole workflow, every role's responsibilities, the standing rules, and how to reach the platform. Handing those out as separate pieces invites drift (a stale copy of the workflow next to a current one) and leaves the newcomer guessing which piece is current. The bundle is the answer: one document, generated live from the same definitions the platform itself reads, covering the whole project context. It is project-level, not role-level — every role agent of the project gets the same bundle, and their role-specific instructions stay in the onboarding document.
+
+### Shape: one more field on the package, one builder
+
+- The bundle is a `prompt_bundle: { markdown, generated_at, base_url }` field on the onboarding package — both in `getOnboardingPackage` (the `GET /api/admin/projects/:id/onboarding/:role` endpoint) and in each agent's `onboarding` object in the external-creation response (`POST /api/projects`). Both paths call the same builder, `buildProjectPromptBundle` in `server/onboarding.js`; there is no second implementation and no separate flow.
+- At creation time the bundle is built **once per project** (inside the creation transaction) and attached to every role agent's package — identical markdown for all six agents. Building it once guarantees the agents cannot receive different versions of the same project prompt, and it avoids re-reading the definitions once per role.
+- The bundle markdown is the shareable unit: copy the markdown and hand it to the external user as-is. The Admin Onboarding panel shows it as section 3 ("Project prompt bundle (shareable)"), after the onboarding document and before the chat-room recommendation; Regenerate re-fetches the whole package, bundle included.
+
+### Bundle contents
+
+`buildProjectPromptBundle` assembles, in order, from the live definitions (the project's chosen workflow, or the built-in flow when none is chosen — the same resolution the onboarding document uses):
+
+1. **Project** — the project name and description (the purpose/scope; "No description recorded for this project." when empty), plus the assignment line: the agent is joining this project, and its role, states, and chat room are in its onboarding document.
+2. **Workflow** — states grouped by role, in flow order (`### {Role label}` with each state's responsibilities sentence from the workflow's roles map), the terminal states, and the transitions (`**from** → **to** — Role (kind)`, with "; requires a reason" / "; requires a handoff note" where the transition demands them).
+3. **Standing operating rules** — the full rule set from `server/operatingRules.js` (see below).
+4. **Connecting to the platform** — the base URL, the `X-API-Key` header rule, and the endpoints with full URLs: `GET /api/queue`, `GET /api/tickets?status=<status>`, `GET /api/tickets/:id`, `POST /api/tickets/:id/transitions` (with the body shape and when reason/handoff are required), `GET /api/meta/transitions`, `GET /api/projects`, `GET /api/health`.
+5. **Your assignment** — the project name again, and where the role agent account and API key came from (the handoff that carried this bundle).
+
+### Standing operating rules: one module (judgment call)
+
+The rules text (one ticket at a time, English-only, 5-minute check, 12-hour rules sync, develop-branch rules, and the rest) is not in the database, so it needs a single home in code: `server/operatingRules.js`. It exports `WORK_MODE_RULES` — the five bullets the per-role onboarding document has carried since 0f26169c, wording kept byte-identical — and `STANDING_RULES`, the full eight (the five plus English-only, the 12-hour rules sync, and the develop-branch rule). The onboarding document renders its "Your work mode" section from `WORK_MODE_RULES` (the rendered document does not change); the bundle renders `STANDING_RULES`. A rule change is made once, in that module, and shows up in both documents the next time either is generated. Ch. 18 said the 12-hour rules sync appears in the onboarding document's work-mode section; it never did — the bundle is where it is now stated.
+
+### Base URL: configured, else live, never hardcoded (judgment call)
+
+The bundle must print the platform's base URL — the address an external agent connects to — and the host must not be hardcoded anywhere. `server/publicUrl.js` (`resolvePublicUrl`) resolves it, first set wins:
+
+1. An explicit `baseUrl` passed by the caller (tests, and any caller that already knows the address).
+2. The `PUBLIC_URL` environment variable — the deployment's configured public address (documented in `.env.example`). Set this on the deployed server so every bundle carries the canonical address.
+3. The request origin (protocol + host the request came in on), passed by the routes. This is the live address: whatever origin the admin's browser used to reach the server is the origin the external agent should use too.
+4. A local default, `http://localhost:<FRONTEND_PORT or 3000>` — the development setup. Nothing in production should rely on it; it only keeps the bundle complete when no address is configured and no request is in flight (e.g. unit tests).
+
+The routes pass the origin (`req.protocol + '://' + req.get('host')`) — not a base URL — so a configured `PUBLIC_URL` still wins. The API lives under the same origin as the app (`/api/...`), so the base URL is the app origin, not a separate API host.
+
+### Token handling: the bundle carries no key at all (judgment call)
+
+The full key must never be embedded in a generated or stored document — and the bundle goes further than the existing rule: it carries **no key value at all**, not even the masked prefix (the masked key is already in the package's `key` field). The bundle's "Connecting" section says how to authenticate (send the key in the `X-API-Key` header on every request) and where the key came from ("handed to you with this package — shown once when the project was created and not written in this document"). The full key appears in exactly one place: the creation response (each agent's `key` field) and the one-time keys box the Projects panel shows after external creation. Regenerating the package later via the GET endpoint returns the same bundle shape with no key in it — a regenerated bundle cannot leak a key it never contained. The tests assert the bundle contains neither the agent's full key nor its masked prefix.
+
+### Internal vs external (judgment call)
+
+The bundle is for External Projects only. `buildProjectPromptBundle` returns 400 `not_external` for an internal project, the same error the onboarding document returns; internal creation returns `{project, agents: []}` and no bundle. Nothing about internal projects changes.
+
+### No migration
+
+No schema change: the bundle is generated on demand from the live definitions and is never stored. No migration was added for this ticket.
+
+### Frontend
+
+- `src/api.ts`: `RoleAgent.onboarding` and `OnboardingPackage` gain `prompt_bundle: { markdown, generated_at, base_url }`.
+- `src/OnboardingPanel.tsx`: the package display gains section 3, "Project prompt bundle (shareable)", rendering the bundle markdown (sanitized, same renderer as the document); the chat-room section becomes section 4. The intro paragraph names the bundle.
+- `src/ProjectsPanel.tsx`: the creation keys-box note now mentions the bundle alongside the live onboarding document.
+
+### Endpoints
+
+| Method | Endpoint | Notes |
+| --- | --- | --- |
+| `POST` | `/api/projects` | External creation now attaches the same `prompt_bundle` (`{markdown, generated_at, base_url}`) to every role agent's `onboarding` object; internal creation unchanged (`{project, agents: []}`). |
+| `GET` | `/api/admin/projects/:id/onboarding/:role` | The package now carries `prompt_bundle` (`{markdown, generated_at, base_url}`) alongside the masked key, the live document, and the chat room. |
+
+### Tests
+
+- `server/onboarding.test.js` (12 items, was 7): the bundle assembles the whole project context (purpose, flow, per-role states with responsibilities, transitions with handoff flags, terminal states, all eight standing rules, base URL, endpoints, assignment, no token); the bundle uses the request origin when no base URL is configured; the bundle reflects a workflow edit on regeneration; the package carries the bundle with no token in it (neither the full key nor the masked prefix); the bundle rejects internal and unknown projects.
+- `server/projects.test.js` (16 items, was 15): external creation attaches the same prompt bundle to every role agent (identical markdown, origin as base URL, no token).
+- `server/publicUrl.test.js` (4 items, new file): explicit baseUrl wins with trailing slashes trimmed; `PUBLIC_URL` beats the request origin; the request origin is used when nothing is configured; the local default uses `FRONTEND_PORT` or 3000.
 - Frontend browser verification was not possible (no headless browser on the VM); only `tsc` + `vite build` were run.

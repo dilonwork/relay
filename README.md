@@ -134,7 +134,9 @@ relay/
 │   ├── tickets.js        # ticket service: create / transition / history / claim queue
 │   ├── documents.js      # document service: file / list / categories / download
 │   ├── projects.js       # project service (internal/external, role agents on external creation)
-│   ├── onboarding.js     # onboarding packages: live doc from the project's chosen workflow + role definitions
+│   ├── onboarding.js     # onboarding packages: live doc from the project's chosen workflow + role definitions, project prompt bundle
+│   ├── operatingRules.js # standing operating rules: the single source for the onboarding doc and the prompt bundle
+│   ├── publicUrl.js      # public base URL resolution (explicit > PUBLIC_URL env > request origin > localhost default)
 │   ├── workflows.js      # workflow service: CRUD, chosen workflow, role maps
 │   ├── monitor.js        # PM stall monitor: detect stalled tickets, reminder state
 │   ├── auth.js           # users, scrypt passwords, sessions, API keys, auth middleware
@@ -143,6 +145,7 @@ relay/
 │   ├── tickets.test.js
 │   ├── projects.test.js
 │   ├── onboarding.test.js
+│   ├── publicUrl.test.js
 │   ├── auth.test.js
 │   ├── admin.test.js
 │   ├── apikeys.test.js
@@ -269,10 +272,12 @@ grouping, the zoom window, and the 36-hour stalled rule. The users
 split is tested too: the migration backfill, agent password-login
 rejection, human key creation and authentication rejection, external
 project creation (one agent per flow role, with keys and onboarding
-packages, rolled back when a role has no free username) and the
-onboarding document regenerating from a live workflow edit.
+packages, rolled back when a role has no free username), the
+onboarding document regenerating from a live workflow edit, and the
+project prompt bundle (whole project context, base-URL resolution,
+no token in the bundle).
 
-292 tests in total: state machine 21, tickets 36, projects 15, onboarding 7, auth 21,
+302 tests in total: state machine 21, tickets 36, projects 16, onboarding 12, public base URL 4, auth 21,
 admin 7, API keys 8, monitor 18, workflows 30, quick-create builder 11, documents 24, document tickets 12, document render 18, gantt helpers 14, admin nav 5, view hash 8, migrations 33, role lists 4.
 
 ## Accounts & authentication
@@ -402,9 +407,12 @@ admin 7, API keys 8, monitor 18, workflows 30, quick-create builder 11, document
   the project's current workflow and role definitions (with a
   generated-at timestamp and a Regenerate action that re-reads the live
   definitions — after a workflow edit, Regenerate shows the new
-  definition), and the chat-room recommendation. The document never
-  contains a token; the full key is only shown once, at creation. See
-  the design doc, ch. 18.
+  definition), the project prompt bundle (the whole project context —
+  purpose, workflow, roles, rules, and how to connect — in one
+  shareable document, same bundle for every role agent), and the
+  chat-room recommendation. The document and the bundle never contain
+  a token; the full key is only shown once, at creation. See
+  the design doc, ch. 18 and ch. 20.
 
 ## Admin
 
@@ -423,7 +431,7 @@ each sub-page owns its own form state and handlers.
   refused for agent accounts).
 - **Onboarding:** onboarding packages for external projects, per role
   agent — masked API key, live onboarding document with Regenerate,
-  and the chat-room recommendation (see [Users split](#users-split-humans-and-agents)).
+  project prompt bundle, and the chat-room recommendation (see [Users split](#users-split-humans-and-agents)).
 - **Workflows:** workflow list and state machine editor (see
   [Workflows](#workflows)); creating, editing, deleting and setting the
   active workflow are admin-only.
@@ -660,7 +668,7 @@ log records the role actually exercised.
 | `POST` | `/api/monitor/stalled/:id/reminded` | Record that a reminder was sent for a stalled ticket (PM only) |
 | `POST` | `/api/monitor/stalled/:id/escalated` | Record that a stalled ticket was escalated to the main chat (PM only, after 3 reminders) |
 | `GET` | `/api/projects` | List projects with ticket counts and agent counts |
-| `POST` | `/api/projects` | Create a project (PM or Admin); `type` internal (default) or external — external auto-creates one role agent per flow role, each with a key and onboarding package; optional `workflow_id` (a Global workflow) becomes the project's chosen workflow |
+| `POST` | `/api/projects` | Create a project (PM or Admin); `type` internal (default) or external — external auto-creates one role agent per flow role, each with a key and onboarding package (including the shared project prompt bundle); optional `workflow_id` (a Global workflow) becomes the project's chosen workflow |
 | `GET` | `/api/projects/:id` | One project |
 | `GET` | `/api/document-categories` | All categories, by name (seeded Prototype, Undefined) |
 | `POST` | `/api/document-categories` | Add a category (PM or Admin; duplicate name answers 409 `category_name_taken`) |
@@ -681,7 +689,7 @@ log records the role actually exercised.
 | `POST` | `/api/admin/users` | Create an account (admin only); accepts `kind` (human default) |
 | `POST` | `/api/admin/users/agents` | Create an agent account with its first API key; full key returned exactly once (admin only) |
 | `PATCH` | `/api/admin/users/:id` | Edit display name, roles, kind, active flag (admin only) |
-| `GET` | `/api/admin/projects/:id/onboarding/:role` | Onboarding package for a role agent: masked key, live document, chat room (admin only) |
+| `GET` | `/api/admin/projects/:id/onboarding/:role` | Onboarding package for a role agent: masked key, live document, project prompt bundle, chat room (admin only) |
 | `PATCH` | `/api/admin/users/:id/project` | Assign an account to a project, or clear the assignment (`project_id` null; admin only) |
 | `POST` | `/api/admin/users/:id/reset-password` | Set a new password, revokes sessions (admin only) |
 | `GET` | `/api/admin/users/:id/api-keys` | List an account's API keys, without hashes (admin only) |
