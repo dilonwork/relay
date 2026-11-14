@@ -267,6 +267,10 @@ app.post('/api/projects', async (req, res) => {
       description: req.body ? req.body.description : undefined,
       type: req.body ? req.body.type : undefined,
       workflowId: req.body ? req.body.workflow_id : undefined,
+      // The origin the request came in on: the project prompt bundle
+      // prints it as the platform's base URL (PUBLIC_URL env wins
+      // when it is set; see server/publicUrl.js).
+      origin: `${req.protocol}://${req.get('host')}`,
     });
     if (!result.ok) return res.status(result.status).json({ error: result.error, message: result.message });
     // External creation returns the role agents too, each with its
@@ -701,7 +705,9 @@ app.post('/api/admin/api-keys/:id/revoke', async (req, res) => {
 // The handoff for one role agent of an external project: the agent,
 // its active API key (masked — the full key was shown exactly once
 // when the agent was created and is never stored), the live
-// onboarding document, and the chat-room recommendation. Admin only
+// onboarding document, the project prompt bundle (ticket 883eee58 —
+// the whole project context in one shareable document), and the
+// chat-room recommendation. Admin only
 // (the /api/admin router enforces it); the service checks the
 // project is external and the role agent exists.
 app.get('/api/admin/projects/:id/onboarding/:role', async (req, res) => {
@@ -709,6 +715,10 @@ app.get('/api/admin/projects/:id/onboarding/:role', async (req, res) => {
     const result = await onboarding.getOnboardingPackage(db, {
       projectId: req.params.id,
       role: req.params.role,
+      // The origin the request came in on: the prompt bundle prints
+      // it as the platform's base URL (PUBLIC_URL env wins when it
+      // is set; see server/publicUrl.js).
+      origin: `${req.protocol}://${req.get('host')}`,
     });
     if (!result.ok) return res.status(result.status).json({ error: result.error, message: result.message });
     const { ok: _ok, status: _status, ...pkg } = result;

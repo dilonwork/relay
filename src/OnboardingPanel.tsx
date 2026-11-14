@@ -11,11 +11,13 @@ interface OnboardingPanelProps {
 
 // Admin sub-page: the onboarding package for one role agent of an
 // external project (ticket 0f26169c) — its API key (masked), the live
-// onboarding document, and the chat-room recommendation. The document
-// is generated on demand from the live workflow and role definitions:
-// Regenerate re-reads them, so a workflow edit is reflected
-// immediately. The full API key was shown exactly once when the agent
-// was created and is never stored, so it cannot be revealed here.
+// onboarding document, the project prompt bundle (ticket 883eee58 —
+// the whole project context in one shareable document), and the
+// chat-room recommendation. The document and the bundle are generated
+// on demand from the live workflow and role definitions: Regenerate
+// re-reads them, so a workflow edit is reflected immediately. The
+// full API key was shown exactly once when the agent was created and
+// is never stored, so it cannot be revealed here.
 export default function OnboardingPanel({ users, projects }: OnboardingPanelProps) {
   const externalProjects = projects.filter((p) => p.type === 'external');
   const [projectId, setProjectId] = useState('');
@@ -80,9 +82,10 @@ export default function OnboardingPanel({ users, projects }: OnboardingPanelProp
       <h2>Onboarding package — external project</h2>
       <p className="muted">
         The complete package to hand out to an external role agent: its token, a live onboarding
-        document, and the recommendation to open the role&apos;s chat room. The token <b>is</b> included
-        in this handoff at creation time; afterwards only the masked key is shown — the full key was
-        shown exactly once and is never stored.
+        document, the project prompt bundle (the whole project context — purpose, workflow, roles,
+        rules, and how to connect — in one shareable document), and the recommendation to open the
+        role&apos;s chat room. The token <b>is</b> included in this handoff at creation time; afterwards
+        only the masked key is shown — the full key was shown exactly once and is never stored.
       </p>
       {externalProjects.length === 0 ? (
         <p className="muted">No external projects yet. Create one from the Projects view — its role agents and packages are created with it.</p>
@@ -156,7 +159,19 @@ export default function OnboardingPanel({ users, projects }: OnboardingPanelProp
                 />
               </div>
               <div style={{ marginTop: 12, borderTop: '1px solid #e2e8ee', paddingTop: 12 }}>
-                <h2>3 · Open the chat room</h2>
+                <h2>3 · Project prompt bundle (shareable)</h2>
+                <p className="muted">
+                  Generated {formatTime(pkg.prompt_bundle.generated_at)} from the live project, workflow
+                  and role definitions. One document with the whole project context — hand this to the
+                  external user as-is; it carries no token (the key travels with the creation handoff).
+                </p>
+                <div
+                  className="document-markdown"
+                  dangerouslySetInnerHTML={{ __html: renderMarkdownToHtml(pkg.prompt_bundle.markdown) }}
+                />
+              </div>
+              <div style={{ marginTop: 12, borderTop: '1px solid #e2e8ee', paddingTop: 12 }}>
+                <h2>4 · Open the chat room</h2>
                 <p>
                   Open the <b>{pkg.chat_room}</b> chat room for {pkg.project.name} and introduce the agent.
                 </p>

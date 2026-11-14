@@ -20,7 +20,9 @@
 // configured flow — the workflow the project chooses at creation, or
 // the built-in 14-state flow when it chooses none — each with its own
 // API key and onboarding package, all inside one transaction with the
-// project itself.
+// project itself. The project prompt bundle (ticket 883eee58) is
+// built once per project and shared by every role agent: it is
+// project-level, not role-level.
 const auth = require('./auth');
 const onboarding = require('./onboarding');
 const workflows = require('./workflows');
@@ -66,7 +68,7 @@ function abort(result) {
 // be chosen here — the project does not exist yet, so no workflow
 // can belong to it. Without a workflow the project has none, and
 // external role agents come from the built-in flow instead.
-async function createProject(db, { actorId, actorRoles, name, description, type, workflowId }) {
+async function createProject(db, { actorId, actorRoles, name, description, type, workflowId, origin }) {
   if (!actorRoles || (!actorRoles.includes('pm') && !actorRoles.includes('admin'))) {
     return { ok: false, status: 403, error: 'wrong_role', message: 'Only the PM or an Admin may create a project.' };
   }
@@ -108,6 +110,11 @@ async function createProject(db, { actorId, actorRoles, name, description, type,
         ? await workflows.getWorkflowDefinition(client, cleanWorkflowId)
         : workflows.builtinDefinition();
       const roles = workflows.flowRolesFromDefinition(definition || workflows.builtinDefinition());
+      // The project prompt bundle is built once per project and
+      // shared by every role agent (it is project-level, not
+      // role-level); each agent's package carries the same bundle.
+      const bundle = await onboarding.buildProjectPromptBundle(client, { projectId: project.id, origin });
+      if (!bundle.ok) abort(bundle);
       const slug = slugifyProjectName(cleanName);
       const agents = [];
       for (const role of roles) {
@@ -132,6 +139,11 @@ async function createProject(db, { actorId, actorRoles, name, description, type,
             markdown: doc.document.markdown,
             generated_at: doc.document.generated_at,
             chat_room: doc.chat_room,
+            prompt_bundle: {
+              markdown: bundle.bundle.markdown,
+              generated_at: bundle.bundle.generated_at,
+              base_url: bundle.base_url,
+            },
           },
         });
       }

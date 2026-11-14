@@ -171,11 +171,18 @@ export interface User {
 
 // One role agent created with an external project: the account, its
 // API key (full key, shown exactly once, here) and its onboarding
-// package (live document plus chat-room recommendation).
+// package (live document plus chat-room recommendation, and the
+// project prompt bundle — ticket 883eee58 — shared by every role
+// agent of the project).
 export interface RoleAgent {
   user: User;
   key: string;
-  onboarding: { markdown: string; generated_at: string; chat_room: string };
+  onboarding: {
+    markdown: string;
+    generated_at: string;
+    chat_room: string;
+    prompt_bundle: { markdown: string; generated_at: string; base_url: string };
+  };
 }
 
 export interface ProjectCreation {
@@ -186,7 +193,9 @@ export interface ProjectCreation {
 // The onboarding package for one role agent of an external project
 // (ticket 0f26169c): the agent, its active API key masked (the full
 // key was shown exactly once at creation and is never stored), the
-// live onboarding document, and the chat-room recommendation.
+// live onboarding document, the project prompt bundle (ticket
+// 883eee58 — the whole project context in one shareable document,
+// same bundle for every role agent), and the chat-room recommendation.
 export interface OnboardingPackage {
   project: { id: string; name: string; type: string };
   role: string;
@@ -204,6 +213,7 @@ export interface OnboardingPackage {
     revoked_at: string | null;
   } | null;
   document: { markdown: string; generated_at: string };
+  prompt_bundle: { markdown: string; generated_at: string; base_url: string };
   chat_room: string;
   states: { code: string; label: string; responsibilities: string }[];
 }
