@@ -116,6 +116,10 @@ export default function App() {
   // the button hides while the editor is open.
   const [workflowsCreateRequest, setWorkflowsCreateRequest] = useState(0);
   const [workflowsFormOpen, setWorkflowsFormOpen] = useState(false);
+  // Documents redesign (ticket b2d67623): "+ New document" lives in
+  // the title bar; the counter opens the panel's create form.
+  const [documentsCreateRequest, setDocumentsCreateRequest] = useState(0);
+  const [documentsCreateFormOpen, setDocumentsCreateFormOpen] = useState(false);
   // Every ticket, unfiltered, for the Projects page attention signals
   // (same load as the Dashboard; see loadProjectTickets).
   const [projectTickets, setProjectTickets] = useState<Ticket[]>([]);
@@ -1086,6 +1090,16 @@ export default function App() {
             >
               + New workflow
             </button>
+          ) : mainView === 'documents' && canManageProjects && !documentsCreateFormOpen ? (
+            // Documents redesign (ticket b2d67623): Create moves to the
+            // title bar; the panel opens its create form per click.
+            <button
+              type="button"
+              className="primary"
+              onClick={() => setDocumentsCreateRequest((n) => n + 1)}
+            >
+              + New document
+            </button>
           ) : undefined
         }
         onRefresh={handleRefresh}
@@ -1117,6 +1131,8 @@ export default function App() {
           isPm={isPm}
           canMutate={canManageProjects}
           refreshKey={documentsRefreshKey}
+          createRequest={documentsCreateRequest}
+          onCreateOpenChange={setDocumentsCreateFormOpen}
           onOpenTicket={openTicket}
           onError={setError}
           onNotice={setNotice}

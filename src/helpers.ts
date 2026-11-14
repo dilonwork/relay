@@ -1,4 +1,4 @@
-import type { ApiKey, LegalTransition, Project, Ticket, Transition, User, Workflow } from './api';
+import type { ApiKey, DocumentCategory, DocumentItem, LegalTransition, Project, Ticket, Transition, User, Workflow } from './api';
 
 export const STATUS_LABELS: Record<string, string> = {
   requirement: 'Requirement',
@@ -1045,4 +1045,72 @@ export function apiKeyNamePrefill(username: string, now: Date = new Date()): str
   const month = String(now.getMonth() + 1).padStart(2, '0');
   const day = String(now.getDate()).padStart(2, '0');
   return `${username} duty check — ${month}-${day}`;
+}
+
+// Documents redesign (ticket b2d67623, design doc ch. 30): the filing
+// cabinet is grouped by category, not a flat table with a category
+// column. The chips, the grouping and the search are all client-side
+// over the documents the panel already loaded — switching a chip or
+// typing a query costs no request.
+
+export interface DocumentGroup {
+  categoryId: string;
+  name: string;
+  docs: DocumentItem[];
+}
+
+// How many loaded documents sit in each category (by category_id).
+// Categories with no documents are absent; the chip row reads them
+// with `?? 0`.
+export function countDocumentsByCategory(documents: DocumentItem[]): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const doc of documents) {
+    counts[doc.category_id] = (counts[doc.category_id] || 0) + 1;
+  }
+  return counts;
+}
+
+// Group the visible documents under their categories, in the order
+// the categories arrive (the server sorts them by name, so Prototype
+// leads). Only categories with at least one visible document get a
+// group; documents whose category_id is not in the list fall into a
+// trailing '—' group so they are never silently dropped.
+export function groupDocumentsByCategory(
+  documents: DocumentItem[],
+  categories: DocumentCategory[],
+): DocumentGroup[] {
+  const groups: DocumentGroup[] = [];
+  for (const category of categories) {
+    const docs = documents.filter((d) => d.category_id === category.id);
+    if (docs.length > 0) {
+      groups.push({ categoryId: category.id, name: category.name, docs });
+    }
+  }
+  const known = new Set(categories.map((c) => c.id));
+  const unknown = documents.filter((d) => !known.has(d.category_id));
+  if (unknown.length > 0) {
+    groups.push({ categoryId: '__unknown', name: '—', docs: unknown });
+  }
+  return groups;
+}
+
+// Title substring, case-insensitive, client-side; an empty query
+// matches everything.
+export function filterDocumentsByTitle(documents: DocumentItem[], query: string): DocumentItem[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return documents;
+  return documents.filter((d) => d.title.toLowerCase().includes(q));
+}
+
+// The list the page shows: category filter first ('all' keeps every
+// category), then the title search.
+export function visibleDocuments(
+  documents: DocumentItem[],
+  categoryId: string,
+  query: string,
+): DocumentItem[] {
+  const byCategory = categoryId === 'all'
+    ? documents
+    : documents.filter((d) => d.category_id === categoryId);
+  return filterDocumentsByTitle(byCategory, query);
 }
