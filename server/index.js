@@ -709,6 +709,19 @@ app.get('/api/admin/users/:id/api-keys', async (req, res) => {
   }
 });
 
+// Every key of every account (ticket 76dd7642): the Admin API keys
+// overview strip. Admin only (the /api/admin router enforces it);
+// prefixes only, never full keys — see auth.listAllApiKeys.
+app.get('/api/admin/api-keys', async (req, res) => {
+  try {
+    const result = await auth.listAllApiKeys(db);
+    if (!result.ok) return res.status(result.status).json({ error: result.error, message: result.message });
+    res.json(result.keys);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post('/api/admin/api-keys/:id/revoke', async (req, res) => {
   try {
     const result = await auth.revokeApiKey(db, req.params.id);
