@@ -257,7 +257,7 @@ way, including the three-layer role-map fallback and the delete rules.
 Custom workflow definitions are covered too: the three example flows
 are walked end to end (including the backward move), the definition
 validator's rules are tested case by case, and the migration files are
-tested for the 001→019 sequence. The document service is tested the
+tested for the 001→021 sequence. The document service is tested the
 same way, including the filename slug, the project scope rules, the
 project ownership (project_id stored and returned, the list filters by
 project, unassigned documents show as Unassigned, the agent upload
@@ -525,7 +525,11 @@ each sub-page owns its own form state and handlers.
 - **Endpoints:** see the API table (`/api/workflows`,
   `/api/projects/:id/active-workflow`). Creating, updating, deleting
   and setting the active workflow are Admin only; a duplicate name
-  in the same project answers 409 `workflow_name_taken`. An assigned
+  in the same project answers 409 `workflow_name_taken`, and two
+  Global workflows cannot share a name either — migration 021 adds a
+  partial unique index on the workflow name where the project is NULL,
+  so a duplicate Global name answers 409 `workflow_name_taken` too.
+  An assigned
   account sees only its own project's workflows plus the global
   workflows; cross-project reads answer 403 `out_of_scope`.
 
@@ -570,7 +574,11 @@ each sub-page owns its own form state and handlers.
   in a sandboxed iframe (`sandbox="allow-scripts"`: scripts run, but
   the frame cannot touch the parent page or navigate it away), a
   Markdown document shows as formatted text (rendered with `marked`;
-  raw HTML in the source is escaped, never executed). Other types,
+  raw HTML in the source is escaped, never executed; link and image
+  hrefs are sanitized against stored XSS — only http/https/mailto/
+  relative/anchor hrefs are kept, images additionally allow
+  `data:image/*`, anything else becomes `#`, with entity-encoded
+  schemes decoded before the check). Other types,
   and every non-Prototype document, keep the plain-text view;
   Download, Implement and Not OK are unchanged. The type is decided
   from the title's extension first, then from the content (a leading
