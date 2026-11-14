@@ -460,6 +460,18 @@ async function listApiKeys(db, userId) {
   return { ok: true, status: 200, keys: rows.map(publicApiKey) };
 }
 
+// Every key of every account, for the Admin API keys overview strip
+// (ticket 76dd7642). The rows go through publicApiKey, so the response
+// carries prefixes only — the full key is never stored or re-served.
+// Admin-only: the /api/admin router enforces it; this service does
+// not check the caller.
+async function listAllApiKeys(db) {
+  const { rows } = await db.query(
+    'SELECT * FROM api_keys ORDER BY created_at ASC, id ASC'
+  );
+  return { ok: true, status: 200, keys: rows.map(publicApiKey) };
+}
+
 async function revokeApiKey(db, keyId) {
   const { rows } = await db.query('SELECT * FROM api_keys WHERE id = $1', [keyId]);
   const key = rows[0];
@@ -601,5 +613,6 @@ module.exports = {
   publicApiKey,
   createApiKey,
   listApiKeys,
+  listAllApiKeys,
   revokeApiKey,
 };

@@ -1,4 +1,4 @@
-import type { LegalTransition, Project, Ticket, Transition, User, Workflow } from './api';
+import type { ApiKey, LegalTransition, Project, Ticket, Transition, User, Workflow } from './api';
 
 export const STATUS_LABELS: Record<string, string> = {
   requirement: 'Requirement',
@@ -761,4 +761,81 @@ export function slugifyProjectName(name: string): string {
 export function previewAgentUsernames(projectName: string, roles: string[]): string[] {
   const slug = slugifyProjectName(projectName.trim() || 'project');
   return roles.map((r) => `${slug}-${r}`);
+}
+
+// Admin API keys (ticket 76dd7642, UI&UX prototype "Admin - API keys
+// redesign — interactive prototype"): an overview strip across all
+// users before the picker, agents first in the picker with search,
+// filter chips, status pills, a prefilled key name, inline revoke
+// confirmation, and a one-time key panel that only closes once the
+// admin confirms the key is saved. These pure helpers are the single
+// source for that layout; AdminApiKeys renders from them and the
+// server tests exercise them directly.
+
+export interface ApiKeyOverview {
+  total: number;
+  active: number;
+  revoked: number;
+  neverUsed: number;
+}
+
+// Overview counts across all keys: active is any key not revoked,
+// never-used is an active key with no last use (a revoked key that
+// was never used is counted as revoked, not as never-used).
+export function countApiKeyOverview(keys: ApiKey[]): ApiKeyOverview {
+  let active = 0;
+  let revoked = 0;
+  let neverUsed = 0;
+  for (const k of keys) {
+    if (k.revoked_at) {
+      revoked += 1;
+    } else {
+      active += 1;
+      if (!k.last_used_at) neverUsed += 1;
+    }
+  }
+  return { total: keys.length, active, revoked, neverUsed };
+}
+
+export type ApiKeyFilter = 'all' | 'active' | 'never' | 'revoked';
+
+// The filter chips above the table, for the selected user's keys.
+// 'never' follows the prototype: any key with no last use, revoked
+// or not. The "Never used" pill is stricter (see AdminApiKeys): it
+// only renders for active keys with no last use.
+export function filterApiKeys(keys: ApiKey[], filter: ApiKeyFilter): ApiKey[] {
+  if (filter === 'active') return keys.filter((k) => !k.revoked_at);
+  if (filter === 'revoked') return keys.filter((k) => !!k.revoked_at);
+  if (filter === 'never') return keys.filter((k) => !k.last_used_at);
+  return [...keys];
+}
+
+// Agents first in the user picker, humans after (rows written before
+// migration 019 carry no kind; they count as human, as in
+// AdminUsers). Stable within each group: no reordering beyond the
+// agent/human split.
+export function sortUsersAgentsFirst(users: User[]): User[] {
+  const agents = users.filter((u) => u.kind === 'agent');
+  const humans = users.filter((u) => u.kind !== 'agent');
+  return [...agents, ...humans];
+}
+
+// User search: display name or username, case-insensitive substring;
+// an empty query keeps all.
+export function filterUsersByName(users: User[], query: string): User[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return [...users];
+  return users.filter((u) =>
+    (u.display_name || '').toLowerCase().includes(q) ||
+    u.username.toLowerCase().includes(q)
+  );
+}
+
+// The new-key name prefill: "<username> duty check — <MM-DD>", e.g.
+// "leader duty check — 11-14". The caller passes the date so tests
+// can pin it; the component passes today.
+export function apiKeyNamePrefill(username: string, now: Date = new Date()): string {
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `${username} duty check — ${month}-${day}`;
 }

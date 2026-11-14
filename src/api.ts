@@ -447,6 +447,9 @@ export const api = {
     }),
   adminListApiKeys: (userId: string) =>
     request<ApiKey[]>(`/api/admin/users/${encodeURIComponent(userId)}/api-keys`),
+  // Every key of every account (ticket 76dd7642): the Admin API keys
+  // overview strip. Prefixes only, never full keys.
+  adminListAllApiKeys: () => request<ApiKey[]>('/api/admin/api-keys'),
   adminCreateApiKey: (userId: string, name: string) =>
     request<ApiKey>(`/api/admin/users/${encodeURIComponent(userId)}/api-keys`, {
       method: 'POST',

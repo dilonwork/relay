@@ -282,8 +282,8 @@ onboarding document regenerating from a live workflow edit, and the
 project prompt bundle (whole project context, base-URL resolution,
 no token in the bundle).
 
-379 tests in total: state machine 21, tickets 40, projects 16, onboarding 12, public base URL 5, auth 21,
-admin 7, API keys 8, monitor 18, workflows 30, quick-create builder 11, documents 27, document tickets 13, document render 18, gantt helpers 27, admin nav 5, view hash 8, migrations 34, role lists 4, title bar 6, dashboard redesign 17, ticket detail redesign 16, projects redesign 15.
+391 tests in total: state machine 21, tickets 40, projects 16, onboarding 12, public base URL 5, auth 21,
+admin 7, API keys 8, monitor 18, workflows 30, quick-create builder 11, documents 27, document tickets 13, document render 18, gantt helpers 27, admin nav 5, view hash 8, migrations 34, role lists 4, title bar 6, dashboard redesign 17, ticket detail redesign 16, projects redesign 15, admin API keys redesign 12.
 
 ## Accounts & authentication
 
@@ -440,9 +440,13 @@ each sub-page owns its own form state and handlers.
 - **Workflows:** workflow list and state machine editor (see
   [Workflows](#workflows)); creating, editing, deleting and setting the
   active workflow are admin-only.
-- **API keys:** per-user API key management — pick a user, view their
-  keys, create a new one (full key shown exactly once) or revoke one.
-  The Users table's Keys button jumps here with that user pre-selected.
+- **API keys:** API key management with an overview strip (total / active / revoked / never used across all
+  accounts, from `GET /api/admin/api-keys`, prefixes only), agents first in the user picker with search,
+  All / Active / Never used / Revoked filter chips, and status pills (Active green, Revoked grey, Never used
+  amber for active keys with no last use). Creating a key shows it once in an amber panel with a Copy button
+  and an "I have saved this key" confirmation — the panel only closes on confirm, and switching users or
+  closing with an unsaved key warns first. Revoking asks inline first. The Users table's Keys button jumps
+  here with that user pre-selected. See the design doc, ch. 29.
 
 ## Projects
 
