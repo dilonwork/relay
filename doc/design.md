@@ -959,6 +959,8 @@ The endpoint answers 400 `not_external` for an internal project, 400 `unknown_pr
 
 The prototype's Cadences tab (5-minute ticket check, 12-hour rules sync) is **not** a Relay feature: no scheduler, cron, or background job is added. The 5-minute queue check and the 12-hour rules sync are duty-chat operating rules — how the on-call agents use Relay — not something Relay runs. They appear in Relay only as text: the 5-minute check in the onboarding document's work-mode section, the 12-hour sync in the project prompt bundle's standing rules (Ch. 20). The only live-definition requirement is the doc generation in the section above.
 
+The 12-hour sync itself lives outside Relay, as one scheduled job per role chat (ticket 6099d68a): `relay-<role>-rules-sync`, every 12 hours, each running its role's `check-rules-sync.sh` and reporting only when something changed. The job re-reads the live inputs the onboarding document is generated from — the workflow definitions (`GET /api/workflows`) and the operating rules (`origin/main:server/operatingRules.js`) — and diffs them against a snapshot. It reads those inputs, not the onboarding package endpoint, because that endpoint is admin-only (a role key gets 403) and the two inputs are exactly what a change to the generated document would come from.
+
 ### Endpoints
 
 | Method | Endpoint | Notes |
