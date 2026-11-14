@@ -366,6 +366,12 @@ tbody tr.selected { background: #eef6f6; }
 .badge.rejected { background: #fbe9e7; color: #a03325; }
 .badge.delivered { background: #e2f2e9; color: #1d6b3c; }
 .badge.cancelled { background: #f4f7f9; color: #5a6b7c; }
+/* Implementation badge (ticket b14207c5): amber, like the stalled
+   signal — the work is under way, not done. A button wearing a
+   badge keeps the badge look; the pointer cursor says it opens the
+   implementation ticket. */
+button.badge { border: none; cursor: pointer; font: inherit; }
+.badge.in-progress { background: #fef3c7; color: #92400e; }
 
 label.field { display: block; font-weight: 600; margin: 10px 0 4px 0; color: #0f2a3d; }
 

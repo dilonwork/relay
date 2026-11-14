@@ -23,11 +23,56 @@ class FakeDb {
     this.tickets = [];
     this.transitions = [];
     this.workflows = [];
+    this.documents = [];
+    this.categories = [
+      { id: 'cat-proto', name: 'Prototype', created_by: 'system', created_at: '2026-11-12T00:00:00.000Z' },
+      { id: 'cat-undef', name: 'Undefined', created_by: 'system', created_at: '2026-11-12T00:00:01.000Z' },
+    ];
     this.projects = [
       { id: 'proj-1', name: 'WebTracker', description: '', workflow_id: null },
       { id: 'proj-2', name: 'Drydock', description: '', workflow_id: null },
     ];
     this.seq = 0;
+  }
+
+  // Seed a document for the Implement-link tests (ticket b14207c5):
+  // only id, category, project and the link matter to createTicket.
+  seedDocument({ id, category_id = 'cat-proto', project_id = 'proj-1', implementation_ticket_id = null }) {
+    const row = {
+      id: id || `doc-${++this.seq}`,
+      category_id,
+      project_id,
+      implementation_ticket_id,
+      title: 'Seed prototype',
+      content: '',
+      source: 'manual',
+      created_by: 'pm-1',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    this.documents.push(row);
+    return row;
+  }
+
+  // Seed a ticket with a chosen status (for a linked implementation
+  // ticket): only id and status matter to the duplicate check.
+  seedTicket({ id, status = 'requirement' }) {
+    const row = {
+      id: id || `ticket-${++this.seq}`,
+      title: 'Seed ticket',
+      source: 'project',
+      status,
+      creator_id: 'pm-1',
+      assignee_id: null,
+      developer_id: null,
+      description: '',
+      project_id: null,
+      workflow_id: null,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    this.tickets.push(row);
+    return row;
   }
 
   // Seed a project workflow (design doc ch. 19): roles start from the
@@ -80,6 +125,21 @@ class FakeDb {
   async query(text, params = []) {
     const sql = this._norm(text);
 
+    if (sql === 'SELECT * FROM documents WHERE id = $1') {
+      const d = this.documents.find((x) => x.id === params[0]);
+      return { rows: d ? [{ ...d }] : [] };
+    }
+    if (sql === 'SELECT * FROM document_categories WHERE id = $1') {
+      const c = this.categories.find((x) => x.id === params[0]);
+      return { rows: c ? [{ ...c }] : [] };
+    }
+    if (sql.startsWith('UPDATE documents SET implementation_ticket_id')) {
+      const d = this.documents.find((x) => x.id === params[1]);
+      if (!d) return { rows: [] };
+      d.implementation_ticket_id = params[0];
+      d.updated_at = new Date().toISOString();
+      return { rows: [{ ...d }] };
+    }
     if (/^SELECT \* FROM tickets WHERE id = \$1/.test(sql)) {
       const t = this.tickets.find((x) => x.id === params[0]);
       return { rows: t ? [{ ...t }] : [] };
@@ -171,13 +231,14 @@ class FakeDb {
   }
 
   async withTransaction(fn) {
-    const snap = JSON.stringify({ tickets: this.tickets, transitions: this.transitions });
+    const snap = JSON.stringify({ tickets: this.tickets, transitions: this.transitions, documents: this.documents });
     try {
       return await fn(this);
     } catch (err) {
       const restored = JSON.parse(snap);
       this.tickets = restored.tickets;
       this.transitions = restored.transitions;
+      this.documents = restored.documents;
       throw err;
     }
   }
@@ -228,6 +289,83 @@ async function main() {
     assert.equal(history[0].from_status, null);
     assert.equal(history[0].to_status, 'requirement');
     assert.equal(history[0].result, 'applied');
+  });
+
+  await ok('createTicket with document_id links the prototype to the new ticket (ticket b14207c5)', async () => {
+    const db = new FakeDb();
+    db.seedActiveWorkflow('proj-1');
+    const doc = db.seedDocument({});
+    const res = await tickets.createTicket(db, {
+      actorId: 'pm-1', actorRoles: ['pm'],
+      title: 'Implement Prototype: Seed prototype', description: 'Goal, scope and acceptance criteria.',
+      source: 'project', projectId: 'proj-1', documentId: doc.id,
+    });
+    assert.equal(res.ok, true);
+    const stored = db.documents.find((d) => d.id === doc.id);
+    assert.equal(stored.implementation_ticket_id, res.ticket.id);
+  });
+
+  await ok('createTicket with document_id: duplicate implementation is 409, delivered or in progress (ticket b14207c5)', async () => {
+    const db = new FakeDb();
+    db.seedActiveWorkflow('proj-1');
+    const doing = db.seedTicket({ status: 'in_dev' });
+    const docDoing = db.seedDocument({ implementation_ticket_id: doing.id });
+    const again = await tickets.createTicket(db, {
+      actorId: 'pm-1', actorRoles: ['pm'],
+      title: 'Implement Prototype: Seed prototype', description: 'Goal, scope and acceptance criteria.',
+      source: 'project', projectId: 'proj-1', documentId: docDoing.id,
+    });
+    assert.equal(again.ok, false);
+    assert.equal(again.status, 409);
+    assert.equal(again.error, 'duplicate_implementation');
+    assert.ok(again.message.includes(doing.id));
+    const done = db.seedTicket({ status: 'delivered' });
+    const docDone = db.seedDocument({ implementation_ticket_id: done.id });
+    const againDone = await tickets.createTicket(db, {
+      actorId: 'pm-1', actorRoles: ['pm'],
+      title: 'Implement Prototype: Seed prototype', description: 'Goal, scope and acceptance criteria.',
+      source: 'project', projectId: 'proj-1', documentId: docDone.id,
+    });
+    assert.equal(againDone.status, 409);
+    assert.equal(againDone.error, 'duplicate_implementation');
+    assert.equal((await tickets.listTickets(db, null)).length, 2);
+  });
+
+  await ok('createTicket with document_id: a cancelled link is dead, a fresh implementation may replace it (ticket b14207c5)', async () => {
+    const db = new FakeDb();
+    db.seedActiveWorkflow('proj-1');
+    const dead = db.seedTicket({ status: 'cancelled' });
+    const doc = db.seedDocument({ implementation_ticket_id: dead.id });
+    const res = await tickets.createTicket(db, {
+      actorId: 'pm-1', actorRoles: ['pm'],
+      title: 'Implement Prototype: Seed prototype', description: 'Goal, scope and acceptance criteria.',
+      source: 'project', projectId: 'proj-1', documentId: doc.id,
+    });
+    assert.equal(res.ok, true);
+    const stored = db.documents.find((d) => d.id === doc.id);
+    assert.equal(stored.implementation_ticket_id, res.ticket.id);
+  });
+
+  await ok('createTicket with document_id: unknown document, non-Prototype and project mismatch are 400 (ticket b14207c5)', async () => {
+    const db = new FakeDb();
+    db.seedActiveWorkflow('proj-1');
+    const base = {
+      actorId: 'pm-1', actorRoles: ['pm'],
+      title: 'Implement Prototype: Seed prototype', description: 'Goal, scope and acceptance criteria.',
+      source: 'project', projectId: 'proj-1',
+    };
+    const unknown = await tickets.createTicket(db, { ...base, documentId: 'doc-nope' });
+    assert.equal(unknown.status, 400);
+    assert.equal(unknown.error, 'unknown_document');
+    const plain = db.seedDocument({ category_id: 'cat-undef' });
+    const notProto = await tickets.createTicket(db, { ...base, documentId: plain.id });
+    assert.equal(notProto.status, 400);
+    assert.equal(notProto.error, 'not_a_prototype');
+    const otherProject = db.seedDocument({ project_id: 'proj-2' });
+    const mismatch = await tickets.createTicket(db, { ...base, documentId: otherProject.id });
+    assert.equal(mismatch.status, 400);
+    assert.equal(mismatch.error, 'document_project_mismatch');
+    assert.equal((await tickets.listTickets(db, null)).length, 0);
   });
 
   await ok('only the PM may create; bad input is rejected without a ticket', async () => {

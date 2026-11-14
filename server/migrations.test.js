@@ -557,6 +557,29 @@ async function main() {
     assert.ok(sql.includes('ON workflows (name) WHERE project_id IS NULL'), '021: index must be partial on Global workflows only');
   });
 
+  await ok('migration 022 links prototype documents to their implementation ticket', async () => {
+    const sql = readMigration('022_documents_implementation_ticket.sql');
+    // The link lives on the document (design doc ch. 26): the badge
+    // is a property of the document and the duplicate check is a
+    // single-row check on it. The link clears if the ticket is
+    // deleted.
+    assert.ok(sql.includes('ADD COLUMN IF NOT EXISTS implementation_ticket_id UUID'), '022: missing implementation_ticket_id column');
+    assert.ok(sql.includes('REFERENCES tickets(id) ON DELETE SET NULL'), '022: link must reference tickets with ON DELETE SET NULL');
+    assert.ok(sql.includes('CREATE INDEX IF NOT EXISTS idx_documents_implementation_ticket'), '022: missing index on the link');
+    // Backfill (a): old Implement tickets embed the document id in
+    // their description, so the link is recoverable. The title filter
+    // is what tells an implementation apart from a re-plan ticket,
+    // which embeds the same line; and only documents with no link yet
+    // are touched, so a second run is a no-op.
+    assert.ok(sql.includes("t.title LIKE 'Implement Prototype: %'"), '022: backfill must only consider Implement tickets, not re-plans');
+    assert.ok(sql.includes("document ID: ([0-9a-f]{8}-"), '022: backfill must parse the document id from the description');
+    assert.ok(sql.includes('implementation_ticket_id IS NULL'), '022: backfill must only link documents with no link yet');
+    // Delivered wins over in-progress over cancelled, earliest
+    // within each class.
+    assert.ok(sql.includes("WHEN t.status = 'delivered' THEN 0"), '022: backfill must prefer a delivered implementation');
+    assert.ok(sql.includes("WHEN t.status = 'cancelled' THEN 2"), '022: backfill must rank a cancelled implementation last');
+  });
+
   console.log(`\n${passed} migration tests passed.`);
 }
 

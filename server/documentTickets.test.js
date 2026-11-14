@@ -58,6 +58,14 @@ const origin = 'http://129.146.97.44:3000';
     assert.equal(payload.description, text.description);
   });
 
+  await ok('Implement payload: document_id links the ticket to the prototype (ticket b14207c5)', () => {
+    const payload = buildImplementTicketPayload(doc, 'Relay', origin);
+    assert.equal(payload.document_id, 'doc-1');
+    const unassigned = buildImplementTicketPayload({ ...doc, project_id: null }, 'Unassigned', origin);
+    assert.equal(unassigned.document_id, 'doc-1');
+    assert.equal(unassigned.project_id, null);
+  });
+
   await ok('Implement payload: a document with no project opens a ticket with no project', () => {
     const payload = buildImplementTicketPayload({ ...doc, project_id: null }, 'Unassigned', origin);
     assert.equal(payload.project_id, null);
