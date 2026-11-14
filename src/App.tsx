@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, getToken, onUnauthorized, setToken } from './api';
-import type { LegalTransition, Project, PublicUser, QueueEntry, RoleAgent, Ticket, TicketWithHistory, User, Workflow } from './api';
-import { QUEUE_TABS, ROLE_LABELS, countProjectAttention, countTicketsByProject, isTerminalFor, journeyFromTransitions, stateLabelFor, statusLabel, targetsForUser } from './helpers';
+import type { LegalTransition, Project, PublicUser, QueueEntry, RoleAgent, Ticket, TicketWithHistory, Transition, User, Workflow } from './api';
+import { QUEUE_TABS, ROLE_LABELS, countProjectAttention, countTicketsByProject, isTerminalFor, stateLabelFor, statusLabel, targetsForUser } from './helpers';
 import { ADMIN_TABS, adminTabForView, adminViewForTab, isAdminView } from './adminNav';
 import type { AdminTab } from './adminNav';
 import { gateView, hashToView, viewToHash } from './viewHash';
@@ -64,7 +64,7 @@ export default function App() {
   const [documentsRefreshKey, setDocumentsRefreshKey] = useState(0);
   const [tab, setTab] = useState('all');
   const [ganttTickets, setGanttTickets] = useState<Ticket[]>([]);
-  const [journeys, setJourneys] = useState<Record<string, string[]>>({});
+  const [histories, setHistories] = useState<Record<string, Transition[]>>({});
   const [ganttLoading, setGanttLoading] = useState(false);
   const [tickets, setTickets] = useState<QueueEntry[]>([]);
   const [dashboardTickets, setDashboardTickets] = useState<Ticket[]>([]);
@@ -248,7 +248,8 @@ export default function App() {
 
   // Gantt data: all tickets under the current project filter (the status
   // tabs do not apply — the Gantt shows every status), plus each
-  // ticket's status journey from its transition history.
+  // ticket's transition history, from which the bar segments are
+  // derived.
   const loadGantt = useCallback(async () => {
     const projectId = projectFilter === 'all' ? undefined : projectFilter;
     setGanttLoading(true);
@@ -256,11 +257,11 @@ export default function App() {
       const rows = await api.listTickets(undefined, projectId);
       setGanttTickets(rows);
       const settled = await Promise.allSettled(rows.map((t) => api.getTicket(t.id)));
-      const next: Record<string, string[]> = {};
+      const next: Record<string, Transition[]> = {};
       settled.forEach((r, i) => {
-        if (r.status === 'fulfilled') next[rows[i].id] = journeyFromTransitions(r.value.transitions);
+        if (r.status === 'fulfilled') next[rows[i].id] = r.value.transitions;
       });
-      setJourneys(next);
+      setHistories(next);
     } catch (err) {
       if ((err as { status?: number }).status === 401) return; // handled by onUnauthorized
       setError(err instanceof Error ? err.message : 'Failed to load Gantt data.');
@@ -1158,7 +1159,7 @@ export default function App() {
           onProjectFilterChange={setProjectFilter}
           selectedProject={selectedProject}
           ganttTickets={ganttTickets}
-          journeys={journeys}
+          histories={histories}
           ganttLoading={ganttLoading}
           workflowById={workflowById}
           selectedId={selectedId}

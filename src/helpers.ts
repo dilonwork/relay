@@ -101,15 +101,6 @@ export function formatTime(iso: string): string {
   return new Date(iso).toLocaleString();
 }
 
-export function formatAxisTime(ms: number): string {
-  return new Date(ms).toLocaleString(undefined, {
-    month: 'numeric',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-}
-
 // Gantt view (Dashboard with Gantt chart design): bars are derived from
 // existing ticket data — no schema change, no new endpoint. A bar runs
 // from created_at to updated_at (or now while the ticket is not
@@ -142,20 +133,6 @@ export function statusColor(code: string): string {
   let hash = 0;
   for (let i = 0; i < code.length; i++) hash = (hash * 31 + code.charCodeAt(i)) >>> 0;
   return palette[hash % palette.length];
-}
-
-// The statuses a ticket has passed through, in order, without
-// consecutive repeats. The first transition's from_status is the start
-// (null on creation means the ticket starts at its to_status).
-export function journeyFromTransitions(transitions: Transition[]): string[] {
-  const out: string[] = [];
-  for (const tr of transitions) {
-    if (tr.from_status && (out.length === 0 || out[out.length - 1] !== tr.from_status)) {
-      out.push(tr.from_status);
-    }
-    if (out.length === 0 || out[out.length - 1] !== tr.to_status) out.push(tr.to_status);
-  }
-  return out;
 }
 
 // Time window covering every bar. A zero-length window (all tickets at
@@ -309,7 +286,7 @@ export function zoomWindow(range: { min: number; max: number }, zoom: number): {
 
 // Bar position against the visible window, in percent of the track
 // width. Null when the bar does not intersect the window at all —
-// the row keeps its label and journey line, only the bar is omitted.
+// the row keeps its label, only the bar is omitted.
 export function barPositionInWindow(
   startMs: number,
   endMs: number,
@@ -321,6 +298,148 @@ export function barPositionInWindow(
   const left = Math.max(0, ((startMs - win.min) / span) * 100);
   const right = Math.min(100, ((endMs - win.min) / span) * 100);
   return { left, width: Math.max(0, right - left) };
+}
+
+// Gantt redesign (ticket 2b62f706, UI&UX prototype "Gantt redesign —
+// recommendations"): bars show where the time went, the toolbar fits
+// in two rows, and a summary line answers "what needs attention?".
+// All pure, so server/gantt.test.js exercises the exact code the
+// component runs.
+
+// One stay in one status: the bar is a row of these slices, coloured
+// per status. A segment runs from the transition that entered the
+// status to the one that left it.
+export interface GanttSegment {
+  status: string;
+  startMs: number;
+  endMs: number;
+}
+
+// Segments from transition history: the first segment starts at
+// created_at (the ticket starts in the first transition's from_status,
+// or its to_status when from_status is null on creation); each later
+// segment starts at the transition that entered it; the last ends at
+// updated_at for a terminal ticket, or now while it is still open.
+// Consecutive repeats collapse (a no-op transition into the status
+// the ticket already holds opens no segment). A history that does not
+// end at the ticket's current status — stale or partial — cannot be
+// trusted, and no history at all (the per-ticket fetch failed) leaves
+// nothing to segment: both fall back to one segment for the current
+// status, so the bar renders single-colour, the documented fallback.
+// Zero-length segments carry no time and are dropped, except that a
+// ticket with a single zero-length segment keeps it so the bar still
+// renders as the minimum-width sliver.
+export function segmentsFromTransitions(
+  transitions: Transition[],
+  ticket: Ticket,
+  workflow?: Workflow | null,
+  now: number = Date.now()
+): GanttSegment[] {
+  const start = new Date(ticket.created_at).getTime();
+  const end = isTerminalFor(workflow, ticket.status)
+    ? new Date(ticket.updated_at).getTime()
+    : now;
+  const fallback = (): GanttSegment[] => [
+    { status: ticket.status, startMs: start, endMs: Math.max(end, start) },
+  ];
+  if (!transitions || transitions.length === 0) return fallback();
+  const sorted = [...transitions].sort(
+    (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+  );
+  const first = sorted[0];
+  const initial = first.from_status || first.to_status;
+  const segments: GanttSegment[] = [];
+  let current = initial;
+  let segStart = start;
+  for (const tr of sorted) {
+    if (tr.to_status === current) continue;
+    const at = new Date(tr.created_at).getTime();
+    segments.push({ status: current, startMs: segStart, endMs: Math.max(at, segStart) });
+    current = tr.to_status;
+    segStart = at;
+  }
+  if (current !== ticket.status) return fallback();
+  segments.push({ status: current, startMs: segStart, endMs: Math.max(end, segStart) });
+  const nonEmpty = segments.filter((s) => s.endMs > s.startMs);
+  return nonEmpty.length > 0 ? nonEmpty : segments;
+}
+
+// Day-boundary axis ticks: ticks at local-midnight boundaries inside
+// the visible window, labelled "Nov 8" style, thinned to at most
+// maxTicks by stepping whole days so a months-wide window stays
+// readable. A window inside a single day holds no midnight boundary:
+// the tick is the window start, labelled with its date. DST-safe —
+// boundaries advance with setDate, not fixed 24h steps.
+export function dayTicks(
+  window: { min: number; max: number },
+  maxTicks: number = 8
+): number[] {
+  if (window.max <= window.min) return [window.min];
+  const first = new Date(window.min);
+  first.setHours(0, 0, 0, 0);
+  let cur = first.getTime();
+  if (cur < window.min) {
+    const d = new Date(cur);
+    d.setDate(d.getDate() + 1);
+    cur = d.getTime();
+  }
+  const out: number[] = [];
+  while (cur <= window.max) {
+    out.push(cur);
+    const d = new Date(cur);
+    d.setDate(d.getDate() + 1);
+    cur = d.getTime();
+  }
+  if (out.length === 0) return [window.min];
+  if (out.length <= maxTicks) return out;
+  const step = Math.ceil(out.length / maxTicks);
+  return out.filter((_, i) => i % step === 0);
+}
+
+// Day label for the axis: "Nov 8" style (month short + day, no year,
+// no time — the axis is about which day, not which hour).
+export function formatDayLabel(ms: number): string {
+  return new Date(ms).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+// Summary line: how many of the shown tickets are stalled, and the
+// oldest stalled one — the ticket that has sat in its current status
+// longest (updated_at is the display clock, same approximation as
+// isStalledTicket). Computed from the visible (filtered) set, so the
+// line always describes the chart on screen.
+export interface GanttSummary {
+  stalledCount: number;
+  oldest: { ticket: Ticket; ageMs: number } | null;
+}
+
+export function ganttSummary(
+  tickets: Ticket[],
+  workflowById?: Map<string, Workflow>,
+  now: number = Date.now()
+): GanttSummary {
+  let oldest: { ticket: Ticket; ageMs: number } | null = null;
+  let stalledCount = 0;
+  for (const t of tickets) {
+    const workflow = workflowById && t.workflow_id ? workflowById.get(t.workflow_id) : undefined;
+    if (!isStalledTicket(t, workflow, now)) continue;
+    stalledCount += 1;
+    const updated = new Date(t.updated_at).getTime();
+    if (!oldest || updated < new Date(oldest.ticket.updated_at).getTime()) {
+      oldest = { ticket: t, ageMs: now - updated };
+    }
+  }
+  return { stalledCount, oldest };
+}
+
+// Age of a stalled ticket in its current status: whole days once it
+// passes a day, hours before that.
+export function formatStalledAge(ageMs: number): string {
+  const days = Math.floor(ageMs / (24 * 60 * 60 * 1000));
+  if (days >= 1) return `${days} day${days === 1 ? '' : 's'}`;
+  const hours = Math.floor(ageMs / (60 * 60 * 1000));
+  if (hours >= 1) return `${hours} hour${hours === 1 ? '' : 's'}`;
+  const minutes = Math.max(1, Math.floor(ageMs / (60 * 1000)));
+  return `${minutes} minute${minutes === 1 ? '' : 's'}`;
 }
 
 // Dashboard (default page): ticket counts per project, grouped into

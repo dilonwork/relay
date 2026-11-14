@@ -289,9 +289,8 @@ body {
   .gantt-scroll { overflow-x: auto; }
   .gantt-scroll .gantt-grid { min-width: 600px; }
   /* Axis labels are ~110px wide but ticks sit 150px apart on the
-     600px grid, so neighbours overlap; show every other tick. */
-  .gantt-axis span:nth-child(2),
-  .gantt-axis span:nth-child(4) { display: none; }
+     600px grid, so neighbours overlap; show every other day tick. */
+  .gantt-axis span:nth-child(even) { display: none; }
   .gantt-label { position: sticky; left: 0; background: #fff; z-index: 1; }
 
   /* Login / setup: less top margin on small screens. */
@@ -602,23 +601,43 @@ button.link {
   text-overflow: ellipsis;
 }
 .gantt-label .badge { margin-top: 2px; }
-.gantt-track { padding: 4px 0; min-width: 0; }
-.gantt-bar { height: 16px; border-radius: 4px; cursor: pointer; }
+.gantt-track { padding: 4px 0; min-width: 0; position: relative; }
+/* Segmented bars (ticket 2b62f706): the bar is a flex row of status
+   slices; the container clips them to its rounded corners. A bar
+   with no history for its ticket keeps one full-width slice in the
+   current status colour, plus the end dot below. */
+.gantt-bar { height: 16px; border-radius: 4px; cursor: pointer; display: flex; overflow: hidden; }
 .gantt-bar.selected { outline: 2px solid #0f2a3d; outline-offset: 1px; }
-.gantt-journey {
-  margin-top: 2px;
-  font-size: 11px;
-  color: #5a6b7c;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+.gantt-segment { height: 100%; min-width: 0; flex: none; }
+/* End dot (ticket 2b62f706): the documented fallback for a bar with
+   no segment data — a visible marker at the last update, positioned
+   against the track like the bar itself. */
+.gantt-end-dot {
+  position: absolute;
+  top: 50%;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #0f2a3d;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
 }
 
 /* Gantt controls (ticket 78462e97): search, status chips, group-by /
-   zoom / Today / Stalled only / density. They wrap on narrow screens;
-   the chart itself keeps its horizontal scroll and sticky label
-   column from the RWD work. */
-.gantt-controls { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; margin: 8px 0 4px 0; }
+   zoom / Today / Stalled only / density. The redesign (ticket
+   2b62f706) fits them in two rows: search + chips on the first, view
+   controls + the showing count on the second. They wrap on narrow
+   screens; the chart itself keeps its horizontal scroll and sticky
+   label column from the RWD work. */
+.gantt-controls { display: flex; flex-direction: column; gap: 8px; margin: 8px 0 4px 0; }
+.gantt-row { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; }
+/* Project chip (ticket 2b62f706): the single-project header collapsed
+   to one line — name + ticket count, ✕ to show all projects. The
+   description lives on the Projects page. */
+.gantt-project-chip { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: #0f2a3d; }
+/* Summary line (ticket 2b62f706): stalled count + oldest stalled
+   ticket, above the chart. */
+.gantt-summary { margin: 8px 0 4px 0; font-size: 13px; color: #0f2a3d; }
 .gantt-controls input[type="search"] {
   flex: 1 1 200px;
   min-width: 0;
@@ -654,7 +673,9 @@ button.link {
 }
 .gantt-options label { display: flex; align-items: center; gap: 4px; cursor: pointer; }
 .gantt-zoom { display: flex; gap: 4px; }
-.gantt-showing { flex-basis: 100%; margin: 0; }
+/* The showing count sits inline at the end of the second toolbar
+   row (ticket 2b62f706), not on its own line. */
+.gantt-showing { margin: 0 0 0 auto; }
 
 /* Collapsible group header: a button that looks like the old group
    row (grid-column 1 / -1, same weight and colour). */
@@ -690,9 +711,8 @@ button.link {
   z-index: 2;
 }
 
-/* Compact density (ticket 78462e97): tighter rows, journey line
-   hidden. Comfortable is the previous layout, unchanged. */
-.gantt-grid.gantt-compact .gantt-journey { display: none; }
+/* Compact density (ticket 78462e97): tighter rows. Comfortable is
+   the previous layout, unchanged. */
 .gantt-grid.gantt-compact .gantt-bar { height: 12px; }
 .gantt-grid.gantt-compact .gantt-track,
 .gantt-grid.gantt-compact .gantt-label { padding: 2px 0; }
