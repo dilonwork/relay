@@ -994,6 +994,13 @@ export default function App() {
         segments={titleBarSegments()}
         title={mainView === 'detail' && detail ? detail.title : undefined}
         badge={detailBadge}
+        actions={
+          mainView === 'dashboard' ? (
+            <button type="button" className="primary" onClick={() => setMainView('new')}>
+              + New ticket
+            </button>
+          ) : undefined
+        }
         onRefresh={handleRefresh}
       />
 
