@@ -157,7 +157,7 @@ relay/
 │   ├── viewHash.test.js
 │   └── migrations.test.js
 ├── db/
-│   └── migrations/       # schema as SQL migrations (001-021)
+│   └── migrations/       # schema as SQL migrations (001-022)
 ├── doc/
 │   └── design.md         # design document (Traditional Chinese)
 ├── screenshots/          # README screenshots (see screenshots/README.md)
@@ -185,7 +185,7 @@ The backend needs a PostgreSQL database (default name `relay`, see
 not done by the code in this repo; the server creates the `tickets`,
 `ticket_transitions`, `users`, `sessions`, `api_keys`, `projects`,
 `monitor_reminders` and `workflows` tables itself on startup (migrations
-`db/migrations/001-021`).
+`db/migrations/001-022`).
 
 On first run the users table is empty, so the app shows a setup screen:
 create the first admin account there (username, display name, password).
@@ -262,7 +262,7 @@ way, including the three-layer role-map fallback and the delete rules.
 Custom workflow definitions are covered too: the three example flows
 are walked end to end (including the backward move), the definition
 validator's rules are tested case by case, and the migration files are
-tested for the 001→021 sequence. The document service is tested the
+tested for the 001→022 sequence. The document service is tested the
 same way, including the filename slug, the project scope rules, the
 project ownership (project_id stored and returned, the list filters by
 project, unassigned documents show as Unassigned, the agent upload
