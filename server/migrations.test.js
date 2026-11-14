@@ -61,7 +61,13 @@
 // among Globals (PostgreSQL treats NULL project_id values as
 // distinct), so a partial unique index on (name) WHERE project_id
 // IS NULL closes the gap; the service already turns 23505 into 409
-// workflow_name_taken.
+// workflow_name_taken. Migration 010 and 013 seed statements are
+// guarded on the is_default column existing (ticket 7c2fefc5,
+// follow-up to 020): 020 drops is_default, and the server re-runs
+// every migration on startup, so the unguarded 010 seed INSERT and
+// 013 seed UPDATE would fail on the second run (column does not
+// exist) and block 011-021. The CREATE TABLE columns stay: a fresh
+// database needs them so 020's backfill can read them.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -254,6 +260,32 @@ async function main() {
     assert.deepEqual(JSON.parse(m[1]), BUILTIN_STATES, '013: seeded states must equal BUILTIN_STATES');
     assert.deepEqual(JSON.parse(m[2]), BUILTIN_DEFINITION.transitions, '013: seeded transitions must equal BUILTIN_DEFINITION.transitions');
     assert.ok(sql.includes("WHERE is_default AND states = '[]'::jsonb"), '013: seed must only fill an empty default workflow');
+    // The seed UPDATE is guarded on the is_default column existing:
+    // migration 020 drops it, and the server re-runs every migration
+    // on startup, so an unguarded UPDATE would fail on the second run
+    // and block 014-021. The UPDATE must sit inside the guard.
+    assert.ok(sql.includes('DO $$'), '013: seed UPDATE must be inside a DO block guard');
+    assert.ok(sql.includes("column_name = 'is_default'"), '013: seed UPDATE must be guarded on is_default existing');
+    const guardAt = sql.indexOf('DO $$');
+    const updateAt = sql.indexOf('UPDATE workflows');
+    assert.ok(updateAt > guardAt, '013: UPDATE must be inside the guard (after DO $$)');
+  });
+
+  await ok('migration 010 seed INSERT is guarded for re-runs after 020', async () => {
+    const sql = readMigration('010_create_workflows.sql');
+    // The CREATE TABLE must keep the is_default / is_active columns:
+    // a fresh database needs them so 020's backfill can read them.
+    assert.ok(sql.includes('is_default BOOLEAN NOT NULL DEFAULT false'), '010: CREATE TABLE must keep is_default');
+    assert.ok(sql.includes('is_active BOOLEAN NOT NULL DEFAULT false'), '010: CREATE TABLE must keep is_active');
+    // The seed INSERT references those columns, so it must be guarded
+    // on is_default existing: 020 drops the column, and the server
+    // re-runs every migration on startup, so an unguarded INSERT would
+    // fail on the second run and block 011-021.
+    assert.ok(sql.includes('DO $$'), '010: seed INSERT must be inside a DO block guard');
+    assert.ok(sql.includes("column_name = 'is_default'"), '010: seed INSERT must be guarded on is_default existing');
+    const guardAt = sql.indexOf('DO $$');
+    const insertAt = sql.indexOf('INSERT INTO workflows (name, project_id, roles, is_default, is_active, created_by)');
+    assert.ok(insertAt > guardAt, '010: INSERT must be inside the guard (after DO $$)');
   });
 
   await ok('migration 003 creates users with all 9 roles in the CHECK (016 updated it)', async () => {

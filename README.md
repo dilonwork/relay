@@ -272,8 +272,8 @@ project creation (one agent per flow role, with keys and onboarding
 packages, rolled back when a role has no free username) and the
 onboarding document regenerating from a live workflow edit.
 
-291 tests in total: state machine 21, tickets 36, projects 15, onboarding 7, auth 21,
-admin 7, API keys 8, monitor 18, workflows 30, quick-create builder 11, documents 24, document tickets 12, document render 18, gantt helpers 14, admin nav 5, view hash 8, migrations 32, role lists 4.
+292 tests in total: state machine 21, tickets 36, projects 15, onboarding 7, auth 21,
+admin 7, API keys 8, monitor 18, workflows 30, quick-create builder 11, documents 24, document tickets 12, document render 18, gantt helpers 14, admin nav 5, view hash 8, migrations 33, role lists 4.
 
 ## Accounts & authentication
 
