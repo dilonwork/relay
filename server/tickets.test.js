@@ -1374,6 +1374,177 @@ async function main() {
     assert.equal(done.ticket.assignee_id, 'ux-1');
   });
 
+  await ok('next step: the caller sees their pickup and forward steps on the built-in flow', async () => {
+    const db = new FakeDb();
+    const pm = { actorId: 'pm-1', actorRoles: ['pm'] };
+    // The chain in order; driving a ticket through the first n steps
+    // leaves it in the state after step n (0 steps = requirement).
+    const chain = [
+      [['leader'], 'decomposing'],
+      [['leader'], 'pending_dev', { reason: 'done', handoff: 'work list' }],
+      [['engineer'], 'in_dev'],
+      [['engineer'], 'pending_review', { handoff: 'ready' }],
+      [['reviewer'], 'in_review'],
+      [['reviewer'], 'pending_test'],
+      [['tester'], 'in_test'],
+      [['tester'], 'pending_deploy'],
+      [['deployer'], 'deploying'],
+      [['deployer'], 'delivered'],
+    ];
+    async function driveTo(id, steps) {
+      for (let i = 0; i < steps; i++) {
+        const [roles, toStatus, extra = {}] = chain[i];
+        const r = await tickets.transitionTicket(db, id, {
+          actorId: `${roles[0]}-1`, actorRoles: roles, toStatus,
+          reason: extra.reason || '', handoff: extra.handoff,
+        });
+        assert.equal(r.ok, true, `${toStatus}: ${JSON.stringify(r)}`);
+      }
+    }
+    async function make(title, steps) {
+      const t = await tickets.createTicket(db, { ...pm, title, description: 'd' });
+      await driveTo(t.ticket.id, steps);
+      return t.ticket.id;
+    }
+    const req = await make('req', 0);
+    const dev = await make('dev', 2);
+    const inv = await make('inv', 3);
+    const rev = await make('rev', 4);
+    const inr = await make('inr', 5);
+    const tst = await make('tst', 7);
+    const pdep = await make('pdep', 8);
+    const depl = await make('depl', 9);
+    const done = await make('done', 10);
+
+    const rows = await tickets.listTickets(db, null, undefined, undefined);
+    const step = (attached, id) => attached.find((r) => r.id === id).next_transition;
+
+    // The engineer picks up pending_dev and submits in_dev; nothing
+    // else on this chain is theirs.
+    const forEngineer = await tickets.attachNextTransitions(db, rows, ['engineer']);
+    assert.deepEqual(step(forEngineer, dev), {
+      to: 'in_dev', role: 'engineer', kind: 'pickup', requires_reason: false, requires_handoff: false,
+    });
+    assert.deepEqual(step(forEngineer, inv), {
+      to: 'pending_review', role: 'engineer', kind: 'forward', requires_reason: false, requires_handoff: true,
+    });
+    assert.equal(step(forEngineer, req), null);
+    assert.equal(step(forEngineer, rev), null);
+    assert.equal(step(forEngineer, tst), null);
+    assert.equal(step(forEngineer, done), null);
+
+    // The leader claims requirement; the reviewer picks up
+    // pending_review and moves in_review forward; the tester moves
+    // in_test forward; the deployer picks up pending_deploy and
+    // finishes deploying.
+    const forLeader = await tickets.attachNextTransitions(db, rows, ['leader']);
+    assert.deepEqual(step(forLeader, req), {
+      to: 'decomposing', role: 'leader', kind: 'forward', requires_reason: false, requires_handoff: false,
+    });
+    const forReviewer = await tickets.attachNextTransitions(db, rows, ['reviewer']);
+    assert.deepEqual(step(forReviewer, rev), {
+      to: 'in_review', role: 'reviewer', kind: 'pickup', requires_reason: false, requires_handoff: false,
+    });
+    assert.deepEqual(step(forReviewer, inr), {
+      to: 'pending_test', role: 'reviewer', kind: 'forward', requires_reason: false, requires_handoff: false,
+    });
+    const forTester = await tickets.attachNextTransitions(db, rows, ['tester']);
+    assert.deepEqual(step(forTester, tst), {
+      to: 'pending_deploy', role: 'tester', kind: 'forward', requires_reason: false, requires_handoff: false,
+    });
+    assert.equal(step(forTester, pdep), null);
+    const forDeployer = await tickets.attachNextTransitions(db, rows, ['deployer']);
+    assert.deepEqual(step(forDeployer, pdep), {
+      to: 'deploying', role: 'deployer', kind: 'pickup', requires_reason: false, requires_handoff: false,
+    });
+    assert.deepEqual(step(forDeployer, depl), {
+      to: 'delivered', role: 'deployer', kind: 'forward', requires_reason: false, requires_handoff: false,
+    });
+    // A delivered ticket has no next step for anyone.
+    assert.equal(step(forDeployer, done), null);
+    assert.equal(step(forEngineer, done), null);
+    // The input rows are not mutated.
+    assert.equal(rows.find((r) => r.id === dev).next_transition, undefined);
+  });
+
+  await ok('next step: clarify is the fallback when no forward step exists for the caller', async () => {
+    const db = new FakeDb();
+    const pm = { actorId: 'pm-1', actorRoles: ['pm'] };
+    const a = await tickets.createTicket(db, { ...pm, title: 'a', description: 'd' });
+    const b = await tickets.createTicket(db, { ...pm, title: 'b', description: 'd' });
+    async function move(id, roles, toStatus, extra = {}) {
+      const r = await tickets.transitionTicket(db, id, {
+        actorId: `${roles[0]}-1`, actorRoles: roles, toStatus,
+        reason: extra.reason || '', handoff: extra.handoff,
+      });
+      assert.equal(r.ok, true, `${toStatus}: ${JSON.stringify(r)}`);
+    }
+    await move(a.ticket.id, ['leader'], 'decomposing');
+    await move(a.ticket.id, ['leader'], 'needs_clarification', { reason: 'unclear scope' });
+    await move(b.ticket.id, ['leader'], 'decomposing');
+    await move(b.ticket.id, ['leader'], 'pending_dev', { reason: 'done', handoff: 'work list' });
+    await move(b.ticket.id, ['engineer'], 'in_dev');
+    await move(b.ticket.id, ['engineer'], 'pending_review', { handoff: 'ready' });
+    await move(b.ticket.id, ['reviewer'], 'in_review');
+    await move(b.ticket.id, ['reviewer'], 'pending_test');
+    await move(b.ticket.id, ['tester'], 'in_test');
+    await move(b.ticket.id, ['tester'], 'needs_acceptance_clarification', { reason: 'criteria unclear' });
+
+    const rows = await tickets.listTickets(db, null, undefined, undefined);
+    const step = (attached, id) => attached.find((r) => r.id === id).next_transition;
+    const forPm = await tickets.attachNextTransitions(db, rows, ['pm']);
+    assert.deepEqual(step(forPm, a.ticket.id), {
+      to: 'decomposing', role: 'pm', kind: 'clarify', requires_reason: true, requires_handoff: false,
+    });
+    assert.deepEqual(step(forPm, b.ticket.id), {
+      to: 'in_test', role: 'pm', kind: 'clarify', requires_reason: true, requires_handoff: false,
+    });
+    // Nobody else can act on either clarification state.
+    const forEngineer = await tickets.attachNextTransitions(db, rows, ['engineer']);
+    assert.equal(step(forEngineer, a.ticket.id), null);
+    assert.equal(step(forEngineer, b.ticket.id), null);
+  });
+
+  await ok('next step: a custom workflow reroutes the step, and the queue agrees on claimable rows', async () => {
+    const db = new FakeDb();
+    // proj-1 runs a custom workflow where pending_dev belongs to the
+    // tester instead of the engineer; proj-2 keeps the built-in roles.
+    db.seedActiveWorkflow('proj-1', { pending_dev: { role: 'tester' } });
+    db.seedActiveWorkflow('proj-2');
+    const pm = { actorId: 'pm-1', actorRoles: ['pm'] };
+    const a = await tickets.createTicket(db, { ...pm, title: 'a', description: 'd', projectId: 'proj-1' });
+    const b = await tickets.createTicket(db, { ...pm, title: 'b', description: 'd', projectId: 'proj-2' });
+    for (const t of [a, b]) {
+      await tickets.transitionTicket(db, t.ticket.id, { actorId: 'leader-1', actorRoles: ['leader'], toStatus: 'decomposing', reason: '' });
+      await tickets.transitionTicket(db, t.ticket.id, {
+        actorId: 'leader-1', actorRoles: ['leader'], toStatus: 'pending_dev', reason: 'done', handoff: 'work list',
+      });
+    }
+    const rows = await tickets.listTickets(db, null, undefined, undefined);
+    const step = (attached, id) => attached.find((r) => r.id === id).next_transition;
+    const forTester = await tickets.attachNextTransitions(db, rows, ['tester']);
+    assert.deepEqual(step(forTester, a.ticket.id), {
+      to: 'in_dev', role: 'tester', kind: 'pickup', requires_reason: false, requires_handoff: false,
+    });
+    assert.equal(step(forTester, b.ticket.id), null);
+    const forEngineer = await tickets.attachNextTransitions(db, rows, ['engineer']);
+    assert.equal(step(forEngineer, a.ticket.id), null);
+    assert.deepEqual(step(forEngineer, b.ticket.id), {
+      to: 'in_dev', role: 'engineer', kind: 'pickup', requires_reason: false, requires_handoff: false,
+    });
+
+    // The queue and the list agree on every claimable row: the same
+    // ticket shows the same next step on its status tab and on
+    // Claimable.
+    for (const roles of [['leader', 'engineer'], ['tester']]) {
+      const queue = await tickets.listClaimable(db, roles);
+      const attached = await tickets.attachNextTransitions(db, rows, roles);
+      for (const q of queue) {
+        assert.deepEqual(step(attached, q.id), q.next_transition, `claimable row ${q.id} for ${roles}`);
+      }
+    }
+  });
+
   console.log(`\n${passed} ticket service tests passed.`);
 }
 

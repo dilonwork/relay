@@ -490,6 +490,53 @@ export function countTicketsByProject(
   return out;
 }
 
+// Tickets list (ticket 7da410a5, UI&UX prototype "Tickets list redesign —
+// recommendations"): tabs with counts, search, and the next step on
+// every tab. These pure helpers are the single source for that layout;
+// TicketList renders from them and the server tests exercise them
+// directly.
+
+// Rows for one tab. The Claimable tab is the role-filtered queue
+// (/api/queue), not a status filter — it comes from the queue rows.
+// Every other tab filters the loaded tickets by its QUEUE_TABS status
+// (null = all; a comma list, such as Done, matches any of its states).
+export function ticketsForTab(
+  tickets: Ticket[],
+  tabKey: string,
+  queueTickets: Ticket[] = []
+): Ticket[] {
+  if (tabKey === 'claimable') return [...queueTickets];
+  const found = QUEUE_TABS.find((t) => t.key === tabKey);
+  if (!found) return [...tickets];
+  if (!found.status) return [...tickets];
+  const statuses = found.status.split(',');
+  return tickets.filter((t) => statuses.includes(t.status));
+}
+
+// Client-side title search: substring, case-insensitive; an empty
+// query keeps every row.
+export function filterTicketsByTitle(tickets: Ticket[], query: string): Ticket[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return [...tickets];
+  return tickets.filter((t) => t.title.toLowerCase().includes(q));
+}
+
+// Per-tab counts from the loaded tickets (and the queue for
+// Claimable), after the title search — so a tab's count is exactly the
+// rows it shows. Unknown tabs are not counted.
+export function countTicketsByTab(
+  tickets: Ticket[],
+  queueTickets: Ticket[],
+  query: string
+): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const tab of QUEUE_TABS) {
+    const rows = tab.key === 'claimable' ? queueTickets : ticketsForTab(tickets, tab.key);
+    out[tab.key] = filterTicketsByTitle(rows, query).length;
+  }
+  return out;
+}
+
 // Dashboard (ticket 4c7601fb, UI&UX prototype "Dashboard redesign —
 // recommendations"): the landing page answers "what needs attention?"
 // first with a system-wide summary, then shows one card per project.

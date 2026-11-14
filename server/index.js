@@ -150,7 +150,10 @@ app.get('/api/tickets', async (req, res) => {
     // the assignment overrides the query filter.
     const projectFilter = req.query.project_id ? String(req.query.project_id).trim() : undefined;
     const rows = await tickets.listTickets(db, statuses, projectFilter || undefined, req.user.project_id);
-    res.json(rows);
+    // Every row carries the caller's next step (ticket 7da410a5): the
+    // list shows the Next-step column on all tabs, and the Gantt and
+    // Dashboard callers ignore the extra field.
+    res.json(await tickets.attachNextTransitions(db, rows, req.user.roles));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

@@ -46,6 +46,7 @@ Tickets carry project development work through a pipeline: the PM creates a requ
 24. Projects Redesign: The List Is the Page, Creation Behind an Action
 25. Gantt Redesign: Segmented Bars, One Toolbar, a Summary Line
 26. Prototype Implementation: Stored Link, Badge, Duplicate Block
+27. Tickets List Redesign: Counts, Search, and the Next Step Everywhere
 - Appendix A State Code Reference
 - Appendix B Ticket Lifecycle Example
 
@@ -1358,3 +1359,36 @@ Several prototypes were already implemented through the old flow (the Dashboard 
 
 Frontend browser verification was not possible (no headless browser on the VM); only `tsc` + `vite build` were run. The Tester verifies in the browser after deploy: an implemented prototype shows the Implemented badge in the list and in the expanded view, an in-progress one shows the amber badge and a disabled Implement with the reason, and clicking a badge opens the implementation ticket.
 
+## 27. Tickets List Redesign: Counts, Search, and the Next Step Everywhere
+
+The Tickets list already had the right queues (the 10 tabs map 1:1 to workflow states, and each duty role's queue is a status) but it hid the work: tabs without counts, no search, the "Next step for you" column only on the Claimable tab, assignee as a truncated id, no stalled signal, and the project header costing vertical space on every visit — while the mobile card view dropped the Assignee column entirely, so the two views disagreed about what a ticket shows. This redesign fixes the presentation, not the tab set.
+
+Every tab now shows its count (`All 12 · Claimable 6 · … · Done 4`), and the Claimable tab is highlighted amber while it has work — the tab row alone answers "where is the work?" without clicking through tabs. The Next-step column renders on every tab: the server attaches `next_transition` to every row the list endpoint returns (see below), so a ticket in any state shows the transition its viewer can take next, or — when none. The Assignee column shows a display name from the public user directory (short id until the directory arrives, or when the id is unresolvable). The title carries its short id underneath, muted — the id is what people quote in chat. The Updated cell carries a stalled amber dot with a tooltip when a ticket has not changed for 36h+ in a working state (the same rule as the Gantt marker). One toolbar above the tabs holds a title search (client-side substring), a density toggle (Comfortable, the default row height, / Compact), and the project header collapsed to a one-line chip (`Relay · 36 tickets ✕`, ✕ to show all projects; the description lives on the Projects page) — the same collapse the Gantt uses. The Uncategorized note stays as a one-line muted note in the same spot. The sidebar project filter stays wired to the same state. Mobile cards gain the same fields (id, assignee name, next step, stalled dot) so the two views match; the table/card switch stays CSS-driven, no new component.
+
+The list loads differently now. It used to load one tab at a time from the server (per-tab status filter, Claimable from /api/queue), so per-tab counts could not be computed from what was loaded. It now loads the whole project once when the view is entered — all tickets plus the role-filtered queue, in parallel — and derives tabs and counts client-side (`ticketsForTab`, `countTicketsByTab`); tab switches need no round trip. Counts come from the searched set, so a tab's count is exactly the rows it shows. The title-bar Refresh action and the reloads after a transition or a new ticket still reload both lists.
+
+Next step for the list: the list endpoint used to return bare ticket rows — `next_transition` only existed on queue rows. `attachNextTransitions` computes it for every row from the ticket's own workflow definition: the outgoing transitions from the current state, preferred pickup, then forward, then clarify, then return, then backward, in definition order; cancel never counts (it is implicit, not a step). The effective role is the workflow's role map for the state (ch. 14 override), falling back to the transition row's own role — the same authority `listClaimable` consults. A row with no transition the caller can take (a terminal ticket, or another role's state) gets null and renders as —. The queue and the list agree on claimable rows by construction (the same candidate and the same role rule), and a test asserts the agreement. The stalled rule deliberately reuses `updated_at` (the Gantt's documented approximation): the recommendations note suggested the last-transition time if `updated_at` proves insufficient, and it has not — the list loads the same ticket data as the Gantt, which accepted it — so no per-ticket history fetch was added.
+
+Unchanged on purpose: the title bar ("Tickets / All tickets" + Refresh, no duplicate titles anywhere), the sidebar, routing, the 10-tab set, click-a-row-opens-detail, status badges, relative times. The old `TicketProjectHeader` component is gone (the Gantt stopped using it in ch. 25; the list's chip replaced its last use). English-only.
+
+### No migration
+
+No schema change: the list endpoint attaches a derived field to rows it already returns. No migration was added for this ticket.
+
+### Frontend
+
+- `src/helpers.ts`: the pure list helpers — `ticketsForTab` (Claimable from the queue rows, every other tab by its QUEUE_TABS status; Done matches delivered or cancelled), `filterTicketsByTitle` (substring, case-insensitive), `countTicketsByTab` (per-tab counts from the searched set, Claimable from the queue). As with the earlier view helpers, the server tests require this module directly and exercise the exact code the component runs.
+- `src/App.tsx`: `loadTickets` loads all tickets for the project filter plus the queue in parallel and keeps them in `tickets` / `queueTickets`; it also triggers the one-time public-directory load the list needs for assignee names (the same lazy load the detail page uses). Entering the Tickets list view loads it; tab switches and the Refresh action reuse the same loader. `TicketList` receives `queueTickets` and `users` as new props.
+- `src/TicketList.tsx`: the toolbar (search input, density toggle, project chip, Uncategorized note), tabs with `<span className="count">` and the amber `claimable` class, the Next-step column on every tab, assignee display names with short-id fallback, short ids under titles, stalled dots on Updated, mobile cards with the same fields, and the compact density class on the card wrapper. `TicketProjectHeader` is removed.
+- `src/index.css`: `.tickets-toolbar` / `.tickets-search` / `.tickets-density` / `.tickets-project-chip`, `.tabs button.claimable:not(.active)` (amber), `.ticket-id`, `.stalled-dot`, `.card.ticket-compact` (tighter table and card padding), `.ticket-card-assignee`.
+
+### Server
+
+- `server/tickets.js`: `attachNextTransitions(db, rows, actorRoles)` (see the design above; one role-map lookup per project and one definition lookup per workflow, shared across the rows — the same caching `listClaimable` uses).
+- `server/index.js`: `GET /api/tickets` returns `attachNextTransitions(db, rows, req.user.roles)`. The Gantt and Dashboard callers of the same endpoint ignore the extra field.
+
+### Tests
+
+- `server/tickets.test.js` (3 new items, 39 total): the caller sees their pickup and forward steps on the built-in flow (requirement for the leader, pending_dev pickup and in_dev forward for the engineer, pending_review pickup and in_review forward for the reviewer, in_test forward for the tester, pending_deploy pickup and deploying forward for the deployer; delivered is null for everyone; the input rows are not mutated); clarify is the fallback when no forward step exists for the caller (needs_clarification and needs_acceptance_clarification for the PM, null for the engineer); a custom workflow reroutes the step (pending_dev belongs to the tester) and the queue agrees with the list on every claimable row.
+- `server/ticketsList.test.js` (8 items, new file): tab rows filter by status (Done matches delivered or cancelled), the Claimable tab shows the queue rows, an unknown tab falls back to the full list, title search is a case-insensitive substring (empty query keeps all), tab counts count the searched set with Claimable from the queue, the component renders the toolbar/counts/next-step-everywhere/stalled-dot with the old Claimable gating and `TicketProjectHeader` gone, App loads all tickets plus the queue and passes them to the list, and the styles cover the new elements.
+- Frontend browser verification was not possible (no headless browser on the VM); only `tsc` + `vite build` were run. The Tester verifies the Tickets list in the browser after deploy (tab counts, amber Claimable, search, project chip + clear, assignee names, Next step on every tab, stalled dots with tooltips, density toggle, mobile cards matching the table, title bar unchanged, no duplicate titles).

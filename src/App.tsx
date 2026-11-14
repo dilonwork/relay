@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, getToken, onUnauthorized, setToken } from './api';
 import type { LegalTransition, Project, PublicUser, QueueEntry, RoleAgent, Ticket, TicketWithHistory, Transition, User, Workflow } from './api';
-import { QUEUE_TABS, ROLE_LABELS, countProjectAttention, countTicketsByProject, isTerminalFor, stateLabelFor, statusLabel, targetsForUser } from './helpers';
+import { ROLE_LABELS, countProjectAttention, countTicketsByProject, isTerminalFor, stateLabelFor, statusLabel, targetsForUser } from './helpers';
 import { ADMIN_TABS, adminTabForView, adminViewForTab, isAdminView } from './adminNav';
 import type { AdminTab } from './adminNav';
 import { gateView, hashToView, viewToHash } from './viewHash';
@@ -67,6 +67,9 @@ export default function App() {
   const [histories, setHistories] = useState<Record<string, Transition[]>>({});
   const [ganttLoading, setGanttLoading] = useState(false);
   const [tickets, setTickets] = useState<QueueEntry[]>([]);
+  // The role-filtered claimable queue (/api/queue): the Claimable tab
+  // shows these rows, and its tab count is their length.
+  const [queueTickets, setQueueTickets] = useState<QueueEntry[]>([]);
   const [dashboardTickets, setDashboardTickets] = useState<Ticket[]>([]);
   const [dashboardLoading, setDashboardLoading] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(() => hashToView(window.location.hash)?.selectedId ?? null);
@@ -186,18 +189,29 @@ export default function App() {
     }
   }, []);
 
-  const loadTickets = useCallback(async (tabKey: string) => {
-    const found = QUEUE_TABS.find((t) => t.key === tabKey);
-    // The project filter applies to every tab, including the claimable
-    // queue, so one project view is consistent across the page.
+  const loadTickets = useCallback(async () => {
+    // The list derives its tabs and counts client-side (ticket 7da410a5),
+    // so it loads the whole project once — all tickets for the counts
+    // and the status tabs, plus the role-filtered queue for the
+    // Claimable tab — and tab switches need no round trip. The project
+    // filter applies to both, so one project view is consistent across
+    // the page.
     const projectId = projectFilter === 'all' ? undefined : projectFilter;
     try {
-      if (tabKey === 'claimable') {
-        setTickets(await api.getQueue(projectId));
-        return;
-      }
-      const rows = await api.listTickets(found && found.status ? found.status : undefined, projectId);
+      const [rows, queue] = await Promise.all([
+        api.listTickets(undefined, projectId),
+        api.getQueue(projectId),
+      ]);
       setTickets(rows);
+      setQueueTickets(queue);
+      // Public directory for assignee names on the list (ticket
+      // 7da410a5): loaded once, fire-and-forget — the list falls back
+      // to short ids until it arrives, and a failure here never blocks
+      // the tickets.
+      if (!detailUsersLoadedRef.current) {
+        detailUsersLoadedRef.current = true;
+        api.listUsers().then(setDetailUsers).catch(() => {});
+      }
     } catch (err) {
       if ((err as { status?: number }).status === 401) return; // handled by onUnauthorized
       setError(err instanceof Error ? err.message : 'Failed to load tickets.');
@@ -413,10 +427,12 @@ export default function App() {
     loadWorkflows();
   }, [authState, mainView, loadWorkflows]);
 
+  // Entering the Tickets list view loads it (all tickets + queue);
+  // tab switches are client-side after that, so they need no reload.
   useEffect(() => {
-    if (authState !== 'app') return;
-    loadTickets(tab);
-  }, [tab, authState, loadTickets]);
+    if (authState !== 'app' || mainView !== 'tickets-list') return;
+    loadTickets();
+  }, [mainView, authState, loadTickets]);
 
   useEffect(() => {
     if (authState !== 'app') return;
@@ -521,7 +537,7 @@ export default function App() {
       // to the All tickets list.
       setTicketsReturnView('tickets-list');
       setMainView('detail');
-      await loadTickets(tab);
+      await loadTickets();
       await loadProjects();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create ticket.');
@@ -578,7 +594,7 @@ export default function App() {
         : 'Uncategorized';
       setNotice(`Ticket moved to ${name}.`);
       await loadDetail(detail.id);
-      await loadTickets(tab);
+      await loadTickets();
       await loadProjects();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to assign project.');
@@ -606,7 +622,7 @@ export default function App() {
       });
       setNotice(`Transition applied: ${stateLabelFor(detailWorkflow, res.transition.from_status || '')} → ${stateLabelFor(detailWorkflow, res.transition.to_status)}`);
       await loadDetail(detail.id);
-      await loadTickets(tab);
+      await loadTickets();
     } catch (err) {
       // Rejections (wrong role, illegal transition, self-work, missing
       // reason) come back as errors and are shown here verbatim.
@@ -639,7 +655,7 @@ export default function App() {
       loadProjects();
     } else if (mainView === 'tickets-gantt') loadGantt();
     else if (mainView === 'documents') setDocumentsRefreshKey((k) => k + 1);
-    else loadTickets(tab);
+    else loadTickets();
     if (selectedId) loadDetail(selectedId);
   }
 
@@ -1174,6 +1190,8 @@ export default function App() {
           tab={tab}
           onTabChange={setTab}
           tickets={tickets}
+          queueTickets={queueTickets}
+          users={detailUsers}
           workflowById={workflowById}
           selectedId={selectedId}
           onSelectTicket={openTicket}

@@ -508,12 +508,84 @@ async function listClaimable(db, actorRoles, projectFilter, assignedProjectId) {
   return out;
 }
 
+// Next step for the Tickets list (design doc ch. 27, ticket 7da410a5):
+// the transition the caller can take next from the ticket's current
+// state, attached to every row the list endpoint returns so the list
+// can show its Next-step column on all ten tabs, not just Claimable.
+// The claimable queue already carries this as next_transition
+// (listClaimable); this is the same field for every other row, and the
+// two agree on claimable rows (a test asserts it). Candidates are the
+// outgoing transitions from the current state, in definition order,
+// preferred pickup, then forward, then clarify, then return, then
+// backward; cancel never counts (it is implicit, not a step). The
+// effective role is the workflow's role map for the state (ch. 14
+// override), falling back to the transition row's own role — the same
+// authority listClaimable consults. A row with no transition the caller
+// can take (a terminal ticket, or another role's state) gets
+// next_transition null and renders as —.
+const NEXT_STEP_KIND_ORDER = ['pickup', 'forward', 'clarify', 'return', 'backward'];
+
+async function attachNextTransitions(db, rows, actorRoles) {
+  const roles = Array.isArray(actorRoles) ? actorRoles : [];
+  // One role-map lookup per project and one definition lookup per
+  // workflow, shared across the rows — the same caching listClaimable
+  // uses, because the list can hold dozens of tickets.
+  const roleMaps = new Map();
+  async function roleMapFor(projectId) {
+    const key = projectId || '__none__';
+    if (!roleMaps.has(key)) {
+      roleMaps.set(key, await workflows.getRoleMap(db, projectId || null));
+    }
+    return roleMaps.get(key);
+  }
+  const definitions = new Map();
+  async function definitionFor(ticket) {
+    const key = ticket.workflow_id || '__builtin__';
+    if (!definitions.has(key)) {
+      const resolved = await workflows.definitionForTicket(db, ticket);
+      definitions.set(key, resolved.missing ? null : resolved.definition);
+    }
+    return definitions.get(key);
+  }
+  const out = [];
+  for (const t of rows) {
+    const definition = await definitionFor(t);
+    if (!definition) {
+      out.push({ ...t, next_transition: null });
+      continue;
+    }
+    const roleMap = t.workflow_id ? definition.roles || null : await roleMapFor(t.project_id);
+    const candidates = (definition.transitions || [])
+      .filter((r) => r.from === t.status && NEXT_STEP_KIND_ORDER.includes(r.kind))
+      // Array.prototype.sort is stable: definition order within a kind
+      // is kept, and the preferred kind comes first.
+      .sort((a, b) => NEXT_STEP_KIND_ORDER.indexOf(a.kind) - NEXT_STEP_KIND_ORDER.indexOf(b.kind));
+    let next = null;
+    for (const rule of candidates) {
+      const entry = roleMap ? roleMap[t.status] : null;
+      const effectiveRole = (entry && entry.role) || rule.role;
+      if (!effectiveRole || !roles.includes(effectiveRole)) continue;
+      next = {
+        to: rule.to,
+        role: effectiveRole,
+        kind: rule.kind,
+        requires_reason: rule.requiresReason,
+        requires_handoff: rule.requiresHandoff,
+      };
+      break;
+    }
+    out.push({ ...t, next_transition: next });
+  }
+  return out;
+}
+
 module.exports = {
   SOURCES,
   getTicket,
   listTickets,
   listTransitions,
   listClaimable,
+  attachNextTransitions,
   getTicketWithHistory,
   getTicketDetail,
   getTicketTransitions,
