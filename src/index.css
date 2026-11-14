@@ -498,6 +498,94 @@ button.link {
   .dashboard-grid { grid-template-columns: 1fr; }
 }
 
+/* Projects: the list is the page (ticket a4fdfbd1, UI&UX prototype
+   "Projects redesign — recommendations"). Project cards with labelled
+   counts and an amber waiting/stalled signal; creation behind a
+   "+ New project" action; the one-time keys in their own green
+   success panel, the highest-stakes content on the page. */
+.projects-toolbar { display: flex; gap: 8px; align-items: center; margin: 10px 0; flex-wrap: wrap; }
+.projects-toolbar input[type="search"] { width: 200px; }
+
+.projects-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 10px;
+}
+.project-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  text-align: left;
+  background: #fff;
+  border: 1px solid #d9e1e8;
+  border-radius: 8px;
+  padding: 12px 14px;
+  cursor: pointer;
+  font-size: 14px;
+  font-family: inherit;
+  color: #1a2332;
+}
+.project-card:hover { border-color: #0f2a3d; }
+.project-card.selected { border-color: #0f2a3d; }
+.project-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+.project-card-head h3 { margin: 0; font-size: 15px; color: #0f2a3d; }
+.project-desc { font-size: 12px; color: #5a6b7c; min-height: 15px; }
+.project-counts { display: flex; gap: 12px; font-size: 12px; flex-wrap: wrap; }
+.project-counts b { font-size: 14px; }
+.project-counts .wait b { color: #b45309; }
+
+/* Type as two compact cards instead of paragraph radio labels. */
+.projects-typecards { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 8px 0; }
+.typecard {
+  border: 1px solid #c4d0da;
+  border-radius: 6px;
+  padding: 10px 12px;
+  cursor: pointer;
+  font-size: 13px;
+  background: #fff;
+  text-align: left;
+  font-family: inherit;
+  color: #1a2332;
+}
+.typecard.on { border-color: #0f2a3d; background: #f6f9fb; }
+.typecard b { display: block; margin-bottom: 2px; }
+.typecard span { color: #5a6b7c; font-size: 12px; }
+
+/* External role-agent preview as username chips, not a table. */
+.chiprow { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
+.chip {
+  border: 1px solid #c4d0da;
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: 12px;
+  background: #fbfcfd;
+}
+
+/* The one-time keys success panel: green border, the only thing on
+   screen until the PM closes it. */
+.projects-success {
+  border: 1px solid #16a34a;
+  border-left: 4px solid #16a34a;
+  background: #f0fdf4;
+  border-radius: 6px;
+  padding: 12px 14px;
+  margin: 10px 0;
+}
+.projects-success h3 { margin: 0 0 4px; font-size: 15px; }
+.projects-keyrow { display: flex; gap: 8px; align-items: center; margin: 6px 0; font-size: 13px; flex-wrap: wrap; }
+.projects-keyrow code { background: #fff; border: 1px solid #d9e1e8; border-radius: 4px; padding: 3px 8px; font-size: 12px; }
+
+/* Projects at ≤720px: cards go single column, type cards stack. */
+@media (max-width: 720px) {
+  .projects-grid { grid-template-columns: 1fr; }
+  .projects-typecards { grid-template-columns: 1fr; }
+}
+
 /* Gantt view: shared time axis, one bar per ticket. */
 
 .gantt-grid { display: grid; grid-template-columns: 240px 1fr; column-gap: 12px; }

@@ -706,3 +706,59 @@ export function slugStateCode(label: string): string {
     .replace(/[^a-z0-9]+/g, '_')
     .replace(/^_+|_+$/g, '');
 }
+
+// Projects (ticket a4fdfbd1, UI&UX prototype "Projects redesign —
+// recommendations"): the list is the page — project cards with
+// labelled counts and an amber waiting/stalled signal; creation behind
+// a "+ New project" action; the one-time keys in their own success
+// panel. These pure helpers are the single source for that layout;
+// ProjectsPanel renders from them and the server tests exercise them
+// directly.
+
+export interface ProjectAttention {
+  waiting: number;
+  stalled: number;
+}
+
+// Per-project attention rollup, keyed by project id: waiting is the
+// pending bucket (requirement, pending_*, needs_* — tickets waiting on
+// someone), stalled is the Gantt stall rule (isStalledTicket, 36h in a
+// working state). Computed client-side from GET /api/tickets, the same
+// unfiltered load the Dashboard uses — no new endpoint. Tickets with
+// no project have no card, so they are skipped.
+export function countProjectAttention(
+  tickets: Ticket[],
+  workflowById?: Map<string, Workflow>,
+  now: number = Date.now()
+): Record<string, ProjectAttention> {
+  const out: Record<string, ProjectAttention> = {};
+  for (const t of tickets) {
+    if (!t.project_id) continue;
+    const entry = out[t.project_id] || (out[t.project_id] = { waiting: 0, stalled: 0 });
+    const workflow = workflowById && t.workflow_id ? workflowById.get(t.workflow_id) : undefined;
+    if (statusBucketFor(workflow, t.status) === 'pending') entry.waiting += 1;
+    if (isStalledTicket(t, workflow, now)) entry.stalled += 1;
+  }
+  return out;
+}
+
+// Name-substring filter, case-insensitive; an empty query keeps all.
+export function filterProjectsByName(projects: Project[], query: string): Project[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return [...projects];
+  return projects.filter((p) => p.name.toLowerCase().includes(q));
+}
+
+// Project slug preview: the same rule the server uses for role agent
+// usernames (<project-slug>-<role>).
+export function slugifyProjectName(name: string): string {
+  const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  return slug || 'project';
+}
+
+// Role-agent preview usernames for an external project, in flow order:
+// "<slug>-<role>" per role. Rendering (chips) is the panel's job.
+export function previewAgentUsernames(projectName: string, roles: string[]): string[] {
+  const slug = slugifyProjectName(projectName.trim() || 'project');
+  return roles.map((r) => `${slug}-${r}`);
+}
