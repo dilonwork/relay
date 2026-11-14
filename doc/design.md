@@ -1485,3 +1485,55 @@ No schema change: documents and categories already carry everything the redesign
 ### Tests
 
 - `server/documentsRedesign.test.js` (15 tests): the four helpers (counts, grouping order, empty categories dropped, unknown-category trailing group, title search, chip-plus-search combination) and source assertions — chips replace the select, collapsible headers with the Prototype default, no Category column and no intro paragraph, the toolbar with its count, the action hierarchy, the create form as a panel with no separate card, the review badge next to the title, the App wiring, and the CSS.
+
+## 31. Workflow Editor Mobile Redesign: Cards Below 700 px, a Sticky Save Bar
+
+Ticket 1ddcd4ed implements the UI&UX recommendations "Workflow editor mobile redesign" (document 5d448f9e, built on the delivered iPhone 15 prototype 308024c4). It is the first mobile-specific redesign — outside the 12-page batch — and the pattern it establishes (one component, two layouts) is the one to reuse if other pages report the same breakage.
+
+The goal: at 390 px (iPhone 15) every workflow-editor field is fully visible with its text uncut; the editor stays usable on mobile; above 700 px the desktop layout is unchanged.
+
+### What already existed
+
+Two pieces of the scope were already delivered and are not rebuilt here. The hamburger drawer (ticket 7666978: off-canvas sidebar, overlay scrim, drawer close button, 44 px nav buttons) already works on every page including Admin / Workflows, and the flow strip already wraps with the "+N more" truncation from the Workflows redesign (ch. 28). This ticket only moves the hamburger button into the title bar (below) and verifies the two P2 panels.
+
+### Cards, not a second editor
+
+The editor tables become cards below 700 px by presentation only. The markup stays one table per section — same form state, same handlers — and CSS reflows it: the header row hides, each row becomes a bordered card headed by its `data-heading` (state number + name, "From → To", the state name), and each cell becomes a labelled row via `data-label`. The toggle cells (Start, Terminal, Reason required, Handoff required) wrap their input in a `.mobile-toggle` label whose text is the 44 px tap target; the text is hidden on desktop, where the column headers already name them. The Roles table's State cell is hidden on mobile — it would only repeat the card heading. The Code input stays monospace. No `matchMedia` or `innerWidth` branching anywhere: the layout is CSS-driven, so the desktop rendering is the same markup with no mobile rules applied.
+
+Two deliberate deviations from the prototype, both documented here. First, the prototype shows ↑↓ icon buttons for reordering a state; the real editor's position control is a "Position" select (move-to-position), and changing the interaction was out of scope — the card keeps the select, full-width and 44 px. Second, the prototype's tab row has four tabs (no Basics); the real section nav keeps all five sections, Basics included, because the nav is the same jump list as on desktop.
+
+### Breakpoint: 700 px for the editor, 720 px for the shell
+
+The recommendations specify 700 px. The app shell (drawer, 44 px buttons, ticket cards) switches at 720 px (ticket 7666978), and that stays. The editor rules use 700 px, so above 700 px the editor stays desktop tables even in the 700–720 px band where the drawer is already active — there the tables keep the existing horizontal-scroll fallback inside their card. The new rules live in a single `@media (max-width: 700px)` block at the end of `index.css`; the `.editor-table` selectors appear nowhere outside it, which the tests pin.
+
+### Tab row, strip order, sticky bar
+
+The section nav becomes a horizontally scrollable tab row (no wrap, pill buttons, the red-dot problem markers inline) and the flow strip stays above it: the nav and the preview share an `.editor-head` wrapper that is `display: contents` on desktop and a flex column on mobile with the preview ordered first. Save/Cancel become a sticky bottom bar — Save grows to the remaining width, Cancel beside it, the bar flush with the editor card's bottom edge — via an `.editor-actions` wrapper that is `display: contents` on desktop, so the buttons render inline exactly as before. The form leaves 72 px below the bar so the last rows can scroll clear of it. Editor inputs and selects are full-width, 44 px, 16 px text (16 px stops iOS Safari zooming into a focused input).
+
+### Hamburger into the title bar
+
+The title bar keeps the 337e6a55 rule (path + page title + actions) and gains the hamburger: TitleBar takes an optional `onMenuClick`, rendered as a 44 px icon-only button at the left of the path, hidden above 720 px. App passes `() => setMobileNavOpen(true)` and the standalone menu button above the title bar is gone (its CSS with it). The drawer itself is unchanged.
+
+### Remount check
+
+The ticket's handoff warns about the title-bar counter remount defect (b56b1145 review return): switching pages back auto-popped a blank create form. The consumed-request wiring is untouched by this change — the panel still consumes the request on open and App still resets the counter to 0 — and the tests assert both ends. The mobile title bar adds no counter and no effect, so it cannot reintroduce the defect.
+
+### P2 verification (no code change)
+
+The one-time-key panel and the onboarding panel were verified at 390 px and needed nothing: the shown-once key is `.keypanel code` with `word-break: break-all` (a long key wraps instead of overflowing), the keys table carries no fixed inline width and scrolls inside its card under the existing table rule, the onboarding masked key is short inline code, and the rendered onboarding document's `pre` and `table` already scroll inside the card. The tests pin those rules so a later change cannot silently reintroduce an overflow.
+
+### No migration
+
+No schema change and no API change: everything the redesign needs is already in the panel. No migration was added.
+
+### Frontend
+
+- `src/WorkflowsPanel.tsx`: `editor-card` on the editor card, `editor-head` around the section nav + flow preview, `editor-table` on the four tables (Quick create, States, Transitions, Roles) with `data-heading` per row and `data-label` per field cell, `.mobile-toggle` labels on the four toggle cells, `editor-actions` around Save/Cancel. No handler or state change.
+- `src/TitleBar.tsx`: optional `onMenuClick` prop, hamburger button before the crumbs.
+- `src/App.tsx`: passes `onMenuClick` to TitleBar; the standalone menu button is removed.
+- `src/index.css`: `.titlebar-menu` (hidden on desktop, 44 px below 720 px); the 700 px block — editor cards, tab-row pills, sticky bar, 44 px / 16 px controls, toggle labels; `.editor-head` / `.editor-actions` / `.mobile-toggle` base rules (`display: contents` / `display: inline`, label text hidden on desktop).
+
+### Tests
+
+- `server/workflowMobileRedesign.test.js` (16 tests): the four editor tables and their headings/labels, the toggle labels, the editor-actions and editor-head wrappers, no JS breakpoint branching, the 700 px card rules (header hidden, rows as cards, heading/label `::before`, Roles State cell hidden) and that no `.editor-table` rule leaks onto desktop, 44 px / 16 px controls with monospace Code, toggle text hidden on desktop, the scrollable tab row with the strip above it, the sticky bar with room below it, the hamburger in the title bar with no standalone menu button left, the create-request consume wiring, and the P2 overflow rules for the key and onboarding panels.
+- `server/titleBar.test.js` (+1 test, now 7): the hamburger prop and button in TitleBar.

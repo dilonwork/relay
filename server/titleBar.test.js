@@ -73,6 +73,13 @@ async function main() {
     assert.match(src, /label: detail \? detail\.title : 'Ticket'/, 'the detail path must read Tickets / <ticket title>');
   });
 
+  await ok('the hamburger lives in the title bar (ticket 1ddcd4ed)', async () => {
+    const src = readSrc('TitleBar.tsx');
+    assert.match(src, /onMenuClick\?: \(\) => void;/, 'TitleBar must accept an optional onMenuClick handler');
+    assert.match(src, /className="titlebar-menu"/, 'the hamburger must render inside the title bar');
+    assert.match(src, /aria-label="Open navigation"/, 'the hamburger must be labelled for navigation');
+  });
+
   console.log(`\n${passed} title bar tests passed.`);
 }
 

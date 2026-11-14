@@ -1053,21 +1053,17 @@ export default function App() {
       />
 
       <div className="container content">
-      <button
-        className="menu-button"
-        onClick={() => setMobileNavOpen(true)}
-        aria-label="Open navigation"
-      >
-        <span aria-hidden="true">☰</span> Menu
-      </button>
       {/* Title bar (ticket 337e6a55): one slim bar per page carrying the
           path, the page title (the last path segment) and the actions.
           It replaces the old content header (H1 + tagline + Refresh)
-          and the per-panel H2s; the sidebar keeps the single "Relay". */}
+          and the per-panel H2s; the sidebar keeps the single "Relay".
+          The hamburger lives in the title bar (ticket 1ddcd4ed): it
+          opens the sidebar drawer below 720 px. */}
       <TitleBar
         segments={titleBarSegments()}
         title={mainView === 'detail' && detail ? detail.title : undefined}
         badge={detailBadge}
+        onMenuClick={() => setMobileNavOpen(true)}
         actions={
           mainView === 'dashboard' ? (
             <button type="button" className="primary" onClick={() => setMainView('new')}>
