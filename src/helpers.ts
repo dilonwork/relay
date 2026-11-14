@@ -490,6 +490,165 @@ export function countTicketsByProject(
   return out;
 }
 
+// Admin - Workflows redesign (ticket b56b1145, UI&UX prototype "Admin -
+// Workflows redesign — recommendations"): the list shows each workflow
+// as a flow, not a count; the editor gets a section map and reports
+// every validation problem grouped by section. These pure helpers are
+// the single source for that layout; WorkflowsPanel renders from them
+// and the server tests exercise them directly.
+
+export type WorkflowFormSection = 'basics' | 'start' | 'states' | 'transitions' | 'roles';
+export const WORKFLOW_FORM_SECTIONS: { key: WorkflowFormSection; label: string }[] = [
+  { key: 'basics', label: 'Basics' },
+  { key: 'start', label: 'Start from' },
+  { key: 'states', label: 'States' },
+  { key: 'transitions', label: 'Transitions' },
+  { key: 'roles', label: 'Roles' },
+];
+
+export interface WorkflowFormProblem {
+  section: WorkflowFormSection;
+  message: string;
+}
+
+// A workflow's flow as a chip strip: the state labels in flow order,
+// terminal states flagged, truncated past maxShown with the remainder
+// counted ("+N more"). The editor preview uses the full length.
+export function workflowFlowStrip(
+  states: Workflow['states'],
+  maxShown = 5
+): { chips: { label: string; terminal: boolean }[]; more: number } {
+  const ordered = [...(states || [])].sort((a, b) => a.sort_order - b.sort_order);
+  const chips = ordered.slice(0, maxShown).map((s) => ({
+    label: s.label || s.code || '(unnamed)',
+    terminal: !!s.is_terminal,
+  }));
+  return { chips, more: Math.max(0, ordered.length - chips.length) };
+}
+
+// Ticket-usage count for one workflow, from the already-loaded ticket
+// list (no API change): how many tickets follow this workflow.
+export function countTicketsByWorkflow(tickets: Ticket[], workflowId: string | null): number {
+  return tickets.filter((t) => t.workflow_id === workflowId).length;
+}
+
+// The projects a workflow is active for, from the per-project active
+// map (project id -> its active workflow or null), in project order.
+export function activeProjectsForWorkflow(
+  activeByProject: Record<string, Workflow | null>,
+  workflowId: string | null,
+  projects: Pick<Project, 'id' | 'name'>[]
+): string[] {
+  if (!workflowId) return [];
+  return projects
+    .filter((p) => activeByProject[p.id]?.id === workflowId)
+    .map((p) => p.name);
+}
+
+// Client-side validation mirroring the server rules (design doc ch. 15);
+// the server re-validates and its message wins on save. Unlike the old
+// first-problem-only check, this collects EVERY problem, grouped by the
+// editor section where it is fixed, so the form can report them all at
+// once. The Start from section has no validation rules of its own.
+const WORKFLOW_STATE_CODE_RE = /^[a-z][a-z0-9_]*$/;
+export function validateWorkflowForm(form: {
+  name: string;
+  states: Workflow['states'];
+  transitions: Workflow['transitions'];
+  roles: Workflow['roles'];
+}): WorkflowFormProblem[] {
+  const problems: WorkflowFormProblem[] = [];
+  if (!form.name.trim()) problems.push({ section: 'basics', message: 'Name is required.' });
+  const states = form.states || [];
+  if (states.length === 0) {
+    problems.push({ section: 'states', message: 'Add at least one state.' });
+    return problems;
+  }
+  const codes = new Set<string>();
+  for (const s of states) {
+    if (!s.label.trim()) {
+      problems.push({ section: 'states', message: 'Every state needs a label.' });
+    }
+    if (!s.code || !WORKFLOW_STATE_CODE_RE.test(s.code)) {
+      problems.push({
+        section: 'states',
+        message: `State "${s.label || '(unnamed)'}" needs a code: lowercase snake_case, e.g. user_requirement.`,
+      });
+    } else if (codes.has(s.code)) {
+      problems.push({ section: 'states', message: `Duplicate state code: ${s.code}.` });
+    } else {
+      codes.add(s.code);
+    }
+  }
+  if (states.filter((s) => s.is_start).length !== 1) {
+    problems.push({ section: 'states', message: 'Exactly one state must be the start state.' });
+  }
+  if (!states.some((s) => s.is_terminal)) {
+    problems.push({ section: 'states', message: 'At least one state must be terminal.' });
+  }
+  for (const s of states) {
+    const entry = form.roles[s.code];
+    if (!entry) {
+      problems.push({ section: 'roles', message: `State ${s.code} has no role entry.` });
+    } else {
+      if (s.is_terminal) {
+        if (entry.role !== null) {
+          problems.push({ section: 'roles', message: `Terminal state ${s.code} must have no role.` });
+        }
+      } else if (!WORKFLOW_ROLES.includes(entry.role || '')) {
+        problems.push({ section: 'roles', message: `State ${s.code} needs a role.` });
+      }
+      if (!entry.responsibilities || !entry.responsibilities.trim()) {
+        problems.push({ section: 'roles', message: `State ${s.code} needs a responsibilities note.` });
+      }
+    }
+  }
+  const seen = new Set<string>();
+  for (const t of form.transitions || []) {
+    if (!codes.has(t.from) || !codes.has(t.to)) {
+      problems.push({ section: 'transitions', message: 'Every transition must use states from the list above.' });
+    }
+    if (t.from === t.to) {
+      problems.push({ section: 'transitions', message: 'A transition must not loop back to the same state.' });
+    }
+    if (!WORKFLOW_KINDS.includes(t.kind)) {
+      problems.push({ section: 'transitions', message: `Unknown transition kind: ${t.kind}.` });
+    }
+    if ((t.kind === 'backward' || t.kind === 'return') && !t.requiresReason) {
+      problems.push({
+        section: 'transitions',
+        message: `A ${t.kind} transition (${t.from} → ${t.to}) must require a reason.`,
+      });
+    }
+    const key = `${t.from}->${t.to}`;
+    if (seen.has(key)) {
+      problems.push({ section: 'transitions', message: `Duplicate transition: ${t.from} → ${t.to}.` });
+    }
+    seen.add(key);
+  }
+  for (const s of states) {
+    if (s.is_terminal) continue;
+    if (!(form.transitions || []).some((t) => t.from === s.code)) {
+      problems.push({
+        section: 'transitions',
+        message: `State ${s.code} is not terminal but has no outgoing transition.`,
+      });
+    }
+  }
+  return problems;
+}
+
+// Move one state to a new position in the States table (0-based target):
+// the reorder control the redesign replaces the one-click-at-a-time
+// up/down buttons with.
+export function moveStateToPosition<T>(states: T[], fromIndex: number, toIndex: number): T[] {
+  const next = [...states];
+  if (fromIndex < 0 || fromIndex >= next.length) return next;
+  const clamped = Math.max(0, Math.min(next.length - 1, toIndex));
+  const [moved] = next.splice(fromIndex, 1);
+  next.splice(clamped, 0, moved);
+  return next;
+}
 // Dashboard (ticket 4c7601fb, UI&UX prototype "Dashboard redesign —
 // recommendations"): the landing page answers "what needs attention?"
 // first with a system-wide summary, then shows one card per project.

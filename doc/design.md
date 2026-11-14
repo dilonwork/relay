@@ -46,6 +46,7 @@ Tickets carry project development work through a pipeline: the PM creates a requ
 24. Projects Redesign: The List Is the Page, Creation Behind an Action
 25. Gantt Redesign: Segmented Bars, One Toolbar, a Summary Line
 26. Prototype Implementation: Stored Link, Badge, Duplicate Block
+28. Admin - Workflows Redesign: The Flow in the List, a Map for the Editor
 29. Admin API Keys Redesign: Overview First, the One-Time Key Guarded
 - Appendix A State Code Reference
 - Appendix B Ticket Lifecycle Example
@@ -1359,6 +1360,37 @@ Several prototypes were already implemented through the old flow (the Dashboard 
 ### Not verified
 
 Frontend browser verification was not possible (no headless browser on the VM); only `tsc` + `vite build` were run. The Tester verifies in the browser after deploy: an implemented prototype shows the Implemented badge in the list and in the expanded view, an in-progress one shows the amber badge and a disabled Implement with the reason, and clicking a badge opens the implementation ticket.
+
+## 28. Admin - Workflows Redesign: The Flow in the List, a Map for the Editor
+
+**Ticket:** b56b1145 — "Implement Prototype: Admin - Workflows redesign — recommendations" (prototype ticket 9e84c5a8, recommendations document a68326d4).
+
+The Admin Workflows page was two pages in one card: the list (a table of names, state counts, and a "Roles per state" summary string) and the editor (five sections) stacked in the same card, so opening the editor pushed the list away. The list never showed the flow — a workflow IS a flow — validation reported one problem at a time on submit only, and applying a template or generating a flow over entered states asked through a browser confirm dialog.
+
+The list now shows the flow. Each workflow row carries a mini flow strip — the state labels as chips joined by →, terminal states green, "+N more" past five — the projects it is active for, and how many tickets use it. Next to the project filter, one line names every project's choice at once ("Relay: Default · WebTracker: AiAgent flow · AiAgent: No workflow chosen"), so checking a project's workflow never needs a filter switch. Edit is a small button, Delete is red, Clear workflow is an amber link with its consequence stated ("New tickets will need an explicit workflow."). Create workflow moved to the title bar as "+ New workflow", the same pattern as the other redesigned pages. The intro is one line: "A workflow is a state machine: states, transitions, and the role for each state. Each project chooses one."
+
+The editor is a separate card below the list, with its own heading ("New workflow" / "Edit — Prototype flow"), so the list stays visible above it. A section navigation (Basics / Start from / States / Transitions / Roles) jumps to each section and marks problem sections with a red dot (green when clean; the dots appear after the first submit). A read-only flow preview sits at the top of the editor — the same chip strip, full length. Validation collects every problem, grouped by the section where it is fixed: a summary box at the top of the editor plus error text under each affected section. The name no longer gates the submit button alone; all rules are checked together. Applying a template or generating a flow over existing states shows an inline amber notice ("This will replace the N states you have entered. [Replace them] [Keep mine]") instead of a browser confirm. The States table's one-click-at-a-time ↑↓ buttons are replaced by a "Move to position" select. Delete keeps its browser confirm — it is destructive, and the server refuses it while any ticket uses the workflow.
+
+Two wiring notes. The usage counts come from the ticket list the app already loads (App passes `tickets` through AdminPanel into the panel as a prop — no API change). The per-project active map is loaded by the panel in parallel (`getActiveWorkflow` per project, failures tolerated as null) alongside the workflow list, so the line and the "Active for" column never need a second round trip. The title-bar Create is a counter prop (`workflowsCreateRequest`, incremented by App's title-bar action, watched by the panel) because the editor state lives in the panel; the panel reports its open state back (`onFormOpenChange`) so App hides the button while the editor is open.
+
+Unchanged on purpose: the workflow model (states, transitions, roles, the role-derivation rule, the rename-repoints rule, the validation rules from ch. 15), the Quick create and template mechanisms, the server as the validation authority. The title bar keeps the single-title rule (5ed48710); it only gains the create action. English-only.
+
+### No migration
+
+No schema change: the panel reads data the app already loads (tickets, workflows, per-project active workflows). No migration was added for this ticket.
+
+### Frontend
+
+- `src/helpers.ts`: the pure workflow helpers — `workflowFlowStrip` (states in flow order, terminal flagged, truncated past five with the remainder counted), `countTicketsByWorkflow` (tickets following one workflow), `activeProjectsForWorkflow` (project names from the per-project active map, in project order), `validateWorkflowForm` (every problem, grouped by section — Basics, States, Transitions, Roles; Start from has no rules), `moveStateToPosition` (reorder with clamping), `WORKFLOW_FORM_SECTIONS` (the navigation model). As with the earlier view helpers, the server tests require this module directly and exercise the exact code the component runs.
+- `src/WorkflowsPanel.tsx`: the list card (one-line intro, per-project active line, table with Flow / Active for / Tickets columns, small Edit button, red Delete, amber Clear workflow with its consequence), the editor as a second card (section navigation with problem dots, full-length flow preview, grouped validation summary + per-section error text, inline replace notice, move-to-position select, submit no longer gated on the name). The old `roleSummary` is gone; the old `validateForm` (first problem only) is replaced by `validateWorkflowForm`. Form-scoped errors live in the editor card (`formError`); load errors stay in the list card.
+- `src/AdminPanel.tsx`: forwards `tickets`, `workflowsCreateRequest`, and `onWorkflowsFormOpenChange` to the Workflows sub-page.
+- `src/App.tsx`: owns the create-request counter and the editor-open flag; the title bar shows "+ New workflow" on the admin-workflows view while the editor is closed.
+- `src/index.css`: `.flow-strip` / `.flow-chip` (`.terminal` green) / `.flow-arrow` / `.flow-more`, `.chip`, `button.link.danger` / `button.link.amber`, `button.primary.small`, `.workflow-active-line`, `.section-nav` / `.section-dot` (`.bad` red, `.ok` green), `.validation-summary`, `.section-error`, `.replace-notice`, `.workflow-preview`.
+
+### Tests
+
+- `server/workflowsRedesign.test.js` (14 items, new file): the flow strip orders by sort order and truncates past five, the terminal state is flagged, the usage count counts by workflow id, the active-for list names the projects in order, a valid form has no problems, a stateless form reports only that, validation collects every problem grouped by section (11 problems across all four sections in the broken fixture), validation catches a missing start / a terminal with a role / a state with no outgoing transition, move-to-position reorders and clamps, the panel renders the strip / active line / section map / summary / replace notice, the template and quick-create confirms are gone while delete keeps its confirm, the submit button is no longer name-gated and the role summary is gone, the title bar owns Create and App forwards the tickets through AdminPanel, and the stylesheet carries the new elements.
+- Frontend browser verification was not possible (no headless browser on the VM); only `tsc` + `vite build` were run. The Tester verifies Admin - Workflows in the browser after deploy (flow strips with terminal green and "+N more", usage counts, per-project active line, Edit button / red Delete / amber Clear workflow with consequence, "+ New workflow" in the title bar, editor as a separate card with the list visible above, section navigation jumping and marking problem sections, grouped validation on submit, inline Replace / Keep mine warning with no browser confirm, move-to-position reorder, title bar unchanged apart from the create action, no duplicate titles).
 
 ## 29. Admin API Keys Redesign: Overview First, the One-Time Key Guarded
 

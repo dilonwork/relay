@@ -794,3 +794,27 @@ button.link {
 .document-markdown code { font-size: 13px; }
 .document-markdown table { display: block; max-width: 100%; overflow-x: auto; }
 .document-markdown blockquote { border-left: 3px solid #cfdbe4; margin: 0 0 10px 0; padding: 4px 12px; color: #5a6b7c; }
+
+/* Admin - Workflows redesign (ticket b56b1145, UI&UX prototype
+   "Admin - Workflows redesign — recommendations"): the list shows each
+   workflow as a flow strip; the editor is its own card with a section
+   map, grouped validation, and an inline replace warning. */
+.flow-strip { display: inline-flex; flex-wrap: wrap; gap: 2px 0; align-items: center; }
+.flow-chip { display: inline-block; padding: 1px 8px; border: 1px solid #cbd5e1; border-radius: 999px; font-size: 12px; white-space: nowrap; }
+.flow-chip.terminal { background: #e2f2e9; border-color: #9fd0ae; color: #1d6b3c; }
+.flow-arrow { color: #5a6b7c; }
+.flow-more { color: #5a6b7c; font-size: 12px; margin-left: 4px; }
+.chip { display: inline-block; padding: 1px 8px; border: 1px solid #cbd5e1; border-radius: 999px; font-size: 12px; color: #334155; background: #f4f7f9; white-space: nowrap; }
+button.link.danger { color: #b91c1c; }
+button.link.amber { color: #b45309; }
+button.primary.small { min-height: 0; padding: 4px 10px; font-size: 13px; }
+.workflow-active-line { margin: 0 0 12px; }
+.section-nav { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-bottom: 12px; }
+.section-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-left: 4px; vertical-align: middle; }
+.section-dot.bad { background: #dc2626; }
+.section-dot.ok { background: #16a34a; }
+.validation-summary { background: #fef2f2; border: 1px solid #fecaca; color: #7f1d1d; border-radius: 6px; padding: 10px 14px; margin-bottom: 16px; }
+.validation-summary ul { margin: 4px 0 8px 20px; }
+.section-error { color: #b91c1c; font-size: 13px; margin: 4px 0 12px; }
+.replace-notice { background: #fef3c7; border: 1px solid #fcd34d; color: #92400e; border-radius: 6px; padding: 10px 14px; margin-bottom: 12px; }
+.workflow-preview { margin-bottom: 12px; }

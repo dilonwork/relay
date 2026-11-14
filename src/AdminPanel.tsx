@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from './api';
-import type { AdminOverview, Project, User, Workflow } from './api';
+import type { AdminOverview, Project, Ticket, User, Workflow } from './api';
 import type { AdminTab } from './adminNav';
 import AdminApiKeys from './AdminApiKeys';
 import AdminOverviewPanel from './AdminOverview';
@@ -16,7 +16,25 @@ import WorkflowsPanel from './WorkflowsPanel';
 // each sub-page owns its own form state and handlers. Only admins
 // ever reach this component (App.tsx gates the Admin nav group and
 // views on the admin role).
-export default function AdminPanel({ tab, onTabChange }: { tab: AdminTab; onTabChange: (tab: AdminTab) => void }) {
+export default function AdminPanel({
+  tab,
+  onTabChange,
+  tickets,
+  workflowsCreateRequest,
+  onWorkflowsFormOpenChange,
+}: {
+  tab: AdminTab;
+  onTabChange: (tab: AdminTab) => void;
+  // The already-loaded ticket list, for the Workflows usage counts
+  // (ticket b56b1145): passed through, no API change.
+  tickets: Ticket[];
+  // Title-bar "+ New workflow" (ticket b56b1145): App increments this
+  // counter; the Workflows sub-page opens a fresh create form per click.
+  workflowsCreateRequest: number;
+  // The Workflows sub-page reports its editor open state so App can
+  // hide the title-bar create action while the editor is open.
+  onWorkflowsFormOpenChange: (open: boolean) => void;
+}) {
   const [overview, setOverview] = useState<AdminOverview | null>(null);
   const [users, setUsers] = useState<User[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -76,7 +94,12 @@ export default function AdminPanel({ tab, onTabChange }: { tab: AdminTab; onTabC
       ) : tab === 'onboarding' ? (
         <OnboardingPanel users={users} projects={projects} />
       ) : tab === 'workflows' ? (
-        <WorkflowsPanel projects={projects} />
+        <WorkflowsPanel
+          projects={projects}
+          tickets={tickets}
+          createRequest={workflowsCreateRequest}
+          onFormOpenChange={onWorkflowsFormOpenChange}
+        />
       ) : (
         <AdminApiKeys
           users={users}
