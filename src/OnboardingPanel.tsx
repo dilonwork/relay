@@ -132,7 +132,6 @@ export default function OnboardingPanel({ users, projects }: OnboardingPanelProp
 
   return (
     <div className="card">
-      <h2>Onboarding package — external project</h2>
       <p className="muted">
         The complete package to hand out to an external role agent: its token, a live onboarding
         document, the project prompt bundle (the whole project context — purpose, workflow, roles,
@@ -178,7 +177,7 @@ export default function OnboardingPanel({ users, projects }: OnboardingPanelProp
           {pkg && (
             <>
               <div style={{ marginTop: 12, borderTop: '1px solid #e2e8ee', paddingTop: 12 }}>
-                <h2>1 · API key</h2>
+                <h3 className="section">1 · API key</h3>
                 {pkg.key ? (
                   <>
                     <p>
@@ -198,7 +197,7 @@ export default function OnboardingPanel({ users, projects }: OnboardingPanelProp
                 )}
               </div>
               <div style={{ marginTop: 12, borderTop: '1px solid #e2e8ee', paddingTop: 12 }}>
-                <h2>2 · Onboarding document (generated live)</h2>
+                <h3 className="section">2 · Onboarding document (generated live)</h3>
                 <p className="muted">
                   Generated {formatTime(pkg.document.generated_at)} from the live workflow and role
                   definitions.{' '}
@@ -212,7 +211,7 @@ export default function OnboardingPanel({ users, projects }: OnboardingPanelProp
                 />
               </div>
               <div style={{ marginTop: 12, borderTop: '1px solid #e2e8ee', paddingTop: 12 }}>
-                <h2>3 · Project prompt bundle (shareable)</h2>
+                <h3 className="section">3 · Project prompt bundle (shareable)</h3>
                 <p className="muted">
                   Generated {formatTime(pkg.prompt_bundle.generated_at)} from the live project, workflow
                   and role definitions. One document with the whole project context — hand this to the
@@ -227,7 +226,7 @@ export default function OnboardingPanel({ users, projects }: OnboardingPanelProp
                 />
               </div>
               <div style={{ marginTop: 12, borderTop: '1px solid #e2e8ee', paddingTop: 12 }}>
-                <h2>4 · Open the chat room</h2>
+                <h3 className="section">4 · Open the chat room</h3>
                 <p>
                   Open the <b>{pkg.chat_room}</b> chat room for {pkg.project.name} and introduce the agent.
                 </p>

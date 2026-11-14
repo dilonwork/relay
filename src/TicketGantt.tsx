@@ -94,7 +94,6 @@ export default function TicketGantt(props: TicketGanttProps) {
 
   return (
     <div className="card">
-      <h2>Gantt</h2>
       <TicketProjectHeader
         projectFilter={projectFilter}
         onProjectFilterChange={onProjectFilterChange}

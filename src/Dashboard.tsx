@@ -18,7 +18,6 @@ export default function Dashboard(props: DashboardProps) {
 
   return (
     <div className="card">
-      <h2>Dashboard</h2>
       {loading && projects.length === 0 && !uncategorized ? (
         <p className="muted">Loading projects…</p>
       ) : projects.length === 0 && !uncategorized ? (

@@ -14,6 +14,8 @@ import ProjectsPanel from './ProjectsPanel';
 import TicketDetail from './TicketDetail';
 import TicketGantt from './TicketGantt';
 import TicketList from './TicketList';
+import TitleBar from './TitleBar';
+import type { TitleBarSegment } from './TitleBar';
 
 // Top-level views: one module on screen at a time. 'detail' is the
 // ticket detail opened from a Tickets sub-page; it is not a nav item —
@@ -584,6 +586,16 @@ export default function App() {
     setMainView(ticketsReturnView);
   }
 
+  // Refresh the current view (the title bar's Refresh action): the
+  // per-view reload, unchanged from the old content header.
+  function handleRefresh() {
+    if (mainView === 'dashboard') loadDashboard();
+    else if (mainView === 'tickets-gantt') loadGantt();
+    else if (mainView === 'documents') setDocumentsRefreshKey((k) => k + 1);
+    else loadTickets(tab);
+    if (selectedId) loadDetail(selectedId);
+  }
+
   // Clicking a project in the Projects view filters the ticket list to
   // it and switches to the Tickets list view, so the user sees its tickets.
   function selectProject(id: string) {
@@ -727,6 +739,52 @@ export default function App() {
     mainView === 'tickets-list' || mainView === 'tickets-gantt' || mainView === 'detail';
   // The Admin nav group stays active on any Admin sub-page.
   const adminActive = isAdminView(mainView);
+
+  // The title bar path for the current view (ticket 337e6a55): the path
+  // IS the page title — the last segment is the current page. Mirrors
+  // the view rendering below, so the bar and the panel agree.
+  function titleBarSegments(): TitleBarSegment[] {
+    if (mainView === 'dashboard') return [{ label: 'Dashboard' }];
+    if (adminActive && isAdmin) {
+      const tab = ADMIN_TABS.find((t) => t.view === mainView);
+      return [
+        { label: 'Admin', onNavigate: () => setMainView('admin-overview') },
+        { label: tab ? tab.label : 'Admin' },
+      ];
+    }
+    if (mainView === 'documents') return [{ label: 'Documents' }];
+    if (mainView === 'projects' && canManageProjects) return [{ label: 'Projects' }];
+    if (mainView === 'new') {
+      return [
+        { label: 'Tickets', onNavigate: () => setMainView('tickets-list') },
+        { label: 'New ticket' },
+      ];
+    }
+    if (mainView === 'detail') {
+      return [
+        { label: 'Tickets', onNavigate: backToTickets },
+        { label: detail ? detail.title : 'Ticket' },
+      ];
+    }
+    if (mainView === 'tickets-gantt') {
+      return [
+        { label: 'Tickets', onNavigate: () => setMainView('tickets-list') },
+        { label: 'Gantt' },
+      ];
+    }
+    return [
+      { label: 'Tickets', onNavigate: () => setMainView('tickets-list') },
+      { label: 'All tickets' },
+    ];
+  }
+
+  // The ticket status badge lives in the title bar on the detail page
+  // (ticket 337e6a55), next to the actions, so the state is visible
+  // without scrolling; it no longer sits in the detail card.
+  const detailBadge =
+    mainView === 'detail' && detail ? (
+      <span className={`badge ${detail.status}`}>{stateLabelFor(detailWorkflow, detail.status)}</span>
+    ) : undefined;
   const canManageProjects = isPm || isAdmin;
   // The project currently in view: a specific project (single-project
   // view), 'none' for uncategorized, or undefined for all projects.
@@ -928,29 +986,16 @@ export default function App() {
       >
         <span aria-hidden="true">☰</span> Menu
       </button>
-      {/* The page header brands the app; on the Gantt view the brand is
-          redundant (the sidebar already says Relay), so only the Refresh
-          control stays there. Other views keep the full header. */}
-      <header>
-        {mainView !== 'tickets-gantt' && (
-          <div>
-            <h1>Relay</h1>
-            <p>Multi-agent ticket system — one pipeline, every handoff recorded.</p>
-          </div>
-        )}
-        <button
-          className="link"
-          onClick={() => {
-            if (mainView === 'dashboard') loadDashboard();
-            else if (mainView === 'tickets-gantt') loadGantt();
-            else if (mainView === 'documents') setDocumentsRefreshKey((k) => k + 1);
-            else loadTickets(tab);
-            if (selectedId) loadDetail(selectedId);
-          }}
-        >
-          Refresh
-        </button>
-      </header>
+      {/* Title bar (ticket 337e6a55): one slim bar per page carrying the
+          path, the page title (the last path segment) and the actions.
+          It replaces the old content header (H1 + tagline + Refresh)
+          and the per-panel H2s; the sidebar keeps the single "Relay". */}
+      <TitleBar
+        segments={titleBarSegments()}
+        title={mainView === 'detail' && detail ? detail.title : undefined}
+        badge={detailBadge}
+        onRefresh={handleRefresh}
+      />
 
       {error && <div className="banner error">{error}</div>}
       {notice && <div className="banner notice">{notice}</div>}
@@ -1039,7 +1084,6 @@ export default function App() {
           onArtifactsTextChange={setArtifactsText}
           onAssignProject={handleAssignProject}
           onTransition={handleTransition}
-          onBack={backToTickets}
           projectName={projectName}
         />
       ) : mainView === 'tickets-gantt' ? (

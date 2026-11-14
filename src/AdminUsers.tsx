@@ -283,7 +283,6 @@ export default function AdminUsers({
   return (
     <>
       <div className="card">
-        <h2>Users</h2>
         {adminError && <div className="banner error">{adminError}</div>}
         {adminNotice && <div className="banner notice">{adminNotice}</div>}
         <p className="muted">
@@ -408,7 +407,7 @@ export default function AdminUsers({
           const rows = responsibilitiesFor(u);
           return (
             <div style={{ marginTop: 12, borderTop: '1px solid #e2e8ee', paddingTop: 12 }}>
-              <h2>Workflow responsibilities — {u.display_name || u.username}</h2>
+              <h3 className="section">Workflow responsibilities — {u.display_name || u.username}</h3>
               <p className="muted">
                 Derived from the user&apos;s roles against each workflow&apos;s own
                 role map. The same person may own different states in
@@ -438,7 +437,7 @@ export default function AdminUsers({
             onSubmit={(e) => handleSaveEdit(e, editingId)}
             style={{ marginTop: 12, borderTop: '1px solid #e2e8ee', paddingTop: 12 }}
           >
-            <h2>Edit user</h2>
+            <h3 className="section">Edit user</h3>
             <label className="field" htmlFor="edit-display-name">Display name</label>
             <input
               id="edit-display-name"
@@ -493,7 +492,7 @@ export default function AdminUsers({
             onSubmit={(e) => handleSaveAssignProject(e, assignId)}
             style={{ marginTop: 12, borderTop: '1px solid #e2e8ee', paddingTop: 12 }}
           >
-            <h2>Assign project</h2>
+            <h3 className="section">Assign project</h3>
             <p className="muted">
               An assigned account only sees that project's queue and tickets, and cannot
               transition other projects' tickets. Unassigned accounts see all projects,
@@ -529,7 +528,7 @@ export default function AdminUsers({
             }}
             style={{ marginTop: 12, borderTop: '1px solid #e2e8ee', paddingTop: 12 }}
           >
-            <h2>Reset password</h2>
+            <h3 className="section">Reset password</h3>
             <p className="muted">
               The new password takes effect immediately and signs the user out everywhere.
             </p>
@@ -553,7 +552,7 @@ export default function AdminUsers({
 
       {isHumans ? (
         <div className="card">
-          <h2>Create human</h2>
+          <h3 className="section">Create human</h3>
           <p className="muted">No &ldquo;Keys&rdquo; action here — humans do not have API keys.</p>
           <form onSubmit={handleCreateUser}>
             <div className="form-row">
@@ -607,7 +606,7 @@ export default function AdminUsers({
         </div>
       ) : (
         <div className="card">
-          <h2>Create agent</h2>
+          <h3 className="section">Create agent</h3>
           <p className="muted">
             No password column, no &ldquo;Reset password&rdquo; — agents authenticate by API key only.
             The new key is shown exactly once, below.

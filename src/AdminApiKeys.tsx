@@ -97,7 +97,6 @@ export default function AdminApiKeys({
 
   return (
     <div className="card">
-      <h2>API keys</h2>
       <label className="field" htmlFor="keys-user">User</label>
       <select
         id="keys-user"
@@ -115,7 +114,7 @@ export default function AdminApiKeys({
         <p className="muted">Select a user above to view their API keys.</p>
       ) : (
         <>
-          <h2>API keys — {selectedUser.username}</h2>
+          <h3 className="section">API keys — {selectedUser.username}</h3>
           <p className="muted">
             Keys authenticate as {selectedUser.username} and inherit that account's roles. Use them for
             agent processes: send the key as the X-API-Key header. A revoked key stops working

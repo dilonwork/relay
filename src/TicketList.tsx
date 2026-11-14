@@ -71,7 +71,6 @@ export default function TicketList(props: TicketListProps) {
 
   return (
     <div className="card">
-      <h2>All tickets</h2>
       <TicketProjectHeader
         projectFilter={projectFilter}
         onProjectFilterChange={onProjectFilterChange}

@@ -351,7 +351,6 @@ export default function DocumentsPanel(props: DocumentsPanelProps) {
   return (
     <>
       <div className="card">
-        <h2>Documents</h2>
         <p className="muted">
           Documents produced by the platform, filed by category. A Prototype document can be sent
           to implementation as a new ticket, or marked Not OK to open a re-planning ticket.
@@ -546,7 +545,7 @@ export default function DocumentsPanel(props: DocumentsPanelProps) {
 
       {canMutate && (
         <div className="card">
-          <h2>File a document</h2>
+          <h3 className="section">File a document</h3>
           {!showCreate ? (
             <button type="button" className="primary" onClick={() => {
               setShowCreate(true);

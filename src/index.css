@@ -11,17 +11,46 @@ body {
 
 .container { max-width: 1100px; margin: 0 auto; padding: 20px; }
 
-header {
+/* Title bar (ticket 337e6a55): one slim bar per page carrying the path
+   (the breadcrumb), the page title (the last path segment — there is
+   no separate title element) and the actions. It replaces the old
+   content header (H1 + tagline + Refresh) and the per-panel H2s; the
+   sidebar keeps the single "Relay" brand. */
+.titlebar {
   display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
   justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 16px;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 0;
+  border-bottom: 1px solid #e2e8ee;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
 }
 
-header h1 { margin: 0; font-size: 24px; color: #0f2a3d; }
-header p { margin: 0; color: #5a6b7c; }
+.titlebar .crumbs {
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.titlebar .crumbs .sep { color: #94a3b8; }
+
+/* The current page: bold, truncated with an ellipsis when long (the
+   full title stays in the title attribute). */
+.titlebar .crumbs .here {
+  font-weight: 700;
+  color: #0f2a3d;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 420px;
+  min-width: 0;
+}
+
+.titlebar .actions { display: flex; gap: 8px; align-items: center; }
 
 .actor-bar {
   display: flex;
@@ -143,7 +172,10 @@ header p { margin: 0; color: #5a6b7c; }
 @media (max-width: 720px) {
   .content { padding: 12px; }
 
-  /* Hamburger button above the page header. */
+  /* Shorter truncation for the title bar's current page on mobile. */
+  .titlebar .crumbs .here { max-width: 200px; }
+
+  /* Hamburger button above the title bar. */
   .menu-button {
     display: inline-flex;
     align-items: center;
@@ -294,7 +326,10 @@ header p { margin: 0; color: #5a6b7c; }
   margin-bottom: 16px;
 }
 
-.card h2 { margin: 0 0 12px 0; font-size: 17px; color: #0f2a3d; }
+/* Section headings inside a page sit one level below the title bar
+   (ticket 337e6a55): the demoted panel H2s render as H3s with this
+   style. No H2 remains in the app shell. */
+h3.section { margin: 14px 0 6px; font-size: 13px; color: #0f2a3d; }
 
 .tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
 
