@@ -41,6 +41,7 @@ Tickets carry project development work through a pipeline: the PM creates a requ
 19. Global Workflows, Project Workflow Choice, Removal of the Default Concept
 20. External Project Prompt Bundle
 21. Title Bar: Sidebar & Title Deduplication
+22. Dashboard Redesign: Attention First, Cards Second
 - Appendix A State Code Reference
 - Appendix B Ticket Lifecycle Example
 
