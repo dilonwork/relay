@@ -922,9 +922,12 @@ button.primary.small { min-height: 0; padding: 4px 10px; font-size: 13px; }
      the cell itself would only repeat it. */
   .editor-table.roles-table td:first-child { display: none; }
   /* Full-width 44px controls; 16px text stops iOS Safari zooming
-     into a focused input. The Code input stays monospace. */
-  .editor-table input[type="text"],
-  .editor-table select {
+     into a focused input. The Code input stays monospace. This rule
+     covers the whole editor card, not just the tables: the Basics
+     Name input and Project select live outside the tables and must
+     be 44px/16px too (review return, ticket 1ddcd4ed). */
+  .editor-card input[type="text"],
+  .editor-card select {
     width: 100%;
     min-height: 44px;
     font-size: 16px;
