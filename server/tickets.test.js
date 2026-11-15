@@ -491,6 +491,37 @@ async function main() {
     assert.equal(res.ticket.developer_id, 'dev-1');
   });
 
+  await ok('artifacts: an artifact object survives the round-trip, not "[object Object]" (ticket 390f717f)', async () => {
+    const db = new FakeDb();
+    const created = await tickets.createTicket(db, {
+      actorId: 'pm-1', actorRoles: ['pm'], title: 't', description: 'd',
+    });
+    const id = created.ticket.id;
+    await tickets.transitionTicket(db, id, { actorId: 'leader-1', actorRoles: ['leader'], toStatus: 'decomposing', reason: '' });
+    await tickets.transitionTicket(db, id, { actorId: 'leader-1', actorRoles: ['leader'], toStatus: 'pending_dev', reason: 'split done', handoff: 'work list' });
+    await tickets.transitionTicket(db, id, { actorId: 'dev-1', actorRoles: ['engineer'], toStatus: 'in_dev', reason: '' });
+    const artifact = { id: 'doc-1', title: 'Redesign mockup', type: 'prototype' };
+    const res = await tickets.transitionTicket(db, id, {
+      actorId: 'dev-1', actorRoles: ['engineer'], toStatus: 'pending_review',
+      reason: 'done', handoff: 'built + self-tested',
+      artifacts: [artifact, 'notes.txt', '  ', 42],
+    });
+    assert.equal(res.ok, true);
+    // The stored transition keeps the object (not "[object Object]"),
+    // keeps plain strings as-is, drops blank strings, and stringifies
+    // other scalars.
+    assert.deepEqual(res.transition.artifacts[0], artifact);
+    assert.equal(res.transition.artifacts[1], 'notes.txt');
+    assert.equal(res.transition.artifacts[2], '42');
+    assert.equal(res.transition.artifacts.length, 3);
+    // Reading the history back returns the same data, so the delivery
+    // can be verified from the ticket itself.
+    const history = await tickets.listTransitions(db, id);
+    const submitted = history.find((t) => t.to_status === 'pending_review');
+    assert.deepEqual(submitted.artifacts[0], artifact);
+    assert.ok(!JSON.stringify(submitted.artifacts).includes('[object Object]'));
+  });
+
   await ok('ownership: acceptance-clarification round-trip stays with the tester', async () => {
     const db = new FakeDb();
     const created = await tickets.createTicket(db, {

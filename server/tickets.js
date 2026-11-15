@@ -23,10 +23,27 @@ const workflows = require('./workflows');
 
 const SOURCES = ['project', 'oncall'];
 
+// Artifacts attached to a transition are stored as a JSONB array, so
+// each element must survive JSON.stringify intact: a plain string stays
+// a string, an object stays an object (its data is stored, not a
+// String() rendering of it — String({}) is "[object Object]" and the
+// delivery can no longer be verified, ticket 390f717f). Other scalars
+// stringify; empty strings are dropped. The read-back path needs no
+// change: pg parses the JSONB column back into the same values.
 function normalizeArtifacts(artifacts) {
   if (artifacts === undefined || artifacts === null) return [];
   if (typeof artifacts === 'string') return artifacts.trim() ? [artifacts.trim()] : [];
-  if (Array.isArray(artifacts)) return artifacts.map((a) => String(a)).filter((a) => a.trim());
+  if (Array.isArray(artifacts)) {
+    return artifacts
+      .map((a) => {
+        if (typeof a === 'string') return a.trim();
+        if (a && typeof a === 'object') return a;
+        if (a === undefined || a === null) return '';
+        return String(a);
+      })
+      .filter((a) => (typeof a === 'string' ? a.trim() : true));
+  }
+  if (typeof artifacts === 'object') return [artifacts];
   return [];
 }
 
