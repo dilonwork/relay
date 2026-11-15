@@ -465,8 +465,9 @@ each sub-page owns its own form state and handlers.
   creates no agents. See the design doc, ch. 18.
 - **Single-project view:** the ticket list has a project filter (all
   projects / uncategorized / one project). Picking a project shows only
-  its tickets, with the project name, description and ticket count on
-  top; the same filter applies to the Claimable queue. The
+  its tickets, with a one-line chip in the toolbar — the project name
+  and ticket count, no description — and a ✕ to clear it back to all
+  projects; the same filter applies to the Claimable queue. The
   ticket list also shows a Project column, and the detail view shows
   the ticket's project with a PM-only control to move it.
 - **Endpoints:** see the API table (`/api/projects`,
