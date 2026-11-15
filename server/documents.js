@@ -87,6 +87,38 @@ function slugifyTitle(title) {
   return slug || 'document';
 }
 
+// Statuses in which a ticket counts as "in progress" for the agent
+// upload rule (ticket d8fced2a): the assignee is actively working the
+// ticket. requirement (not started) does not count; pending_dev is
+// unclaimed, so it can never have an assignee; needs_clarification
+// and needs_acceptance_clarification wait on the PM, so the agent is
+// not working the ticket then; delivered and cancelled are terminal
+// (see TERMINAL_STATUSES in stateMachine.js). Custom-workflow states
+// are not in this list, so a ticket on a custom workflow never counts
+// — the ticket defines the set from the built-in flow.
+const IN_PROGRESS_TICKET_STATUSES = [
+  'decomposing',
+  'in_dev',
+  'pending_review',
+  'in_review',
+  'pending_test',
+  'in_test',
+  'pending_deploy',
+  'deploying',
+];
+
+// Does the caller hold an in-progress ticket in this project? The
+// check is keyed on the ticket's project, not on the caller's assigned
+// project (ticket d8fced2a): an agent assigned to one project may hold
+// a ticket in another, and the upload follows the ticket.
+async function hasInProgressTicketInProject(db, actorId, projectId) {
+  const { rows } = await db.query(
+    'SELECT 1 FROM tickets WHERE assignee_id = $1 AND project_id = $2 AND status = ANY($3) LIMIT 1',
+    [actorId, projectId, IN_PROGRESS_TICKET_STATUSES]
+  );
+  return rows.length > 0;
+}
+
 async function projectExists(db, projectId) {
   const { rows } = await db.query('SELECT * FROM projects WHERE id = $1', [projectId]);
   return !!rows[0];
@@ -306,19 +338,20 @@ async function createDocument(db, { actorId, actorRoles, title, categoryId, proj
 // Unlike createDocument there is no PM/Admin gate — this endpoint
 // exists so agents can file their own output — but the caller must be
 // authenticated (the route sits behind requireAuth, so an invalid API
-// key never reaches here: it gets a 401) and the upload must land in
-// a project in the caller's scope: an account assigned to one project
-// may only upload to that project, exactly like the list scope.
-// The project is optional here: an upload without project_id files
-// the document as unassigned (project_id NULL, displayed as
-// Unassigned). Existing agent uploaders (e.g. UI&UX prototype
-// uploads) do not send project_id yet, and the backfill rule defines
-// NULL as a legitimate state, so omitting it must not break them. An
-// assigned account uploading without a project_id is still refused:
-// an unassigned document would be out of scope for them, so the
-// scope check below answers 403 out_of_scope. `source` is always
-// 'agent': provenance is not caller-chosen.
-async function uploadDocument(db, { actorId, actorRoles, assignedProjectId, title, categoryId, projectId, contentBase64 }) {
+// key never reaches here: it gets a 401) and the upload must satisfy
+// the agent upload rule (ticket d8fced2a): the caller holds an
+// in-progress ticket in project P, the target category is P's
+// Prototype category, and the target project_id is P. Anything else
+// is 403 — other categories, other projects, agents with no
+// in-progress ticket in P, guests, and uploads without a project.
+// The rule follows the ticket's project, not the caller's assigned
+// project: an agent assigned to one project may hold a ticket in
+// another, and the upload follows the ticket — so the old
+// assigned-project scope check is gone from this path. PM and Admin
+// file through POST /api/documents instead; the upload path carries
+// the same rule for every caller. `source` is always 'agent':
+// provenance is not caller-chosen.
+async function uploadDocument(db, { actorId, actorRoles, title, categoryId, projectId, contentBase64 }) {
   if (!actorId || !String(actorId).trim()) {
     return { ok: false, status: 400, error: 'bad_request', message: 'actor_id is required.' };
   }
@@ -345,8 +378,20 @@ async function uploadDocument(db, { actorId, actorRoles, assignedProjectId, titl
   if (target && !(await projectExists(db, target))) {
     return { ok: false, status: 400, error: 'unknown_project', message: `Unknown project: ${target}.` };
   }
-  if (assignedProjectId && target !== assignedProjectId) {
-    return { ok: false, status: 403, error: 'out_of_scope', message: 'This project is not the one you are assigned to.' };
+  // Agent upload rule (ticket d8fced2a): a project must be named, it
+  // must be the project of an in-progress ticket the caller holds,
+  // and the category must be that project's Prototype category.
+  // Categories are global (see the file header), so "P's Prototype
+  // category" is the category named Prototype; the name check is the
+  // same one createTicket uses for the Implement button (tickets.js).
+  if (!target) {
+    return { ok: false, status: 403, error: 'no_in_progress_ticket', message: 'An agent upload must name the project of an in-progress ticket.' };
+  }
+  if (category.name !== 'Prototype') {
+    return { ok: false, status: 403, error: 'wrong_category', message: 'Agent uploads are only allowed to the Prototype category.' };
+  }
+  if (!(await hasInProgressTicketInProject(db, String(actorId).trim(), target))) {
+    return { ok: false, status: 403, error: 'no_in_progress_ticket', message: 'Only agents with an in-progress ticket in a project may upload prototype documents to that project.' };
   }
   const decoded = decodeBase64Content(contentBase64);
   if (!decoded.ok) {
@@ -403,6 +448,7 @@ module.exports = {
   documentVisibleTo,
   implementationStatusFor,
   MAX_AGENT_UPLOAD_BYTES,
+  IN_PROGRESS_TICKET_STATUSES,
   listDocumentCategories,
   createDocumentCategory,
   listDocuments,
