@@ -119,6 +119,13 @@ function duplicateHandlerSrc() {
     assert.match(panelSrc, /Duplicate/);
   });
 
+  await ok('Duplicate is disabled while the editor is open, so an in-progress edit is never discarded by a copy', () => {
+    // The Duplicate button sits in the list row; when the editor is open,
+    // clicking it would unconditionally overwrite the unsaved form state.
+    const button = panelSrc.slice(panelSrc.indexOf('openDuplicate(w)'));
+    assert.match(button, /disabled=\{busy \|\| formOpen\}/);
+  });
+
   await ok('openDuplicate opens the editor in create mode with no API call', () => {
     const handler = duplicateHandlerSrc();
     assert.match(handler, /setEditingId\(null\)/);

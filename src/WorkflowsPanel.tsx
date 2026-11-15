@@ -699,7 +699,7 @@ export default function WorkflowsPanel({ projects, createRequest, onFormOpenChan
                   <button className="primary small" type="button" onClick={() => openEdit(w)} disabled={busy}>
                     Edit
                   </button>{' '}
-                  <button className="link" type="button" onClick={() => openDuplicate(w)} disabled={busy}>
+                  <button className="link" type="button" onClick={() => openDuplicate(w)} disabled={busy || formOpen}>
                     Duplicate
                   </button>{' '}
                   {selectedProject !== 'all' &&
