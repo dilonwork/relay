@@ -50,6 +50,7 @@ Tickets carry project development work through a pipeline: the PM creates a requ
 28. Admin - Workflows Redesign: The Flow in the List, a Map for the Editor
 29. Admin API Keys Redesign: Overview First, the One-Time Key Guarded
 30. Documents Redesign: Chips, Groups, and Actions with Hierarchy
+31. Workflow Editor Mobile Redesign: Cards Below 700 px, a Sticky Save Bar
 - Appendix A State Code Reference
 - Appendix B Ticket Lifecycle Example
 
@@ -1535,5 +1536,9 @@ No schema change and no API change: everything the redesign needs is already in 
 
 ### Tests
 
-- `server/workflowMobileRedesign.test.js` (16 tests): the four editor tables and their headings/labels, the toggle labels, the editor-actions and editor-head wrappers, no JS breakpoint branching, the 700 px card rules (header hidden, rows as cards, heading/label `::before`, Roles State cell hidden) and that no `.editor-table` rule leaks onto desktop, 44 px / 16 px controls with monospace Code, toggle text hidden on desktop, the scrollable tab row with the strip above it, the sticky bar with room below it, the hamburger in the title bar with no standalone menu button left, the create-request consume wiring, and the P2 overflow rules for the key and onboarding panels.
+- `server/workflowMobileRedesign.test.js` (17 tests): the four editor tables and their headings/labels, the toggle labels, the editor-actions and editor-head wrappers, no JS breakpoint branching, the 700 px card rules (header hidden, rows as cards, heading/label `::before`, Roles State cell hidden) and that no `.editor-table` rule leaks onto desktop, 44 px / 16 px controls with monospace Code, the Basics Name/Project 44 px / 16 px coverage (review return), toggle text hidden on desktop, the scrollable tab row with the strip above it, the sticky bar with room below it, the hamburger in the title bar with no standalone menu button left, the create-request consume wiring, and the P2 overflow rules for the key and onboarding panels.
 - `server/titleBar.test.js` (+1 test, now 7): the hamburger prop and button in TitleBar.
+
+### Review return (2026-11-14)
+
+The Reviewer returned the first submission (commit 74bf9d8) on two points: (1) the chapter was added but Contents was not synced — fixed by adding the ch. 31 entry verbatim; (2) the Basics Name input and Project select were not 44 px / 16 px on mobile — the 700 px rule only covered `.editor-table` controls, and the Basics controls live outside the tables — fixed by widening the rule to `.editor-card input[type="text"], .editor-card select`, with a test asserting the Basics controls sit inside the editor card and are covered by the rule. Everything else was verified as submitted (449 tests, build, diff, deviations, remount wiring, P2).

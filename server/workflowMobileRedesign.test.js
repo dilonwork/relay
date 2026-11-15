@@ -113,10 +113,25 @@ function mobileBlock(css) {
   await ok('editor controls are full-width 44 px with 16 px text on mobile', () => {
     const css = readSrc('index.css');
     const block = mobileBlock(css);
-    assert.match(block, /\.editor-table input\[type="text"\],\s*\.editor-table select \{\s*width: 100%;\s*min-height: 44px;\s*font-size: 16px;/, 'text inputs and selects must be full-width 44 px, 16 px');
+    assert.match(block, /\.editor-card input\[type="text"\],\s*\.editor-card select \{\s*width: 100%;\s*min-height: 44px;\s*font-size: 16px;/, 'text inputs and selects must be full-width 44 px, 16 px');
     assert.match(block, /\.editor-table td\[data-label="Code"\] input \{ font-family: monospace; \}/, 'the Code input stays monospace');
     assert.match(block, /\.editor-table \.mobile-toggle \{\s*display: flex;\s*align-items: center;\s*gap: 8px;\s*min-height: 44px;/, 'toggle rows must be 44 px tap targets');
     assert.match(block, /\.editor-table \.mobile-toggle span \{ display: inline; \}/, 'toggle label text must show on mobile');
+  });
+
+  await ok('Basics Name and Project are also 44 px / 16 px on mobile (review return)', () => {
+    const panel = readSrc('WorkflowsPanel.tsx');
+    // The Basics controls live inside the editor card, so the
+    // .editor-card rule in the 700 px block reaches them.
+    const card = panel.indexOf('<div className="card editor-card">');
+    assert.notEqual(card, -1, 'the editor card must exist');
+    const name = panel.indexOf('id="workflow-name"', card);
+    const project = panel.indexOf('id="workflow-project"', card);
+    assert.ok(name > card, 'the Basics Name input must sit inside the editor card');
+    assert.ok(project > card, 'the Basics Project select must sit inside the editor card');
+    const css = readSrc('index.css');
+    const block = mobileBlock(css);
+    assert.match(block, /\.editor-card input\[type="text"\],\s*\.editor-card select \{\s*width: 100%;\s*min-height: 44px;\s*font-size: 16px;/, 'the editor-card rule must give every text input and select 44 px and 16 px');
   });
 
   await ok('toggle label text stays hidden on desktop', () => {
