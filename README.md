@@ -282,8 +282,8 @@ onboarding document regenerating from a live workflow edit, and the
 project prompt bundle (whole project context, base-URL resolution,
 no token in the bundle).
 
-451 tests in total: state machine 21, tickets 43, projects 16, onboarding 12, public base URL 5, auth 21,
-admin 7, API keys 8, monitor 18, workflows 30, quick-create builder 11, documents 27, document tickets 13, document render 18, gantt helpers 27, admin nav 5, view hash 8, migrations 34, role lists 4, title bar 7, dashboard redesign 17, ticket detail redesign 16, projects redesign 15, tickets list redesign 8, workflows redesign 15, admin API keys redesign 12, documents redesign 16, workflow editor mobile redesign 17.
+462 tests in total: state machine 21, tickets 43, projects 16, onboarding 12, public base URL 5, auth 21,
+admin 7, API keys 8, monitor 18, workflows 30, quick-create builder 11, documents 27, document tickets 13, document render 18, gantt helpers 27, admin nav 5, view hash 8, migrations 34, role lists 4, title bar 7, dashboard redesign 17, ticket detail redesign 16, projects redesign 15, tickets list redesign 8, workflows redesign 15, admin API keys redesign 12, documents redesign 16, workflow editor mobile redesign 17, workflow duplicate 11.
 
 ## Accounts & authentication
 
@@ -438,8 +438,8 @@ each sub-page owns its own form state and handlers.
   agent — masked API key, live onboarding document with Regenerate,
   project prompt bundle, and the chat-room recommendation (see [Users split](#users-split-humans-and-agents)).
 - **Workflows:** workflow list and state machine editor (see
-  [Workflows](#workflows)); creating, editing, deleting and setting the
-  active workflow are admin-only.
+  [Workflows](#workflows)); creating, editing, duplicating, deleting
+  and setting the active workflow are admin-only.
 - **API keys:** API key management with an overview strip (total / active / revoked / never used across all
   accounts, from `GET /api/admin/api-keys`, prefixes only), agents first in the user picker with search,
   All / Active / Never used / Revoked filter chips, and status pills (Active green, Revoked grey, Never used
@@ -484,7 +484,10 @@ each sub-page owns its own form state and handlers.
   responsible for it, plus a responsibilities sentence per state. An
   Admin creates a named workflow for a project (name + one
   role/responsibilities row per state, pre-filled from the default
-  workflow), edits it, sets it active for its project, or deletes it.
+  workflow), edits it, duplicates an existing workflow into an unsaved
+  draft (name "<name> (copy)", states, transitions and roles
+  pre-filled; Save creates a new workflow, Cancel discards it), sets
+  it active for its project, or deletes it.
 - **State machine editor:** a workflow is not just a role map — it
   carries its own states and transitions. The editor (States /
   Transitions / Roles) defines state names, order, start and terminal

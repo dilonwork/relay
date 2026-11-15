@@ -51,6 +51,7 @@ Tickets carry project development work through a pipeline: the PM creates a requ
 29. Admin API Keys Redesign: Overview First, the One-Time Key Guarded
 30. Documents Redesign: Chips, Groups, and Actions with Hierarchy
 31. Workflow Editor Mobile Redesign: Cards Below 700 px, a Sticky Save Bar
+32. Workflow Duplicate: Copy into an Unsaved Draft
 - Appendix A State Code Reference
 - Appendix B Ticket Lifecycle Example
 
@@ -1550,3 +1551,23 @@ No schema change and no API change: everything the redesign needs is already in 
 ### Review return (2026-11-14)
 
 The Reviewer returned the first submission (commit 74bf9d8) on two points: (1) the chapter was added but Contents was not synced — fixed by adding the ch. 31 entry verbatim; (2) the Basics Name input and Project select were not 44 px / 16 px on mobile — the 700 px rule only covered `.editor-table` controls, and the Basics controls live outside the tables — fixed by widening the rule to `.editor-card input[type="text"], .editor-card select`, with a test asserting the Basics controls sit inside the editor card and are covered by the rule. Everything else was verified as submitted (449 tests, build, diff, deviations, remount wiring, P2).
+
+## 32. Workflow Duplicate: Copy into an Unsaved Draft
+
+Admins often need a workflow that is almost like an existing one — a project variant with one state renamed or one role changed. Rebuilding it state by state in a blank editor is slow and error-prone, so the Workflows list has a Duplicate action per row. Clicking it opens the existing editor as an unsaved draft pre-filled from the source: name "<source name> (copy)", states in flow order, transitions, the roles map, and the project binding (a Global workflow copies to Global). Nothing is created at click time — no API call, no database change — so the list is unchanged until the admin saves.
+
+Draft semantics reuse the existing form state: the editor opens in create mode (editingId null), so Save goes through the existing api.createWorkflow (POST /api/workflows) and Cancel just closes the form (setFormOpen(false)) with no API call. The pre-fill is a deep copy, so editing the draft never mutates the source workflow's in-memory data. The grouped validation (validateWorkflowForm) applies unchanged, and the server-side global workflow-name uniqueness rule still applies — saving with a name that already exists fails with the existing 409 workflow_name_taken error, not a new special case. Transition roles are derived from the roles map on save, as in every create/edit.
+
+### No migration / no new endpoint
+
+No schema change and no new endpoint: the draft is client-side pre-fill plus the existing POST /api/workflows.
+
+### Frontend
+
+- `src/helpers.ts`: `buildDuplicateDraft` (name, projectId, states sorted by sort_order, transitions, roles — all deep-copied). As with the earlier view helpers, the server tests require this module directly and exercise the exact code the component runs.
+- `src/WorkflowsPanel.tsx`: `openDuplicate` (editingId null, form pre-filled from the draft, templates loaded as in create mode) and a Duplicate button per row in the list Actions column, next to Edit. The list-only entry point: the editor does not offer Duplicate while editing, so an in-progress edit is never discarded by a copy.
+
+### Tests
+
+- `server/workflowDuplicate.test.js` (11 items, new file): the default "<name> (copy)" name, states deep-copied and sorted by sort order, transitions deep-copied, the roles map deep-copied, the project binding carried over (project stays, Global stays Global), an empty source drafts to empty collections, a draft of a valid source passes grouped validation, the panel renders a Duplicate button per row wired to openDuplicate, openDuplicate opens in create mode with no API call, Cancel closes the form with no API call, and a duplicate name still fails on save via the existing uniqueness error (409 workflow_name_taken, covered by server/workflows.test.js).
+- Frontend browser verification was not possible (no headless browser on the VM); only `tsc` + `vite build` were run. The Tester verifies the duplicate action in the browser after deploy (Duplicate opens the editor pre-filled with the source's states, transitions, and roles and a "<name> (copy)" name; the list shows no new workflow before saving; Save creates a new workflow and leaves the source unchanged; Cancel discards the draft with no new workflow; saving with an existing name fails with the uniqueness error).

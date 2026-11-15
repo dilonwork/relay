@@ -9,6 +9,7 @@ import {
   WORKFLOW_KINDS,
   WORKFLOW_ROLES,
   activeProjectsForWorkflow,
+  buildDuplicateDraft,
   countTicketsByWorkflow,
   moveStateToPosition,
   slugStateCode,
@@ -375,6 +376,34 @@ export default function WorkflowsPanel({ projects, createRequest, onFormOpenChan
     setReplacePending(null);
   }
 
+  // Duplicate a workflow into an unsaved draft (ticket c7c3bba5): the
+  // editor opens in create mode (editingId null) pre-filled with a
+  // deep copy of the source, so Save creates a new workflow through
+  // the existing create path and Cancel discards the draft with no API
+  // call. Nothing is created here, and the source is never touched.
+  function openDuplicate(w: Workflow) {
+    const draft = buildDuplicateDraft(w);
+    setEditingId(null);
+    setFormName(draft.name);
+    setFormProjectId(draft.projectId || '');
+    setFormStates(draft.states);
+    setFormTransitions(draft.transitions);
+    setFormRoles(draft.roles);
+    setQuickRows([
+      { label: '', role: 'leader' },
+      { label: '', role: 'leader' },
+    ]);
+    setAdvFrom('');
+    setAdvTo('');
+    setFormOpen(true);
+    setError('');
+    setNotice('');
+    setFormError('');
+    setValidationProblems(null);
+    setReplacePending(null);
+    loadExamples();
+  }
+
   // --- States editing ---
 
   function setStateField(index: number, patch: Partial<WorkflowState>) {
@@ -669,6 +698,9 @@ export default function WorkflowsPanel({ projects, createRequest, onFormOpenChan
                 <td>
                   <button className="primary small" type="button" onClick={() => openEdit(w)} disabled={busy}>
                     Edit
+                  </button>{' '}
+                  <button className="link" type="button" onClick={() => openDuplicate(w)} disabled={busy}>
+                    Duplicate
                   </button>{' '}
                   {selectedProject !== 'all' &&
                     (!w.project_id || w.project_id === selectedProject) &&
