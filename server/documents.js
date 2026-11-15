@@ -104,10 +104,11 @@ function slugifyTitle(title) {
 // decomposing and in_test in the built-in flow — which also have
 // non-clarify entries.) Unknown states never count. The start state
 // is not excluded: in the Prototype flow the start state
-// (user_requirement) is a working state the leader picks up from,
-// while in the built-in flow a ticket in 'requirement' has no
-// assignee, so the assignee check in hasInProgressTicketInProject
-// already excludes it — as it does pending_dev, which is unclaimed.
+// (user_requirement) is a working state the leader picks up from —
+// and the same holds for the built-in flow's 'requirement' and the
+// queue state 'pending_dev': whether a caller may upload on them is
+// decided by the anchor in hasInProgressTicketInProject (assignee or
+// responsible role), not by the status alone.
 function isInProgressStatus(definition, status) {
   if (!status) return false;
   if (sm.isTerminalFor(definition, status)) return false;
@@ -115,6 +116,18 @@ function isInProgressStatus(definition, status) {
   const incoming = (definition.transitions || []).filter((t) => t.to === status);
   if (incoming.length > 0 && incoming.every((t) => t.kind === 'clarify')) return false;
   return true;
+}
+
+// The role responsible for a ticket's current state in its own
+// workflow definition: the roles map entry for the state. Stored
+// workflow rows keep {role, responsibilities} objects per state;
+// the built-in definition keeps plain role strings (see
+// flowRolesFromDefinition in workflows.js for the same
+// normalisation). Terminal states have role null.
+function responsibleRoleFor(definition, status) {
+  const entry = definition && definition.roles ? definition.roles[status] : null;
+  if (!entry) return null;
+  return typeof entry === 'object' ? entry.role || null : entry;
 }
 
 // Does the caller hold an in-progress ticket in this project? The
@@ -128,12 +141,25 @@ function isInProgressStatus(definition, status) {
 // longer exists counts as not in progress (the delete guard makes
 // this unreachable in practice). Definitions are cached per workflow
 // within the call, so one workflow is loaded at most once.
-async function hasInProgressTicketInProject(db, actorId, projectId) {
+//
+// The anchor is the caller being the assignee, OR holding the role
+// responsible for the ticket's current state (definition.roles —
+// spec_generation -> ui_ux, decomposing -> leader, pending_review ->
+// reviewer). The assignee alone cannot anchor the rule: forward moves
+// clear assignee_id to NULL (nextOwnership in tickets.js), so in
+// forward-entered states (spec_generation, decomposing,
+// pending_review, ...) nobody is ever the assignee and the role is
+// the only anchor that can match. Either anchor suffices; a caller
+// who is neither the assignee nor the responsible role does not hold
+// the ticket.
+async function hasInProgressTicketInProject(db, actorId, actorRoles, projectId) {
   const { rows } = await db.query(
-    'SELECT status, workflow_id FROM tickets WHERE assignee_id = $1 AND project_id = $2',
-    [actorId, projectId]
+    'SELECT status, workflow_id, assignee_id FROM tickets WHERE project_id = $1',
+    [projectId]
   );
   const definitions = new Map();
+  const cleanActor = String(actorId).trim();
+  const roles = Array.isArray(actorRoles) ? actorRoles : [];
   for (const ticket of rows) {
     const key = ticket.workflow_id || '';
     if (!definitions.has(key)) {
@@ -143,7 +169,10 @@ async function hasInProgressTicketInProject(db, actorId, projectId) {
       );
     }
     const definition = definitions.get(key);
-    if (definition && isInProgressStatus(definition, ticket.status)) return true;
+    if (!definition || !isInProgressStatus(definition, ticket.status)) continue;
+    if (ticket.assignee_id && String(ticket.assignee_id).trim() === cleanActor) return true;
+    const responsible = responsibleRoleFor(definition, ticket.status);
+    if (responsible && roles.includes(responsible)) return true;
   }
   return false;
 }
@@ -499,7 +528,7 @@ async function uploadDocument(db, { actorId, actorRoles, title, categoryId, proj
   if (category.name !== 'Prototype') {
     return { ok: false, status: 403, error: 'wrong_category', message: 'Agent uploads are only allowed to the Prototype category.' };
   }
-  if (!(await hasInProgressTicketInProject(db, String(actorId).trim(), target))) {
+  if (!(await hasInProgressTicketInProject(db, String(actorId).trim(), actorRoles, target))) {
     return { ok: false, status: 403, error: 'no_in_progress_ticket', message: 'Only agents with an in-progress ticket in a project may upload prototype documents to that project.' };
   }
   const decoded = decodeBase64Content(contentBase64);

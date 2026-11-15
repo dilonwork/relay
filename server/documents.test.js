@@ -88,11 +88,11 @@ class FakeDb {
     if (sql === 'SELECT id, status FROM tickets WHERE id = ANY($1)') {
       return { rows: this.tickets.filter((t) => params[0].includes(t.id)).map((t) => ({ id: t.id, status: t.status })) };
     }
-    if (sql === 'SELECT status, workflow_id FROM tickets WHERE assignee_id = $1 AND project_id = $2') {
+    if (sql === 'SELECT status, workflow_id, assignee_id FROM tickets WHERE project_id = $1') {
       return {
         rows: this.tickets
-          .filter((t) => t.assignee_id === params[0] && t.project_id === params[1])
-          .map((t) => ({ status: t.status, workflow_id: t.workflow_id || null })),
+          .filter((t) => t.project_id === params[0])
+          .map((t) => ({ status: t.status, workflow_id: t.workflow_id || null, assignee_id: t.assignee_id || null })),
       };
     }
     if (sql === 'SELECT * FROM workflows WHERE id = $1') {
@@ -507,52 +507,89 @@ async function main() {
 
   await ok('uploadDocument: only in-progress statuses count — terminal, requirement and clarification do not', async () => {
     const b64 = Buffer.from('x', 'utf8').toString('base64');
-    const base = { actorId: 'eng-1', actorRoles: ENGINEER, title: 'T', categoryId: 'cat-proto', projectId: 'proj-1', contentBase64: b64 };
+    const upload = (db, actorId, actorRoles, title) => documents.uploadDocument(db, {
+      actorId, actorRoles, title, categoryId: 'cat-proto', projectId: 'proj-1', contentBase64: b64,
+    });
     // Every working state of the built-in flow admits the upload (a
-    // ticket with no workflow follows the built-in definition).
-    for (const status of ['decomposing', 'in_dev', 'pending_review', 'in_review', 'pending_test', 'in_test', 'pending_deploy', 'deploying']) {
+    // ticket with no workflow follows the built-in definition). Each
+    // trial is seeded the way the state exists live: pickup states
+    // carry the assignee who claimed them; forward-entered states
+    // have assignee NULL (forward moves clear it — nextOwnership in
+    // tickets.js) and admit through the responsible role instead.
+    const working = [
+      // [status, assignee, callerId, callerRoles]
+      ['decomposing', null, 'leader-1', ['leader']],
+      ['in_dev', 'eng-1', 'eng-1', ENGINEER],
+      ['pending_review', null, 'rev-1', ['reviewer']],
+      ['in_review', 'rev-1', 'rev-1', ['reviewer']],
+      ['pending_test', null, 'tester-1', ['tester']],
+      ['in_test', 'tester-1', 'tester-1', ['tester']],
+      ['pending_deploy', null, 'dep-1', ['deployer']],
+      ['deploying', 'dep-1', 'dep-1', ['deployer']],
+    ];
+    for (const [status, assignee, callerId, callerRoles] of working) {
       const trial = new FakeDb();
-      trial.seedTicket({ assignee_id: 'eng-1', project_id: 'proj-1', status });
-      const uploaded = await documents.uploadDocument(trial, { ...base, title: `In ${status}` });
+      trial.seedTicket({ assignee_id: assignee, project_id: 'proj-1', status });
+      const uploaded = await upload(trial, callerId, callerRoles, `In ${status}`);
       assert.equal(uploaded.ok, true, `${status} should count as in progress`);
       assert.equal(uploaded.status, 201);
     }
-    // Waiting on the PM, delivered, cancelled: refused even with an
-    // assignee — these states are terminal or clarification targets
-    // in the ticket's own workflow definition.
-    for (const status of ['needs_clarification', 'needs_acceptance_clarification', 'delivered', 'cancelled']) {
+    // Waiting on the PM, delivered, cancelled: refused even for the
+    // responsible role — these states are terminal or clarification
+    // targets in the ticket's own workflow definition, so the status
+    // fails first. Each trial is seeded the live way (assignee NULL:
+    // clarification and terminal states are forward-entered).
+    const refusedStates = [
+      // [status, callerId, callerRoles]
+      ['needs_clarification', 'pm-1', PM],
+      ['needs_acceptance_clarification', 'pm-1', PM],
+      ['delivered', 'eng-1', ENGINEER],
+      ['cancelled', 'pm-1', PM],
+    ];
+    for (const [status, callerId, callerRoles] of refusedStates) {
       const trial = new FakeDb();
-      trial.seedTicket({ assignee_id: 'eng-1', project_id: 'proj-1', status });
-      const refused = await documents.uploadDocument(trial, { ...base, title: `In ${status}` });
+      trial.seedTicket({ assignee_id: null, project_id: 'proj-1', status });
+      const refused = await upload(trial, callerId, callerRoles, `In ${status}`);
       assert.equal(refused.ok, false, `${status} should not count as in progress`);
       assert.equal(refused.status, 403);
       assert.equal(refused.error, 'no_in_progress_ticket');
     }
-    // Not started and unclaimed: a ticket in 'requirement' or
-    // 'pending_dev' has no assignee in practice, so nothing anchors
-    // the upload. (An assigned ticket in the start state would count
-    // under the workflow-aware rule — that is how the Prototype
-    // flow's user_requirement, itself a start state, counts; see the
-    // Prototype flow test below.)
-    for (const status of ['requirement', 'pending_dev']) {
-      const trial = new FakeDb();
-      trial.seedTicket({ assignee_id: null, project_id: 'proj-1', status });
-      const refused = await documents.uploadDocument(trial, { ...base, title: `In ${status}` });
-      assert.equal(refused.ok, false, `${status} with no assignee should not count as in progress`);
-      assert.equal(refused.status, 403);
-      assert.equal(refused.error, 'no_in_progress_ticket');
-    }
-    // A ticket assigned to someone else does not help either.
+    // The start state and the unclaimed queue state count at the
+    // status level; the anchor decides them. A leader may upload on
+    // a 'requirement' ticket and an engineer on a 'pending_dev'
+    // ticket (the responsible role), symmetric with the Prototype
+    // flow's user_requirement; a caller holding neither the assignee
+    // nor the responsible role may not.
+    const start = new FakeDb();
+    start.seedTicket({ assignee_id: null, project_id: 'proj-1', status: 'requirement' });
+    const startOk = await upload(start, 'leader-1', ['leader'], 'Requirement as leader');
+    assert.equal(startOk.ok, true, 'requirement should admit the responsible role (leader)');
+    assert.equal(startOk.status, 201);
+    const startRefused = await upload(start, 'eng-1', ENGINEER, 'Requirement as engineer');
+    assert.equal(startRefused.status, 403);
+    assert.equal(startRefused.error, 'no_in_progress_ticket');
+    const queue = new FakeDb();
+    queue.seedTicket({ assignee_id: null, project_id: 'proj-1', status: 'pending_dev' });
+    const queueOk = await upload(queue, 'eng-1', ENGINEER, 'Pending dev as engineer');
+    assert.equal(queueOk.ok, true, 'pending_dev should admit the responsible role (engineer)');
+    assert.equal(queueOk.status, 201);
+    const queueRefused = await upload(queue, 'rev-1', ['reviewer'], 'Pending dev as reviewer');
+    assert.equal(queueRefused.status, 403);
+    assert.equal(queueRefused.error, 'no_in_progress_ticket');
+    // A ticket assigned to someone else does not help a caller who
+    // holds neither the assignee nor the responsible role.
     const others = new FakeDb();
     others.seedTicket({ assignee_id: 'eng-9', project_id: 'proj-1', status: 'in_dev' });
-    const refused = await documents.uploadDocument(others, base);
+    const refused = await upload(others, 'rev-1', ['reviewer'], 'Someone else');
     assert.equal(refused.status, 403);
     assert.equal(refused.error, 'no_in_progress_ticket');
   });
 
-  await ok('uploadDocument: a Prototype flow ticket counts by its own workflow definition — spec_generation admits (ticket d8fced2a review return)', async () => {
+  await ok('uploadDocument: a Prototype flow ticket counts by its own workflow definition — spec_generation admits via the ui_ux role with assignee NULL (ticket d8fced2a second review return)', async () => {
     const b64 = Buffer.from('x', 'utf8').toString('base64');
-    const base = { actorId: 'uiux-1', actorRoles: ['ui_ux'], title: 'T', categoryId: 'cat-proto', projectId: 'proj-1', contentBase64: b64 };
+    const upload = (db, actorId, actorRoles, title) => documents.uploadDocument(db, {
+      actorId, actorRoles, title, categoryId: 'cat-proto', projectId: 'proj-1', contentBase64: b64,
+    });
     // The live Prototype flow (705f225f): user_requirement ->
     // feature_planning -> spec_generation -> delivered, with a
     // clarification round-trip feature_planning -> require_clarify ->
@@ -582,24 +619,50 @@ async function main() {
         require_clarify: { role: 'leader', responsibilities: 'Answer the clarification.' },
       },
     };
+    // Each trial is seeded the way the state exists live (forward
+    // moves clear assignee_id to NULL — nextOwnership in tickets.js
+    // — so only pickup-entered states ever carry an assignee).
     // Working states admit — spec_generation is the pinned case: the
     // UI&UX holder delivering a prototype from it must be able to
-    // upload (live ticket 8941c042 went user_requirement ->
-    // feature_planning -> spec_generation -> delivered).
-    for (const status of ['user_requirement', 'feature_planning', 'spec_generation']) {
+    // upload with assignee NULL, through the ui_ux role (live ticket
+    // 8941c042 went user_requirement -> feature_planning ->
+    // spec_generation -> delivered).
+    const admitted = [
+      // [status, assignee, callerId, callerRoles]
+      ['user_requirement', null, 'leader-1', ['leader']],
+      ['feature_planning', 'leader-1', 'leader-1', ['leader']],
+      ['spec_generation', null, 'uiux-1', ['ui_ux']],
+    ];
+    for (const [status, assignee, callerId, callerRoles] of admitted) {
       const trial = new FakeDb();
       trial.seedWorkflow({ id: 'wf-proto', name: 'Prototype flow', ...prototypeFlow });
-      trial.seedTicket({ assignee_id: 'uiux-1', project_id: 'proj-1', status, workflow_id: 'wf-proto' });
-      const uploaded = await documents.uploadDocument(trial, { ...base, title: `Prototype ${status}` });
+      trial.seedTicket({ assignee_id: assignee, project_id: 'proj-1', status, workflow_id: 'wf-proto' });
+      const uploaded = await upload(trial, callerId, callerRoles, `Prototype ${status}`);
       assert.equal(uploaded.ok, true, `Prototype flow ${status} should count as in progress`);
       assert.equal(uploaded.status, 201);
     }
-    // Waiting on clarification, and delivered: refused.
-    for (const status of ['require_clarify', 'delivered']) {
+    // A caller holding neither the assignee nor the responsible role
+    // may not upload on a working ticket: spec_generation admits
+    // ui_ux only, feature_planning admits its leader assignee only.
+    const wrongRole = new FakeDb();
+    wrongRole.seedWorkflow({ id: 'wf-proto', name: 'Prototype flow', ...prototypeFlow });
+    wrongRole.seedTicket({ assignee_id: null, project_id: 'proj-1', status: 'spec_generation', workflow_id: 'wf-proto' });
+    const specRefused = await upload(wrongRole, 'eng-1', ENGINEER, 'Spec generation as engineer');
+    assert.equal(specRefused.status, 403);
+    assert.equal(specRefused.error, 'no_in_progress_ticket');
+    const wrongHolder = new FakeDb();
+    wrongHolder.seedWorkflow({ id: 'wf-proto', name: 'Prototype flow', ...prototypeFlow });
+    wrongHolder.seedTicket({ assignee_id: 'leader-1', project_id: 'proj-1', status: 'feature_planning', workflow_id: 'wf-proto' });
+    const planRefused = await upload(wrongHolder, 'uiux-1', ['ui_ux'], 'Feature planning as ui_ux');
+    assert.equal(planRefused.status, 403);
+    assert.equal(planRefused.error, 'no_in_progress_ticket');
+    // Waiting on clarification, and delivered: refused — even for
+    // the responsible role (require_clarify -> leader).
+    for (const [status, callerId, callerRoles] of [['require_clarify', 'leader-1', ['leader']], ['delivered', 'uiux-1', ['ui_ux']]]) {
       const trial = new FakeDb();
       trial.seedWorkflow({ id: 'wf-proto', name: 'Prototype flow', ...prototypeFlow });
-      trial.seedTicket({ assignee_id: 'uiux-1', project_id: 'proj-1', status, workflow_id: 'wf-proto' });
-      const refused = await documents.uploadDocument(trial, { ...base, title: `Prototype ${status}` });
+      trial.seedTicket({ assignee_id: null, project_id: 'proj-1', status, workflow_id: 'wf-proto' });
+      const refused = await upload(trial, callerId, callerRoles, `Prototype ${status}`);
       assert.equal(refused.ok, false, `Prototype flow ${status} should not count as in progress`);
       assert.equal(refused.status, 403);
       assert.equal(refused.error, 'no_in_progress_ticket');
@@ -607,10 +670,42 @@ async function main() {
     // A ticket naming a workflow that no longer exists never counts.
     const missing = new FakeDb();
     missing.seedTicket({ assignee_id: 'uiux-1', project_id: 'proj-1', status: 'spec_generation', workflow_id: 'wf-gone' });
-    const refused = await documents.uploadDocument(missing, base);
+    const refused = await upload(missing, 'uiux-1', ['ui_ux'], 'Missing workflow');
     assert.equal(refused.ok, false);
     assert.equal(refused.status, 403);
     assert.equal(refused.error, 'no_in_progress_ticket');
+  });
+
+  await ok('uploadDocument: the holding anchor is the assignee or the responsible role for the state (ticket d8fced2a second review return)', async () => {
+    const b64 = Buffer.from('x', 'utf8').toString('base64');
+    const upload = (db, actorId, actorRoles) => documents.uploadDocument(db, {
+      actorId, actorRoles, title: 'T', categoryId: 'cat-proto', projectId: 'proj-1', contentBase64: b64,
+    });
+    // Forward moves clear assignee_id to NULL (nextOwnership in
+    // tickets.js), so a ticket in a forward-entered state has no
+    // assignee in live practice — the role is the only anchor that
+    // can match. decomposing is entered via forward; its
+    // responsible role is leader.
+    const forward = new FakeDb();
+    forward.seedTicket({ assignee_id: null, project_id: 'proj-1', status: 'decomposing' });
+    const byRole = await upload(forward, 'leader-1', ['leader']);
+    assert.equal(byRole.ok, true, 'decomposing should admit the responsible role (leader) with assignee NULL');
+    assert.equal(byRole.status, 201);
+    const wrongRole = await upload(forward, 'eng-1', ENGINEER);
+    assert.equal(wrongRole.status, 403);
+    assert.equal(wrongRole.error, 'no_in_progress_ticket');
+    // Pickup states keep assignee admission: in_dev carries the
+    // engineer who claimed it.
+    const pickup = new FakeDb();
+    pickup.seedTicket({ assignee_id: 'eng-1', project_id: 'proj-1', status: 'in_dev' });
+    const byAssignee = await upload(pickup, 'eng-1', ENGINEER);
+    assert.equal(byAssignee.ok, true, 'in_dev should admit its assignee');
+    assert.equal(byAssignee.status, 201);
+    // Neither anchor: a ticket assigned to someone else, in a state
+    // whose responsible role the caller does not hold.
+    const neither = await upload(pickup, 'rev-1', ['reviewer']);
+    assert.equal(neither.status, 403);
+    assert.equal(neither.error, 'no_in_progress_ticket');
   });
 
   await ok('listDocuments: all, by project, by category, combined, unassigned', async () => {
