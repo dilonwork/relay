@@ -57,10 +57,11 @@ class FakeDb {
     return row;
   }
 
-  // Seed a ticket for the implementation-badge attach: only id and
-  // status matter to the documents service.
-  seedTicket({ id, status = 'requirement' }) {
-    const row = { id: id || `ticket-${++this.seq}`, status };
+  // Seed a ticket for the implementation-badge attach (only id and
+  // status matter) and for the agent upload rule (assignee_id,
+  // project_id and status decide whether the holder may upload).
+  seedTicket({ id, status = 'requirement', assignee_id = null, project_id = null }) {
+    const row = { id: id || `ticket-${++this.seq}`, status, assignee_id, project_id };
     this.tickets.push(row);
     return row;
   }
@@ -74,6 +75,10 @@ class FakeDb {
     }
     if (sql === 'SELECT id, status FROM tickets WHERE id = ANY($1)') {
       return { rows: this.tickets.filter((t) => params[0].includes(t.id)).map((t) => ({ id: t.id, status: t.status })) };
+    }
+    if (sql === 'SELECT 1 FROM tickets WHERE assignee_id = $1 AND project_id = $2 AND status = ANY($3) LIMIT 1') {
+      const hit = this.tickets.some((t) => t.assignee_id === params[0] && t.project_id === params[1] && params[2].includes(t.status));
+      return { rows: hit ? [{}] : [] };
     }
     if (sql === 'SELECT * FROM documents WHERE id = $1') {
       const d = this.documents.find((x) => x.id === params[0]);
@@ -244,6 +249,7 @@ async function main() {
 
   await ok('uploadDocument: engineer uploads base64 content, source is agent', async () => {
     const db = new FakeDb();
+    db.seedTicket({ assignee_id: 'eng-1', project_id: 'proj-1', status: 'in_dev' });
     const content = '# 規格書\nLogin flow — step 1.\n';
     const uploaded = await documents.uploadDocument(db, {
       actorId: 'eng-1', actorRoles: ENGINEER,
@@ -261,10 +267,11 @@ async function main() {
 
   await ok('uploadDocument: uploaded document is listed and downloads byte-identical', async () => {
     const db = new FakeDb();
+    db.seedTicket({ assignee_id: 'eng-1', project_id: 'proj-2', status: 'in_dev' });
     const content = '# A\nUnicode: 規格書 ✓\n';
     const uploaded = await documents.uploadDocument(db, {
       actorId: 'eng-1', actorRoles: ENGINEER,
-      title: 'Round trip', categoryId: 'cat-undef', projectId: 'proj-2',
+      title: 'Round trip', categoryId: 'cat-proto', projectId: 'proj-2',
       contentBase64: Buffer.from(content, 'utf8').toString('base64'),
     });
     assert.equal(uploaded.ok, true);
@@ -277,10 +284,23 @@ async function main() {
     assert.equal(dl.filename, 'round-trip.md');
   });
 
-  await ok('uploadDocument: any role except guest may upload; guest is refused (read-only)', async () => {
+  await ok('uploadDocument: the upload rule admits agents with an in-progress ticket; PM/Admin file via POST /api/documents, guest is refused', async () => {
     const db = new FakeDb();
     const b64 = Buffer.from('x', 'utf8').toString('base64');
-    for (const [name, roles] of [['pm', PM], ['admin', ADMIN], ['engineer', ENGINEER], ['tester', ['tester']], ['reviewer', ['reviewer']]]) {
+    // PM and Admin hold no in-progress ticket: the upload path is the
+    // agent path, and they file through POST /api/documents instead.
+    for (const [name, roles] of [['pm', PM], ['admin', ADMIN]]) {
+      const refused = await documents.uploadDocument(db, {
+        actorId: `${name}-1`, actorRoles: roles,
+        title: `By ${name}`, categoryId: 'cat-proto', projectId: 'proj-1', contentBase64: b64,
+      });
+      assert.equal(refused.ok, false, `${name} should not upload without an in-progress ticket`);
+      assert.equal(refused.status, 403);
+      assert.equal(refused.error, 'no_in_progress_ticket');
+    }
+    // Agent roles with an in-progress ticket in the project may upload.
+    for (const [name, roles] of [['engineer', ENGINEER], ['tester', ['tester']], ['reviewer', ['reviewer']]]) {
+      db.seedTicket({ assignee_id: `${name}-1`, project_id: 'proj-1', status: 'in_dev' });
       const uploaded = await documents.uploadDocument(db, {
         actorId: `${name}-1`, actorRoles: roles,
         title: `By ${name}`, categoryId: 'cat-proto', projectId: 'proj-1', contentBase64: b64,
@@ -299,6 +319,7 @@ async function main() {
 
   await ok('uploadDocument: missing title/category/content and unknown category/project are 400', async () => {
     const db = new FakeDb();
+    db.seedTicket({ assignee_id: 'eng-1', project_id: 'proj-1', status: 'in_dev' });
     const b64 = Buffer.from('x', 'utf8').toString('base64');
     const base = { actorId: 'eng-1', actorRoles: ENGINEER, title: 'T', categoryId: 'cat-proto', projectId: 'proj-1', contentBase64: b64 };
     const noTitle = await documents.uploadDocument(db, { ...base, title: ' ' });
@@ -317,8 +338,9 @@ async function main() {
     assert.equal(nonString.status, 400);
   });
 
-  await ok('uploadDocument: project_id is optional — omitted files as unassigned (ticket 8f52044c)', async () => {
+  await ok('uploadDocument: project_id is required — an upload without one is 403 (ticket d8fced2a)', async () => {
     const db = new FakeDb();
+    db.seedTicket({ assignee_id: 'eng-1', project_id: 'proj-2', status: 'in_dev' });
     const b64 = Buffer.from('x', 'utf8').toString('base64');
     // With a project: stored and returned, listed under that project.
     const withProject = await documents.uploadDocument(db, {
@@ -328,18 +350,17 @@ async function main() {
     assert.equal(withProject.ok, true);
     assert.equal(withProject.document.project_id, 'proj-2');
     assert.deepEqual((await documents.listDocuments(db, { projectId: 'proj-2' })).map((d) => d.title), ['With project']);
-    // Without a project (unassigned caller): filed as unassigned, not
-    // an error — existing agent uploaders do not send project_id yet.
-    const unassigned = await documents.uploadDocument(db, {
+    // Without a project: no ticket can anchor the upload, so it is
+    // refused — the old "filed as Unassigned" behaviour is gone from
+    // this path (ticket d8fced2a); unassigned filing stays available
+    // to PM/Admin through POST /api/documents.
+    const noProject = await documents.uploadDocument(db, {
       actorId: 'eng-1', actorRoles: ENGINEER,
       title: 'No project', categoryId: 'cat-proto', projectId: undefined, contentBase64: b64,
     });
-    assert.equal(unassigned.ok, true);
-    assert.equal(unassigned.status, 201);
-    assert.equal(unassigned.document.project_id, null);
-    assert.equal(unassigned.document.source, 'agent');
-    assert.deepEqual((await documents.listDocuments(db, { projectId: 'none' })).map((d) => d.title), ['No project']);
-    assert.deepEqual((await documents.listDocuments(db, { projectId: 'proj-1' })).map((d) => d.title), []);
+    assert.equal(noProject.ok, false);
+    assert.equal(noProject.status, 403);
+    assert.equal(noProject.error, 'no_in_progress_ticket');
     // Unknown project is still 400 when one is given.
     const badProject = await documents.uploadDocument(db, {
       actorId: 'eng-1', actorRoles: ENGINEER,
@@ -347,18 +368,11 @@ async function main() {
     });
     assert.equal(badProject.status, 400);
     assert.equal(badProject.error, 'unknown_project');
-    // An assigned caller omitting the project is out of scope: an
-    // unassigned document would be invisible to them.
-    const assignedNoProject = await documents.uploadDocument(db, {
-      actorId: 'eng-1', actorRoles: ENGINEER, assignedProjectId: 'proj-1',
-      title: 'Assigned, no project', categoryId: 'cat-proto', projectId: undefined, contentBase64: b64,
-    });
-    assert.equal(assignedNoProject.status, 403);
-    assert.equal(assignedNoProject.error, 'out_of_scope');
   });
 
   await ok('uploadDocument: malformed base64 and non-UTF8 bytes are 400 invalid_content', async () => {
     const db = new FakeDb();
+    db.seedTicket({ assignee_id: 'eng-1', project_id: 'proj-1', status: 'in_dev' });
     const base = { actorId: 'eng-1', actorRoles: ENGINEER, title: 'T', categoryId: 'cat-proto', projectId: 'proj-1' };
     const garbage = await documents.uploadDocument(db, { ...base, contentBase64: 'not base64!!!' });
     assert.equal(garbage.status, 400);
@@ -379,6 +393,7 @@ async function main() {
 
   await ok('uploadDocument: content over 1 MiB is 413, exactly 1 MiB is 201', async () => {
     const db = new FakeDb();
+    db.seedTicket({ assignee_id: 'eng-1', project_id: 'proj-1', status: 'in_dev' });
     const limit = documents.MAX_AGENT_UPLOAD_BYTES;
     assert.equal(limit, 1024 * 1024);
     const over = await documents.uploadDocument(db, {
@@ -397,26 +412,99 @@ async function main() {
     assert.equal(exact.status, 201);
   });
 
-  await ok('uploadDocument: an assigned caller may only upload to their own project', async () => {
+  await ok('uploadDocument: the upload follows the ticket project, not the assigned project (ticket d8fced2a)', async () => {
     const db = new FakeDb();
     const b64 = Buffer.from('x', 'utf8').toString('base64');
-    const own = await documents.uploadDocument(db, {
-      actorId: 'eng-1', actorRoles: ENGINEER, assignedProjectId: 'proj-1',
-      title: 'Own', categoryId: 'cat-proto', projectId: 'proj-1', contentBase64: b64,
+    // eng-1 is assigned to proj-1 but holds an in-progress ticket in
+    // proj-2: uploading a prototype to proj-2 succeeds. The service
+    // no longer receives the caller's assignment at all — the upload
+    // follows the ticket.
+    db.seedTicket({ assignee_id: 'eng-1', project_id: 'proj-2', status: 'in_dev' });
+    const crossProject = await documents.uploadDocument(db, {
+      actorId: 'eng-1', actorRoles: ENGINEER,
+      title: 'Cross project', categoryId: 'cat-proto', projectId: 'proj-2', contentBase64: b64,
     });
-    assert.equal(own.ok, true);
-    const foreign = await documents.uploadDocument(db, {
-      actorId: 'eng-1', actorRoles: ENGINEER, assignedProjectId: 'proj-1',
-      title: 'Foreign', categoryId: 'cat-proto', projectId: 'proj-2', contentBase64: b64,
+    assert.equal(crossProject.ok, true);
+    assert.equal(crossProject.status, 201);
+    assert.equal(crossProject.document.project_id, 'proj-2');
+    // The same caller has no in-progress ticket in proj-1, so
+    // uploading there is refused.
+    const home = await documents.uploadDocument(db, {
+      actorId: 'eng-1', actorRoles: ENGINEER,
+      title: 'Home', categoryId: 'cat-proto', projectId: 'proj-1', contentBase64: b64,
     });
-    assert.equal(foreign.status, 403);
-    assert.equal(foreign.error, 'out_of_scope');
-    // Unassigned callers may upload to any existing project.
+    assert.equal(home.status, 403);
+    assert.equal(home.error, 'no_in_progress_ticket');
+    // An unassigned caller with no in-progress ticket anywhere is
+    // refused even for the Prototype category.
     const global = await documents.uploadDocument(db, {
       actorId: 'rev-1', actorRoles: ['reviewer'],
       title: 'Global', categoryId: 'cat-proto', projectId: 'proj-2', contentBase64: b64,
     });
-    assert.equal(global.ok, true);
+    assert.equal(global.status, 403);
+    assert.equal(global.error, 'no_in_progress_ticket');
+  });
+
+  await ok('uploadDocument: a non-Prototype category is 403 even with an in-progress ticket', async () => {
+    const db = new FakeDb();
+    db.seedTicket({ assignee_id: 'eng-1', project_id: 'proj-1', status: 'in_dev' });
+    const b64 = Buffer.from('x', 'utf8').toString('base64');
+    const refused = await documents.uploadDocument(db, {
+      actorId: 'eng-1', actorRoles: ENGINEER,
+      title: 'Not a prototype', categoryId: 'cat-undef', projectId: 'proj-1', contentBase64: b64,
+    });
+    assert.equal(refused.ok, false);
+    assert.equal(refused.status, 403);
+    assert.equal(refused.error, 'wrong_category');
+  });
+
+  await ok('uploadDocument: an agent with no in-progress ticket in the project is 403', async () => {
+    const db = new FakeDb();
+    db.seedTicket({ assignee_id: 'eng-1', project_id: 'proj-2', status: 'in_dev' });
+    const b64 = Buffer.from('x', 'utf8').toString('base64');
+    // A ticket in another project does not help.
+    const foreign = await documents.uploadDocument(db, {
+      actorId: 'eng-1', actorRoles: ENGINEER,
+      title: 'Foreign', categoryId: 'cat-proto', projectId: 'proj-1', contentBase64: b64,
+    });
+    assert.equal(foreign.status, 403);
+    assert.equal(foreign.error, 'no_in_progress_ticket');
+    // No ticket at all.
+    const none = await documents.uploadDocument(db, {
+      actorId: 'eng-2', actorRoles: ENGINEER,
+      title: 'None', categoryId: 'cat-proto', projectId: 'proj-1', contentBase64: b64,
+    });
+    assert.equal(none.status, 403);
+    assert.equal(none.error, 'no_in_progress_ticket');
+  });
+
+  await ok('uploadDocument: only in-progress statuses count — terminal, requirement and clarification do not', async () => {
+    const b64 = Buffer.from('x', 'utf8').toString('base64');
+    const base = { actorId: 'eng-1', actorRoles: ENGINEER, title: 'T', categoryId: 'cat-proto', projectId: 'proj-1', contentBase64: b64 };
+    // Every in-progress status admits the upload.
+    for (const status of documents.IN_PROGRESS_TICKET_STATUSES) {
+      const trial = new FakeDb();
+      trial.seedTicket({ assignee_id: 'eng-1', project_id: 'proj-1', status });
+      const uploaded = await documents.uploadDocument(trial, { ...base, title: `In ${status}` });
+      assert.equal(uploaded.ok, true, `${status} should count as in progress`);
+      assert.equal(uploaded.status, 201);
+    }
+    // Everything else refuses it: not started, waiting on the PM,
+    // unclaimed, delivered, cancelled.
+    for (const status of ['requirement', 'pending_dev', 'needs_clarification', 'needs_acceptance_clarification', 'delivered', 'cancelled']) {
+      const trial = new FakeDb();
+      trial.seedTicket({ assignee_id: 'eng-1', project_id: 'proj-1', status });
+      const refused = await documents.uploadDocument(trial, { ...base, title: `In ${status}` });
+      assert.equal(refused.ok, false, `${status} should not count as in progress`);
+      assert.equal(refused.status, 403);
+      assert.equal(refused.error, 'no_in_progress_ticket');
+    }
+    // A ticket assigned to someone else does not help either.
+    const others = new FakeDb();
+    others.seedTicket({ assignee_id: 'eng-9', project_id: 'proj-1', status: 'in_dev' });
+    const refused = await documents.uploadDocument(others, base);
+    assert.equal(refused.status, 403);
+    assert.equal(refused.error, 'no_in_progress_ticket');
   });
 
   await ok('listDocuments: all, by project, by category, combined, unassigned', async () => {

@@ -518,21 +518,21 @@ app.post('/api/documents', async (req, res) => {
 });
 
 // Agent upload: file a document with an API key. Unlike POST
-// /api/documents (PM or Admin), any authenticated caller may upload —
-// agents file their own output — and project_id is optional: an
-// upload without one files the document as unassigned (see
-// documents.js). The upload must land in a project in the caller's
-// scope when a project is given (the service enforces it). The body
-// is JSON with the file content base64-encoded in `content_base64`:
-// no multipart parser is added, because agents already speak JSON and
-// base64 carries arbitrary bytes safely in a JSON body. An invalid API
-// key never reaches here — requireAuth answers 401 first.
+// /api/documents (PM or Admin), this endpoint exists so agents can
+// file their own output — and the agent upload rule (ticket d8fced2a,
+// see documents.js) decides who may: the caller must hold an
+// in-progress ticket in the target project, the category must be that
+// project's Prototype category, and the project must be named. The
+// body is JSON with the file content base64-encoded in
+// `content_base64`: no multipart parser is added, because agents
+// already speak JSON and base64 carries arbitrary bytes safely in a
+// JSON body. An invalid API key never reaches here — requireAuth
+// answers 401 first.
 app.post('/api/documents/upload', async (req, res) => {
   try {
     const result = await documents.uploadDocument(db, {
       actorId: req.user.id,
       actorRoles: req.user.roles,
-      assignedProjectId: req.user.project_id,
       title: req.body ? req.body.title : undefined,
       categoryId: req.body ? req.body.category_id : undefined,
       projectId: req.body ? req.body.project_id : undefined,

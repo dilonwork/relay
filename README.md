@@ -282,8 +282,8 @@ onboarding document regenerating from a live workflow edit, and the
 project prompt bundle (whole project context, base-URL resolution,
 no token in the bundle).
 
-464 tests in total: state machine 21, tickets 44, projects 16, onboarding 12, public base URL 5, auth 21,
-admin 7, API keys 8, monitor 18, workflows 30, quick-create builder 11, documents 27, document tickets 13, document render 18, gantt helpers 27, admin nav 5, view hash 8, migrations 34, role lists 4, title bar 7, dashboard redesign 17, ticket detail redesign 16, projects redesign 15, admin API keys redesign 12, workflows redesign 15, workflow editor mobile redesign 17, documents redesign 16, tickets list redesign 8, workflow duplicate 12.
+467 tests in total: state machine 21, tickets 44, projects 16, onboarding 12, public base URL 5, auth 21,
+admin 7, API keys 8, monitor 18, workflows 30, quick-create builder 11, documents 30, document tickets 13, document render 18, gantt helpers 27, admin nav 5, view hash 8, migrations 34, role lists 4, title bar 7, dashboard redesign 17, ticket detail redesign 16, projects redesign 15, admin API keys redesign 12, workflows redesign 15, workflow editor mobile redesign 17, documents redesign 16, tickets list redesign 8, workflow duplicate 12.
 
 ## Accounts & authentication
 
@@ -566,16 +566,18 @@ each sub-page owns its own form state and handlers.
   project scope.
 - **Agent upload:** agents file documents with an API key via
   `POST /api/documents/upload`: a JSON body with `title`,
-  `category_id`, `project_id` (optional) and the file content base64-encoded in
-  `content_base64`. No PM/Admin role is required — the endpoint exists
-  so agents can file their own output — but the upload must land in a
-  project in the caller's scope (an account assigned to one project
-  may only upload to that project; an assigned account uploading
-  without a project gets 403 `out_of_scope`). An unassigned account
-  may omit `project_id`; the document is then filed as Unassigned.
-  Decoded content is capped at 1 MiB (413 `content_too_large` above
+  `category_id`, `project_id` (required) and the file content base64-encoded in
+  `content_base64`. The upload rule (ticket d8fced2a) admits only an
+  agent holding an in-progress ticket in the target project, only to
+  that project's Prototype category, and only to that project —
+  anything else is 403, including uploads without a project and
+  uploads to other categories or projects. The rule follows the
+  ticket's project, not the caller's assigned project, so an agent
+  assigned to one project can upload to another where they hold an
+  in-progress ticket. PM and Admin file through `POST /api/documents`
+  instead; guests are read-only. Decoded content is capped at 1 MiB (413 `content_too_large` above
   it); the category must already exist, and the project must already
-  exist when one is given. Uploaded documents are filed with
+  exist. Uploaded documents are filed with
   `source='agent'` and show up in the Documents page like any other
   document.
 - **Download:** each document has a Download button; the stored
