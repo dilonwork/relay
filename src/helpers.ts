@@ -1089,25 +1089,28 @@ export interface DocumentGroup {
 
 // Title pairing for one delivery, one row (ticket 6df4ba74,
 // design doc ch. 34): UI&UX files a delivery as two documents —
-// "<X> — interactive prototype" and "<X> — recommendations" (the
-// build plan). The plan title suffix and the prototype title suffix
-// are the pairing key: a plan pairs to the prototype with the same
-// stem, in the same project. The same suffixes drive the migration
-// 023 backfill (in SQL there) and the unpaired-plan marker below.
-export const PLAN_TITLE_SUFFIX = ' — recommendations';
+// "<X> — interactive prototype" and a build plan. The plan was
+// filed as "<X> — recommendations" at first and as "<X> — plan"
+// before that; both suffixes are build plans. The plan title
+// suffixes and the prototype title suffix are the pairing key: a
+// plan pairs to the prototype with the same stem, in the same
+// project. The same suffixes drive the migration 023 backfill
+// (in SQL there) and the unpaired-plan marker below.
+export const PLAN_TITLE_SUFFIXES = [' — recommendations', ' — plan'];
 export const PROTOTYPE_TITLE_SUFFIX = ' — interactive prototype';
 
-// A build-plan title is one ending in the plan suffix. Anything else
+// A build-plan title is one ending in a plan suffix. Anything else
 // — including a prototype title — is not a plan.
 export function isPlanTitle(title: string): boolean {
-  return title.endsWith(PLAN_TITLE_SUFFIX);
+  return PLAN_TITLE_SUFFIXES.some((suffix) => title.endsWith(suffix));
 }
 
 // The prototype title a plan pairs to, or null when the title is not
 // a plan title.
 export function expectedPrototypeTitle(planTitle: string): string | null {
-  if (!isPlanTitle(planTitle)) return null;
-  return planTitle.slice(0, planTitle.length - PLAN_TITLE_SUFFIX.length) + PROTOTYPE_TITLE_SUFFIX;
+  const suffix = PLAN_TITLE_SUFFIXES.find((s) => planTitle.endsWith(s));
+  if (!suffix) return null;
+  return planTitle.slice(0, planTitle.length - suffix.length) + PROTOTYPE_TITLE_SUFFIX;
 }
 
 // The plans in a loaded list that have no prototype: a plan title

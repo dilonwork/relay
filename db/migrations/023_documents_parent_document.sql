@@ -1,7 +1,8 @@
 -- Relay migration 023: attach build plans to their prototype (ticket 6df4ba74, design doc ch. 34).
 -- A UI&UX delivery files two documents in the Prototype category: the
 -- interactive prototype ("<X> — interactive prototype") and the build
--- plan ("<X> — recommendations"). Until now both were top-level rows,
+-- plan ("<X> — recommendations", or "<X> — plan" for the older
+-- deliveries). Until now both were top-level rows,
 -- so the list doubled and the prototype's Implement ticket did not
 -- carry the plan. The plan now points at its prototype:
 -- parent_document_id is NULL for a prototype (and for every other
@@ -11,15 +12,16 @@
 -- ticket, never displayed in Documents.
 --
 -- Backfill (P2): pair the existing plan rows to their prototypes by
--- title — "<X> — recommendations" pairs to "<X> — interactive
--- prototype" in the same project and the same (Prototype) category.
--- Only plans with no parent yet are touched, so re-running the
--- migration is a no-op; when several prototypes share the title, the
--- earliest wins. Plans with no matching prototype stay unpaired
--- (parent NULL) and remain visible with a "Plan — no prototype"
--- marker until an admin pairs or deletes them. The pairing also runs
--- on every server restart (initDb re-runs all migrations), so a plan
--- filed without a parent is paired as soon as its prototype exists.
+-- title — "<X> — recommendations" and "<X> — plan" both pair to
+-- "<X> — interactive prototype" in the same project and the same
+-- (Prototype) category. Only plans with no parent yet are touched, so
+-- re-running the migration is a no-op; when several prototypes share
+-- the title, the earliest wins. Plans with no matching prototype stay
+-- unpaired (parent NULL) and remain visible with a "Plan — no
+-- prototype" marker until an admin pairs or deletes them. The pairing
+-- also runs on every server restart (initDb re-runs all migrations),
+-- so a plan filed without a parent is paired as soon as its prototype
+-- exists.
 -- Deleting a prototype unpairs its plans (ON DELETE SET NULL) instead
 -- of deleting them: the plan becomes an unpaired plan again.
 -- Idempotent: ADD COLUMN IF NOT EXISTS, CREATE INDEX IF NOT EXISTS,
@@ -62,6 +64,27 @@ WHERE plan.parent_document_id IS NULL
     WHERE p2.category_id = plan.category_id
       AND p2.project_id IS NOT DISTINCT FROM plan.project_id
       AND p2.title = left(plan.title, length(plan.title) - length(' — recommendations')) || ' — interactive prototype'
+      AND p2.parent_document_id IS NULL
+    ORDER BY p2.created_at ASC, p2.id ASC LIMIT 1
+  );
+
+-- The older deliveries filed the plan as "<X> — plan" (e.g. "Gantt
+-- presentation improvement — plan"); same pairing, same guards.
+UPDATE documents plan
+SET parent_document_id = proto.id
+FROM documents proto
+WHERE plan.parent_document_id IS NULL
+  AND plan.title LIKE '% — plan'
+  AND plan.category_id = (SELECT id FROM document_categories WHERE name = 'Prototype')
+  AND proto.category_id = plan.category_id
+  AND proto.project_id IS NOT DISTINCT FROM plan.project_id
+  AND proto.parent_document_id IS NULL
+  AND proto.title = left(plan.title, length(plan.title) - length(' — plan')) || ' — interactive prototype'
+  AND proto.id = (
+    SELECT p2.id FROM documents p2
+    WHERE p2.category_id = plan.category_id
+      AND p2.project_id IS NOT DISTINCT FROM plan.project_id
+      AND p2.title = left(plan.title, length(plan.title) - length(' — plan')) || ' — interactive prototype'
       AND p2.parent_document_id IS NULL
     ORDER BY p2.created_at ASC, p2.id ASC LIMIT 1
   );

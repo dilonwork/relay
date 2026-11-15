@@ -282,8 +282,8 @@ onboarding document regenerating from a live workflow edit, and the
 project prompt bundle (whole project context, base-URL resolution,
 no token in the bundle).
 
-483 tests in total: state machine 21, tickets 44, projects 16, onboarding 12, public base URL 5, auth 21,
-admin 7, API keys 8, monitor 18, workflows 30, quick-create builder 11, documents 36, document tickets 16, document render 18, gantt helpers 27, admin nav 5, view hash 8, migrations 36, role lists 4, title bar 7, dashboard redesign 17, ticket detail redesign 16, projects redesign 15, admin API keys redesign 12, workflows redesign 15, workflow editor mobile redesign 17, documents redesign 21, tickets list redesign 8, workflow duplicate 12.
+484 tests in total: state machine 21, tickets 44, projects 16, onboarding 12, public base URL 5, auth 21,
+admin 7, API keys 8, monitor 18, workflows 30, quick-create builder 11, documents 36, document tickets 16, document render 18, gantt helpers 27, admin nav 5, view hash 8, migrations 36, role lists 4, title bar 7, dashboard redesign 17, ticket detail redesign 16, projects redesign 15, admin API keys redesign 12, workflows redesign 15, workflow editor mobile redesign 17, documents redesign 22, tickets list redesign 8, workflow duplicate 12.
 
 ## Accounts & authentication
 
@@ -601,10 +601,11 @@ each sub-page owns its own form state and handlers.
   "for the planner". Download downloads the visual prototype only.
   The single-Implement guard and the implementation badge are
   unchanged. Existing plan rows were paired to their prototypes by
-  title ("\<X> — recommendations" → "\<X> — interactive prototype")
-  in migration 023; a plan with no matching prototype stays visible
-  with a "Plan — no prototype" marker until an admin pairs or
-  deletes it.
+  title ("\<X> — recommendations" and the older "\<X> — plan" both →
+  "\<X> — interactive prototype") in migration 023; a plan with no
+  matching prototype stays visible with a "Plan — no prototype"
+  marker until an admin pairs or deletes it, and offers no Download /
+  Implement / Not OK — its content is never shown.
 - **Download:** each document has a Download button; the stored
   Markdown is rendered as a `.md` file whose name comes from the title
   (lowercase, dashes, Unicode letters kept, capped at 80 characters).

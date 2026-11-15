@@ -455,6 +455,14 @@ async function main() {
     assert.ok(sql.includes('proto.parent_document_id IS NULL'), '023: pairing must only pair to top-level prototypes');
     assert.ok(sql.includes('proto.project_id IS NOT DISTINCT FROM plan.project_id'), '023: pairing must stay in the same project');
     assert.ok(sql.includes('ORDER BY p2.created_at ASC, p2.id ASC LIMIT 1'), '023: the earliest prototype wins when titles collide');
+    // The older deliveries filed the plan as "<X> — plan" (review
+    // return): the same pairing, same guards — a second UPDATE
+    // matching that suffix, deriving the same prototype title.
+    assert.ok(sql.includes("plan.title LIKE '% — plan'"), '023: pairing must also match the older plan title suffix');
+    assert.ok(
+      sql.indexOf("plan.title LIKE '% — plan'") > sql.indexOf("plan.title LIKE '% — recommendations'"),
+      '023: the plan-suffix UPDATE follows the recommendations UPDATE'
+    );
     // The FK is guarded like 018: added only when every stored
     // parent references an existing document.
     assert.ok(

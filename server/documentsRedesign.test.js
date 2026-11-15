@@ -85,6 +85,13 @@ const docs = [
     assert.equal(expectedPrototypeTitle('Dashboard redesign — recommendations'), 'Dashboard redesign — interactive prototype');
     assert.equal(expectedPrototypeTitle('Dashboard redesign — interactive prototype'), null);
     assert.equal(expectedPrototypeTitle('Weekly sync notes'), null);
+    // The older deliveries filed the plan as "— plan" (review return):
+    // the same suffix, the same pairing.
+    assert.equal(isPlanTitle('Gantt presentation improvement — plan'), true);
+    assert.equal(isPlanTitle('Users split (humans/agents) + onboarding — plan'), true);
+    assert.equal(isPlanTitle('Weekly plan'), false);
+    assert.equal(expectedPrototypeTitle('Gantt presentation improvement — plan'), 'Gantt presentation improvement — interactive prototype');
+    assert.equal(expectedPrototypeTitle('Users split (humans/agents) + onboarding — plan'), 'Users split (humans/agents) + onboarding — interactive prototype');
   });
 
   await ok('unpaired plans are the plan titles with no parent and no matching prototype in the same project (ticket 6df4ba74)', () => {
@@ -111,6 +118,17 @@ const docs = [
     ];
     assert.deepEqual([...unpairedPlanIds(attached)], []);
     assert.deepEqual([...unpairedPlanIds([])], []);
+    // The older "— plan" suffix marks and pairs the same way (review
+    // return): with its prototype it is not unpaired, without one it is.
+    const planWithPrototype = [
+      { id: 'p3', title: 'Gantt presentation improvement — interactive prototype', project_id: 'proj-1', parent_document_id: null },
+      { id: 'r3', title: 'Gantt presentation improvement — plan', project_id: 'proj-1', parent_document_id: null },
+    ];
+    assert.deepEqual([...unpairedPlanIds(planWithPrototype)], []);
+    const planOrphan = [
+      { id: 'r4', title: 'Orphan — plan', project_id: 'proj-1', parent_document_id: null },
+    ];
+    assert.deepEqual([...unpairedPlanIds(planOrphan)], ['r4']);
   });
 
   const panel = fs.readFileSync(path.join(__dirname, '../src/DocumentsPanel.tsx'), 'utf8');
@@ -160,6 +178,30 @@ const docs = [
     assert.ok(panel.includes('className="pill amber"'));
     assert.ok(panel.includes('unpairedPlanIds(documents)'));
     assert.ok(panel.includes('Build plan attached:'), 'the expanded row names the attached plan');
+  });
+
+  await ok('unpaired plan rows offer no Download, Implement or Not OK, and never render their content (ticket 6df4ba74, review return)', () => {
+    // The gate is one flag on the row: an unpaired plan has no
+    // prototype, so nothing may hand its content out.
+    assert.ok(panel.includes('const isUnpairedPlan = unpairedPlans.has(doc.id)'));
+    // Download is offered only when the row is not an unpaired plan.
+    assert.match(
+      panel,
+      /\{!isUnpairedPlan && \(\s*<button type="button" className="link" onClick=\{\(\) => handleDownload\(doc\)\}>/,
+      'Download must be gated on the row not being an unpaired plan'
+    );
+    // Implement and Not OK live in the Prototype block, which is
+    // gated the same way.
+    assert.ok(panel.includes('{isPrototype && !isUnpairedPlan && ('), 'Implement / Not OK must be gated on the row not being an unpaired plan');
+    // Expanding an unpaired plan shows the marker note, never the
+    // plan content; the confirm panel and the Not OK form are gated
+    // the same way.
+    assert.ok(panel.includes('Its content is not shown here.'));
+    assert.ok(panel.includes('{!isUnpairedPlan && renderDocumentContent(doc, isPrototype)}'), 'an unpaired plan must never render its content');
+    assert.ok(panel.includes('{isPrototype && !isUnpairedPlan && confirmImplementId === doc.id && isPm && ('), 'the Implement confirm panel must not open for an unpaired plan');
+    assert.ok(panel.includes('{isPrototype && !isUnpairedPlan && notOkId === doc.id && isPm && ('), 'the Not OK form must not open for an unpaired plan');
+    // Delete stays: an admin must be able to delete the unpaired plan.
+    assert.ok(panel.includes('handleDelete(doc)'));
   });
 
   await ok('Implement opens a confirm panel first; the ticket is only created on Send (ticket 6df4ba74)', () => {

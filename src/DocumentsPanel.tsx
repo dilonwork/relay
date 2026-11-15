@@ -763,6 +763,14 @@ export default function DocumentsPanel(props: DocumentsPanelProps) {
                         {group.docs.map((doc) => {
                           const isPrototype = categoryNameFor(doc.category_id) === 'Prototype';
                           const expanded = expandedId === doc.id;
+                          // Unpaired build plan (ticket 6df4ba74, review
+                          // return): the plan has no prototype, so it
+                          // offers no actions that would hand its
+                          // content out — no Download, no Implement,
+                          // no Not OK — and its content is never
+                          // rendered. Delete stays: an admin must be
+                          // able to delete the unpaired plan.
+                          const isUnpairedPlan = unpairedPlans.has(doc.id);
                           return (
                             <Fragment key={doc.id}>
                               <tr>
@@ -798,10 +806,12 @@ export default function DocumentsPanel(props: DocumentsPanelProps) {
                                 <td>{projectNameFor(doc.project_id)}</td>
                                 <td>{new Date(doc.created_at).toLocaleDateString()}</td>
                                 <td>
-                                  <button type="button" className="link" onClick={() => handleDownload(doc)}>
-                                    Download
-                                  </button>
-                                  {isPrototype && (
+                                  {!isUnpairedPlan && (
+                                    <button type="button" className="link" onClick={() => handleDownload(doc)}>
+                                      Download
+                                    </button>
+                                  )}
+                                  {isPrototype && !isUnpairedPlan && (
                                     <>
                                       {' '}
                                       <button
@@ -865,8 +875,17 @@ export default function DocumentsPanel(props: DocumentsPanelProps) {
                                         on Implement; its content is not shown here.
                                       </p>
                                     )}
-                                    {renderDocumentContent(doc, isPrototype)}
-                                    {isPrototype && confirmImplementId === doc.id && isPm && (
+                                    {/* Unpaired build plan (ticket 6df4ba74,
+                                        review return): no prototype, so no
+                                        content is shown here — pair it to
+                                        one or delete it. */}
+                                    {isUnpairedPlan && (
+                                      <p className="muted" style={{ marginTop: 0 }}>
+                                        This build plan has no prototype — pair it to one or delete it. Its content is not shown here.
+                                      </p>
+                                    )}
+                                    {!isUnpairedPlan && renderDocumentContent(doc, isPrototype)}
+                                    {isPrototype && !isUnpairedPlan && confirmImplementId === doc.id && isPm && (
                                       <div
                                         style={{
                                           marginTop: '1rem',
@@ -898,7 +917,7 @@ export default function DocumentsPanel(props: DocumentsPanelProps) {
                                         </button>
                                       </div>
                                     )}
-                                    {isPrototype && notOkId === doc.id && isPm && (
+                                    {isPrototype && !isUnpairedPlan && notOkId === doc.id && isPm && (
                                       <form
                                         onSubmit={(e) => {
                                           e.preventDefault();
@@ -938,7 +957,7 @@ export default function DocumentsPanel(props: DocumentsPanelProps) {
                                         </button>
                                       </form>
                                     )}
-                                    {isPrototype && !isPm && (
+                                    {isPrototype && !isUnpairedPlan && !isPm && (
                                       <p className="muted">Only accounts holding the PM role may open an implementation or re-planning ticket.</p>
                                     )}
                                   </td>
