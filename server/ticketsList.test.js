@@ -89,6 +89,12 @@ const queue = [
     assert.ok(src.includes('Next step for you'));
     assert.ok(src.includes('ticket-id'));
     assert.ok(src.includes('userName('));
+    // The assignee shows the display name, not the username (review
+    // return, ticket 7da410a5): userName delegates to the shared
+    // resolver the ticket detail uses.
+    assert.ok(src.includes('resolveUserName(users, id)'));
+    assert.ok(src.includes('resolveUserName,'));
+    assert.ok(!src.includes('found.username'));
     assert.ok(src.includes('stalled-dot'));
     assert.ok(src.includes('ticket-card-assignee'));
     assert.ok(src.includes("ticket-compact'"));

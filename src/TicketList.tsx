@@ -8,6 +8,7 @@ import {
   filterTicketsByTitle,
   formatTime,
   isStalledTicket,
+  resolveUserName,
   shortId,
   stateLabelFor,
   ticketsForTab,
@@ -66,12 +67,12 @@ export default function TicketList(props: TicketListProps) {
     return t.workflow_id ? workflowById.get(t.workflow_id) : undefined;
   }
 
-  // Display name from the directory; the short id is the fallback
-  // until the directory arrives or when the id is unresolvable.
+  // Display name from the directory (display_name, then username,
+  // then the short id) — the same resolver the ticket detail uses
+  // (review return, ticket 7da410a5: the list used to show the
+  // username, which is not what a person reads as a name).
   function userName(id: string | null): string {
-    if (!id) return '—';
-    const found = users.find((u) => u.id === id);
-    return found ? found.username : shortId(id);
+    return resolveUserName(users, id);
   }
 
   function nextStep(t: QueueEntry): string {
