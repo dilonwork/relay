@@ -221,7 +221,11 @@ account or password anywhere in the code.
   as an overlay drawer from a hamburger button (tap the scrim or the
   close button to dismiss it). On mobile the ticket list becomes cards,
   the Gantt timeline scrolls horizontally with a sticky label column,
-  and detail pages and forms stack in a single column.
+  and detail pages and forms stack in a single column. The workflow
+  editor tables become cards below 700px, with a scrollable section tab
+  row, a sticky Save/Cancel bar at the bottom, and 44px / 16px controls;
+  the hamburger button lives in the title bar. See the design doc,
+  ch. 31.
 - **Module views:** one module is shown at a time. The Dashboard is the
   default view; Tickets holds the ticket list (All tickets sub-page, with
   the Claimable queue tab and the project filter) and the Gantt timeline
@@ -437,9 +441,17 @@ each sub-page owns its own form state and handlers.
 - **Onboarding:** onboarding packages for external projects, per role
   agent — masked API key, live onboarding document with Regenerate,
   project prompt bundle, and the chat-room recommendation (see [Users split](#users-split-humans-and-agents)).
-- **Workflows:** workflow list and state machine editor (see
-  [Workflows](#workflows)); creating, editing, duplicating, deleting
-  and setting the active workflow are admin-only.
+- **Workflows:** the workflow list shows each workflow as a flow strip
+  (state chips joined by →, terminal states green, "+N more" past
+  five), the projects it is active for and how many tickets use it,
+  with one line naming every project's choice at once; creating a
+  workflow is a "+ New workflow" button in the title bar, and the editor
+  is a separate card below the list with section navigation (Basics /
+  Start from / States / Transitions / Roles) marking problem sections,
+  a read-only flow preview, and validation grouped by section (see
+  [Workflows](#workflows) and the design doc, ch. 28). Creating,
+  editing, duplicating, deleting and setting the active workflow are
+  admin-only.
 - **API keys:** API key management with an overview strip (total / active / revoked / never used across all
   accounts, from `GET /api/admin/api-keys`, prefixes only), agents first in the user picker with search,
   All / Active / Never used / Revoked filter chips, and status pills (Active green, Revoked grey, Never used
@@ -557,6 +569,17 @@ each sub-page owns its own form state and handlers.
   Undefined. The + icon next to the category filter adds more; a
   category is stored in the database, not in frontend state, so it
   survives refresh. Categories are global, not per-project.
+- **List presentation:** a chip row replaces the category filter — All (N)
+  plus one chip per category with its count, and a dashed "+ Category"
+  chip that opens the add-category form; switching a chip costs no
+  request. One toolbar row holds the title search, the Project select
+  and a "Showing N of M" count. Documents group under collapsible
+  category headers (the Prototype group opens expanded, the rest start
+  collapsed); the Category column and the intro paragraph are gone.
+  Actions have hierarchy: Implement is a dark button, Not OK an
+  amber-outlined button, Download and Delete stay small text links.
+  "+ New document" lives in the title bar and the form opens as a panel
+  on the same page. See the design doc, ch. 30.
 - **Filing a document:** the File a document form takes a title, a
   category, a project (required) and Markdown content; a
   .md / .txt file can be uploaded instead and its text lands in the
@@ -660,15 +683,53 @@ each sub-page owns its own form state and handlers.
   `/api/documents/upload`, `/api/document-categories`,
   `/api/documents/:id/download`).
 
+## Tickets list
+
+- **Ten tabs, one per workflow state:** All, Claimable, and one tab per
+  state (Done covers delivered and cancelled). Every tab shows its count,
+  and the Claimable tab is highlighted amber while it has work — the tab
+  row alone answers "where is the work?". The list loads the whole
+  project once when the view is entered (all tickets plus the claimable
+  queue, in parallel) and derives tabs and counts client-side, so
+  switching tabs needs no round trip.
+- **Next step everywhere:** a Next-step column renders on every tab, not
+  just Claimable — the server attaches `next_transition` to every row
+  the list endpoint returns, so a ticket in any state shows the
+  transition its viewer can take next, or — when none (a terminal ticket,
+  or another role's state).
+- **Find quickly:** a toolbar above the tabs holds a title search
+  (client-side substring), a density toggle (Comfortable / Compact) and
+  the project collapsed to a one-line chip (`Relay · 36 tickets ✕`, ✕ to
+  show all projects). Titles carry their short id underneath (the id is
+  what people quote in chat); assignees show as display names from the
+  public user directory (short id until the directory arrives, or when
+  the id is unresolvable). The Updated cell carries a stalled amber dot
+  with a tooltip when a ticket has not changed for 36h+ in a working
+  state (the same rule as the Gantt marker). On mobile the cards carry
+  the same fields (id, assignee name, next step, stalled dot) as the
+  table. See the design doc, ch. 27.
+
 ## Gantt view
 
 - **Gantt tab:** next to the ticket list, the Gantt tab shows every
   ticket under the current project filter as a bar on a shared time
   axis, from `created_at` to `updated_at` (or now while the ticket is
-  not terminal), colored by status and grouped by project.
-- **Task relations:** the line under each bar is the ticket's status
-  journey, read from its transition history; hovering a bar shows the
-  journey with times. Clicking a bar opens the ticket detail.
+  not terminal), grouped by project. Each bar is segmented by status —
+  one slice per stay in a state, coloured per status, built from the
+  ticket's transition history — so a bar that is mostly one colour is a
+  ticket stuck in one state. The bar's length still means age; the
+  journey text line under each row is gone (the same information is now
+  in the bar). Hovering a bar shows the journey with the date each
+  status was entered. Clicking a bar opens the ticket detail.
+- **Toolbar and summary:** two rows — search + status chips on the
+  first, view controls (Group by, zoom, Today line, Stalled only,
+  Density) plus the "Showing N of M" count inline on the second. A
+  summary line above the chart shows the stalled count and the oldest
+  stalled ticket with its status and age in that status. The project
+  header is a one-line chip in the toolbar (`Relay · 9 tickets ✕`, ✕
+  to show all projects). The axis shows day-boundary ticks ("Nov 8"
+  style), re-computed when zoom changes and thinned to at most eight
+  on a wide window.
 - **Find quickly:** search-as-you-type over title and ticket id (full
   UUID or 8-character prefix), status chips (All plus each status,
   with counts), group by Project or Status, collapsible groups
@@ -677,13 +738,13 @@ each sub-page owns its own form state and handlers.
 - **See weight:** a dashed Today line (toggleable), stalled tickets
   get an amber bar border and a Stalled badge (working state, 36 hours
   or more without a transition; "Stalled only" shows just those),
-  density Comfortable (journey line shown) or Compact (tighter rows,
-  journey line hidden). Defaults are unchanged: no filter, project
-  grouping, 1× zoom render exactly what the view showed before.
+  density Comfortable or Compact (tighter rows). Defaults are unchanged:
+  no filter, project grouping, 1× zoom render exactly what the view
+  showed before.
 - No new endpoint or schema change: the view reuses `GET /api/tickets`
   and `GET /api/tickets/:id` (which returns the transition history).
   Inter-ticket dependencies are out of scope — they would need a new
-  data model.
+  data model. See the design doc, ch. 25.
 
 ## Dashboard
 
