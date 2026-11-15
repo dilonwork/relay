@@ -53,6 +53,10 @@ interface DocumentsPanelProps {
   // The panel reports the create form's open state so App hides the
   // title-bar action while the form is open.
   onCreateOpenChange?: (open: boolean) => void;
+  // The panel calls this when it opens a form for a request, so App
+  // resets the counter to 0 (review return, ticket b2d67623 — the
+  // same consumed-request fix as the Workflows page, ticket b56b1145).
+  onCreateRequestConsumed?: () => void;
   onOpenTicket: (id: string) => void;
   onError: (msg: string) => void;
   onNotice: (msg: string) => void;
@@ -135,6 +139,7 @@ export default function DocumentsPanel(props: DocumentsPanelProps) {
     refreshKey,
     createRequest,
     onCreateOpenChange,
+    onCreateRequestConsumed,
     onOpenTicket,
     onError,
     onNotice,
@@ -202,10 +207,20 @@ export default function DocumentsPanel(props: DocumentsPanelProps) {
 
   // Title-bar "+ New document" (ticket b2d67623): App bumps
   // createRequest per click, and the panel opens a fresh create form
-  // per bump. The counter, not a boolean, so two clicks in a row
-  // (open, close, open) still fire.
+  // per bump — and the request is consumed at once, so App resets the
+  // counter to 0. The counter is a pending request, not a latch:
+  // without the reset, the mount effect would re-open a blank create
+  // form on every return to the page (review return, ticket b2d67623;
+  // the same defect as the Workflows page, ticket b56b1145). A ref
+  // remembering the last-seen counter does not fix it: the panel
+  // unmounts on view switch, so the ref resets on remount and the
+  // stale counter opens the form again — the consumed report is the
+  // fix, as on the Workflows page.
   useEffect(() => {
-    if (createRequest > 0) openCreate();
+    if (createRequest > 0) {
+      openCreate();
+      onCreateRequestConsumed?.();
+    }
     // openCreate is defined below; the effect only needs to run when
     // the counter changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps

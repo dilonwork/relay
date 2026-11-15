@@ -131,6 +131,13 @@ const docs = [
     assert.ok(app.includes('onCreateOpenChange={setDocumentsCreateFormOpen}'));
   });
 
+  await ok('the create request is consumed, so returning to the page does not auto-open a blank form (review return)', () => {
+    assert.ok(panel.includes('onCreateRequestConsumed?: () => void;'), 'the panel must accept a consumed report');
+    assert.ok(panel.includes('onCreateRequestConsumed?.();'), 'opening the form must consume the request at once');
+    assert.ok(app.includes('onCreateRequestConsumed={() => setDocumentsCreateRequest(0)}'), 'App must reset the counter when the request is consumed');
+    assert.ok(!panel.includes('useRef'), 'a ref remembering the last-seen counter must not be the fix — it resets on remount');
+  });
+
   await ok('CSS has the dashed chip, amber-outline button, toolbar and group header', () => {
     assert.ok(css.includes('.chip.dashed'));
     assert.ok(css.includes('button.amber-outline'));
