@@ -685,6 +685,34 @@ export function validateWorkflowForm(form: {
   return problems;
 }
 
+// Duplicate a workflow into an unsaved draft (ticket c7c3bba5): the
+// pre-fill for the editor when an admin copies an existing workflow.
+// The draft is a deep copy — states in flow order, transitions, and
+// the roles map — so editing it never mutates the source workflow's
+// in-memory data. The name defaults to "<source name> (copy)" and the
+// project binding is carried over (a Global workflow copies to Global).
+// The draft opens in create mode (editingId null), so Save creates a
+// new workflow through the existing create path and Cancel discards it
+// with no API call; nothing is created here.
+export interface WorkflowDuplicateDraft {
+  name: string;
+  projectId: string | null;
+  states: Workflow['states'];
+  transitions: Workflow['transitions'];
+  roles: Workflow['roles'];
+}
+
+export function buildDuplicateDraft(source: Workflow): WorkflowDuplicateDraft {
+  const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value));
+  return {
+    name: `${source.name} (copy)`,
+    projectId: source.project_id ?? null,
+    states: clone(source.states || []).sort((a, b) => a.sort_order - b.sort_order),
+    transitions: clone(source.transitions || []),
+    roles: clone(source.roles || {}),
+  };
+}
+
 // Move one state to a new position in the States table (0-based target):
 // the reorder control the redesign replaces the one-click-at-a-time
 // up/down buttons with.
