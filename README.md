@@ -157,7 +157,7 @@ relay/
 │   ├── viewHash.test.js
 │   └── migrations.test.js
 ├── db/
-│   └── migrations/       # schema as SQL migrations (001-022)
+│   └── migrations/       # schema as SQL migrations (001-023)
 ├── doc/
 │   └── design.md         # design document (Traditional Chinese)
 ├── screenshots/          # README screenshots (see screenshots/README.md)
@@ -185,7 +185,7 @@ The backend needs a PostgreSQL database (default name `relay`, see
 not done by the code in this repo; the server creates the `tickets`,
 `ticket_transitions`, `users`, `sessions`, `api_keys`, `projects`,
 `monitor_reminders` and `workflows` tables itself on startup (migrations
-`db/migrations/001-022`).
+`db/migrations/001-023`).
 
 On first run the users table is empty, so the app shows a setup screen:
 create the first admin account there (username, display name, password).
@@ -262,7 +262,7 @@ way, including the three-layer role-map fallback and the delete rules.
 Custom workflow definitions are covered too: the three example flows
 are walked end to end (including the backward move), the definition
 validator's rules are tested case by case, and the migration files are
-tested for the 001→022 sequence. The document service is tested the
+tested for the 001→023 sequence. The document service is tested the
 same way, including the filename slug, the project scope rules, the
 project ownership (project_id stored and returned, the list filters by
 project, unassigned documents show as Unassigned, the agent upload
@@ -282,8 +282,8 @@ onboarding document regenerating from a live workflow edit, and the
 project prompt bundle (whole project context, base-URL resolution,
 no token in the bundle).
 
-468 tests in total: state machine 21, tickets 44, projects 16, onboarding 12, public base URL 5, auth 21,
-admin 7, API keys 8, monitor 18, workflows 30, quick-create builder 11, documents 31, document tickets 13, document render 18, gantt helpers 27, admin nav 5, view hash 8, migrations 34, role lists 4, title bar 7, dashboard redesign 17, ticket detail redesign 16, projects redesign 15, admin API keys redesign 12, workflows redesign 15, workflow editor mobile redesign 17, documents redesign 16, tickets list redesign 8, workflow duplicate 12.
+482 tests in total: state machine 21, tickets 44, projects 16, onboarding 12, public base URL 5, auth 21,
+admin 7, API keys 8, monitor 18, workflows 30, quick-create builder 11, documents 35, document tickets 16, document render 18, gantt helpers 27, admin nav 5, view hash 8, migrations 36, role lists 4, title bar 7, dashboard redesign 17, ticket detail redesign 16, projects redesign 15, admin API keys redesign 12, workflows redesign 15, workflow editor mobile redesign 17, documents redesign 21, tickets list redesign 8, workflow duplicate 12.
 
 ## Accounts & authentication
 
@@ -579,7 +579,32 @@ each sub-page owns its own form state and handlers.
   it); the category must already exist, and the project must already
   exist. Uploaded documents are filed with
   `source='agent'` and show up in the Documents page like any other
-  document.
+  document. The upload body also accepts an optional
+  `parent_document_id`, which files the document as the build plan of
+  an existing prototype (see the next bullet); the manual
+  `POST /api/documents` endpoint accepts the same field, and the
+  "+ New document" form offers it as "Attach to prototype (optional)"
+  when the Prototype category is chosen.
+- **Build plan attached to its prototype:** a UI&UX delivery files
+  two documents — the interactive prototype and its build plan
+  (Prompt). The plan is filed with `parent_document_id` pointing at
+  its prototype, so the list shows one row per prototype set and the
+  plan never appears as its own row. Expanding a prototype renders
+  the visual prototype only; the plan shows as a
+  "+ Build plan attached" pill (title only — its content is never
+  rendered in Documents). When the PM clicks Implement, a confirm
+  panel lists what the implementer will receive (the visual prototype
+  and, when attached, the build plan); on Send the implementation
+  ticket carries both — the prototype reference and content, plus a
+  "Build plan (Prompt) — for the implementer:" section with the plan
+  reference and full content. Not OK carries the same section marked
+  "for the planner". Download downloads the visual prototype only.
+  The single-Implement guard and the implementation badge are
+  unchanged. Existing plan rows were paired to their prototypes by
+  title ("\<X> — recommendations" → "\<X> — interactive prototype")
+  in migration 023; a plan with no matching prototype stays visible
+  with a "Plan — no prototype" marker until an admin pairs or
+  deletes it.
 - **Download:** each document has a Download button; the stored
   Markdown is rendered as a `.md` file whose name comes from the title
   (lowercase, dashes, Unicode letters kept, capped at 80 characters).

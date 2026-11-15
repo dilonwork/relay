@@ -8,8 +8,11 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {
   countDocumentsByCategory,
+  expectedPrototypeTitle,
   filterDocumentsByTitle,
   groupDocumentsByCategory,
+  isPlanTitle,
+  unpairedPlanIds,
   visibleDocuments,
 } = require('../src/helpers.ts');
 
@@ -74,6 +77,42 @@ const docs = [
     assert.deepEqual(visibleDocuments(docs, 'c-notes', 'redesign'), []);
   });
 
+  await ok('a build plan pairs to its prototype by title suffix (ticket 6df4ba74)', () => {
+    assert.equal(isPlanTitle('Dashboard redesign — recommendations'), true);
+    assert.equal(isPlanTitle('Dashboard redesign — interactive prototype'), false);
+    assert.equal(isPlanTitle('Weekly sync notes'), false);
+    assert.equal(isPlanTitle('recommendations'), false);
+    assert.equal(expectedPrototypeTitle('Dashboard redesign — recommendations'), 'Dashboard redesign — interactive prototype');
+    assert.equal(expectedPrototypeTitle('Dashboard redesign — interactive prototype'), null);
+    assert.equal(expectedPrototypeTitle('Weekly sync notes'), null);
+  });
+
+  await ok('unpaired plans are the plan titles with no parent and no matching prototype in the same project (ticket 6df4ba74)', () => {
+    const withPrototype = [
+      { id: 'p1', title: 'Dashboard redesign — interactive prototype', project_id: 'proj-1', parent_document_id: null },
+      { id: 'r1', title: 'Dashboard redesign — recommendations', project_id: 'proj-1', parent_document_id: null },
+    ];
+    assert.deepEqual([...unpairedPlanIds(withPrototype)], []);
+    const orphan = [
+      { id: 'r2', title: 'Orphan — recommendations', project_id: 'proj-1', parent_document_id: null },
+    ];
+    assert.deepEqual([...unpairedPlanIds(orphan)], ['r2']);
+    // A prototype in another project does not pair the plan.
+    const foreign = [
+      { id: 'p2', title: 'Orphan — interactive prototype', project_id: 'proj-2', parent_document_id: null },
+      { id: 'r2', title: 'Orphan — recommendations', project_id: 'proj-1', parent_document_id: null },
+    ];
+    assert.deepEqual([...unpairedPlanIds(foreign)], ['r2']);
+    // An attached plan (with a parent) never needs a marker, and a
+    // prototype title never counts as a plan.
+    const attached = [
+      { id: 'p1', title: 'Dashboard redesign — interactive prototype', project_id: 'proj-1', parent_document_id: null },
+      { id: 'r1', title: 'Dashboard redesign — recommendations', project_id: 'proj-1', parent_document_id: 'p1' },
+    ];
+    assert.deepEqual([...unpairedPlanIds(attached)], []);
+    assert.deepEqual([...unpairedPlanIds([])], []);
+  });
+
   const panel = fs.readFileSync(path.join(__dirname, '../src/DocumentsPanel.tsx'), 'utf8');
   const app = fs.readFileSync(path.join(__dirname, '../src/App.tsx'), 'utf8');
   const css = fs.readFileSync(path.join(__dirname, '../src/index.css'), 'utf8');
@@ -111,6 +150,31 @@ const docs = [
     assert.ok(panel.includes('handleDownload(doc)'));
     assert.ok(panel.includes('handleDelete(doc)'));
     assert.ok(panel.includes('>Implement<') || panel.includes('Implement\n'));
+  });
+
+  await ok('one row per prototype set: the prototype carries a Build plan attached pill, an unpaired plan an amber marker (ticket 6df4ba74)', () => {
+    assert.ok(panel.includes('+ Build plan attached'));
+    assert.ok(panel.includes('className="pill grey"'));
+    assert.ok(panel.includes('doc.attached_plan'));
+    assert.ok(panel.includes('Plan — no prototype'));
+    assert.ok(panel.includes('className="pill amber"'));
+    assert.ok(panel.includes('unpairedPlanIds(documents)'));
+    assert.ok(panel.includes('Build plan attached:'), 'the expanded row names the attached plan');
+  });
+
+  await ok('Implement opens a confirm panel first; the ticket is only created on Send (ticket 6df4ba74)', () => {
+    assert.ok(panel.includes('onClick={() => openImplementConfirm(doc)}'));
+    assert.ok(panel.includes('confirmImplementId'));
+    assert.ok(panel.includes('The implementer will receive:'));
+    assert.ok(panel.includes('Send to implementation'));
+    assert.ok(panel.includes('handleImplementSend(doc)'));
+    assert.ok(panel.includes('No build plan attached — the ticket will carry the prototype only.'));
+  });
+
+  await ok('the create form offers attaching a plan to its prototype (ticket 6df4ba74)', () => {
+    assert.ok(panel.includes('Attach to prototype (optional)'));
+    assert.ok(panel.includes('parent_document_id: newParentId || null'));
+    assert.ok(panel.includes('None — file as a standalone document'));
   });
 
   await ok('create form is a panel on the page, not a separate File a document card', () => {

@@ -434,6 +434,35 @@ async function main() {
     assert.ok(sql.includes('END IF;'), '018: guard must close with END IF');
   });
 
+  await ok('migration 023 adds documents.parent_document_id with FK, self-parent CHECK and index (ticket 6df4ba74)', async () => {
+    const sql = readMigration('023_documents_parent_document.sql');
+    assert.ok(sql.includes('ADD COLUMN IF NOT EXISTS parent_document_id UUID'), '023: missing ADD COLUMN for parent_document_id');
+    assert.ok(sql.includes('ADD CONSTRAINT documents_parent_document_id_fkey FOREIGN KEY (parent_document_id) REFERENCES documents(id) ON DELETE SET NULL'), '023: missing parent FK (deleting a prototype unpairs its plans)');
+    assert.ok(sql.includes("ADD CONSTRAINT documents_parent_not_self CHECK (parent_document_id IS NULL OR parent_document_id <> id)"), '023: missing self-parent CHECK');
+    assert.ok(sql.includes('CREATE INDEX IF NOT EXISTS idx_documents_parent ON documents (parent_document_id)'), '023: missing parent index');
+  });
+
+  await ok('migration 023 pairs existing build plans to their prototypes by title, only where no parent is set yet (ticket 6df4ba74)', async () => {
+    const sql = readMigration('023_documents_parent_document.sql');
+    // Backfill: "<X> — recommendations" pairs to "<X> — interactive
+    // prototype" in the same project and the same (Prototype)
+    // category; only plans with no parent yet are touched, so
+    // re-running the migration is a no-op.
+    assert.ok(sql.includes('UPDATE documents plan'), '023: missing pairing UPDATE');
+    assert.ok(sql.includes("plan.title LIKE '% — recommendations'"), '023: pairing must match the plan title suffix');
+    assert.ok(sql.includes("|| ' — interactive prototype'"), '023: pairing must derive the prototype title from the plan title');
+    assert.ok(sql.includes('plan.parent_document_id IS NULL'), '023: pairing must only touch plans with no parent yet');
+    assert.ok(sql.includes('proto.parent_document_id IS NULL'), '023: pairing must only pair to top-level prototypes');
+    assert.ok(sql.includes('proto.project_id IS NOT DISTINCT FROM plan.project_id'), '023: pairing must stay in the same project');
+    assert.ok(sql.includes('ORDER BY p2.created_at ASC, p2.id ASC LIMIT 1'), '023: the earliest prototype wins when titles collide');
+    // The FK is guarded like 018: added only when every stored
+    // parent references an existing document.
+    assert.ok(
+      sql.includes('FROM documents d WHERE d.parent_document_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM documents p WHERE p.id = d.parent_document_id)'),
+      '023: guard must check stored parent_document_ids against the documents table'
+    );
+  });
+
   await ok('migration 019 adds users.kind with the API-key backfill rule', async () => {
     const sql = readMigration('019_users_split_humans_agents.sql');
     assert.ok(sql.includes('ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT \'human\''), '019: missing ADD COLUMN for kind');

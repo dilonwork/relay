@@ -7,9 +7,11 @@ import {
   findPrototypeFlow,
   isValidReplanReason,
 } from './documentTickets';
+import type { PrototypeDocumentRef } from './documentTickets';
 import {
   countDocumentsByCategory,
   groupDocumentsByCategory,
+  unpairedPlanIds,
   visibleDocuments,
 } from './helpers';
 import {
@@ -34,6 +36,20 @@ import {
 // (ticket b14207c5) and Implement is disabled — the server stores
 // the link on the document and rejects a second Implement for the
 // same prototype, so a duplicate cannot be opened by accident.
+//
+// One row per prototype set (ticket 6df4ba74, design doc ch. 34): a
+// UI&UX delivery is a prototype plus its build plan, and the plan
+// points at its prototype (parent_document_id). The list shows the
+// prototype only, with a "+ Build plan attached" pill when a plan
+// exists; the plan never appears as its own row, is never expanded
+// or downloaded from Documents, and is handed out exactly once —
+// inside the implementation ticket, when the PM clicks Implement.
+// Implement therefore opens a confirm panel first (Send to
+// implementation / Cancel) listing what the implementer will receive;
+// the ticket carries the prototype and the plan, and the re-planning
+// ticket carries the reason, the prototype and the plan. A plan with
+// no prototype stays visible with a "Plan — no prototype" marker
+// until an admin pairs or deletes it.
 //
 // This panel owns its data (like AdminPanel): the list and the
 // categories load on mount, when the project filter changes, and
@@ -168,12 +184,27 @@ export default function DocumentsPanel(props: DocumentsPanelProps) {
   const [newProjectId, setNewProjectId] = useState('');
   const [newContent, setNewContent] = useState('');
   const [uploadedName, setUploadedName] = useState('');
+  // Attach to a prototype (ticket 6df4ba74): the id of the Prototype
+  // document this new document is the build plan for, or '' for a
+  // standalone document. Only offered when the chosen category is
+  // Prototype; the server validates the parent (exists, same project,
+  // Prototype, not itself attached).
+  const [newParentId, setNewParentId] = useState('');
 
   // New-category form (the + icon next to the category filter).
   const [showCategory, setShowCategory] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState('');
 
   const [implementingId, setImplementingId] = useState<string | null>(null);
+
+  // Implement confirm (ticket 6df4ba74): which document the confirm
+  // panel is open for. Implement does not create the ticket at once —
+  // it lists what the implementer will receive (the visual prototype
+  // plus the attached build plan, when one exists) and only creates
+  // the ticket on Send. The Prompt handoff is the one irreversible
+  // moment in this flow, so it is a deliberate action, not an
+  // accidental click.
+  const [confirmImplementId, setConfirmImplementId] = useState<string | null>(null);
 
   // Not OK (re-planning) form: which document the form is open for,
   // the reason the reviewer typed, and whether a submit is in flight.
@@ -246,6 +277,9 @@ export default function DocumentsPanel(props: DocumentsPanelProps) {
   const visible = visibleDocuments(documents, categoryFilter, query);
   const categoryCounts = countDocumentsByCategory(documents);
   const groups = groupDocumentsByCategory(visible, categories);
+  // Plans with no prototype in the loaded list (ticket 6df4ba74):
+  // they stay visible with a "Plan — no prototype" marker.
+  const unpairedPlans = unpairedPlanIds(documents);
 
   // A group is collapsed when the user collapsed it by hand, or —
   // with no override — when it is not the Prototype group: the
@@ -261,6 +295,20 @@ export default function DocumentsPanel(props: DocumentsPanelProps) {
   // exists, otherwise the first category in the list.
   const defaultCategoryId =
     categories.find((c) => c.name === 'Prototype')?.id || categories[0]?.id || '';
+  // The Prototype category id ('' when no Prototype category exists):
+  // the "attach to prototype" field is only offered for it.
+  const prototypeCategoryId =
+    categories.find((c) => c.name === 'Prototype')?.id || '';
+  // Top-level Prototype documents in the form's project, for the
+  // "attach to prototype" field: a plan attaches to a prototype in
+  // the same project, never to another plan.
+  const parentCandidates = documents.filter(
+    (d) =>
+      prototypeCategoryId !== '' &&
+      d.category_id === prototypeCategoryId &&
+      !d.parent_document_id &&
+      (d.project_id || null) === (newProjectId || null),
+  );
 
   // Open the create form, pre-filled the same way the old in-page
   // button did: Prototype as the category, and the project from the
@@ -272,6 +320,7 @@ export default function DocumentsPanel(props: DocumentsPanelProps) {
     setShowCreate(true);
     setNewCategoryId(defaultCategoryId);
     setNewProjectId(projectFilter !== 'all' && projectFilter !== 'none' ? projectFilter : (projects[0]?.id || ''));
+    setNewParentId('');
   }
 
   async function handleCreateCategory(e: React.FormEvent) {
@@ -302,11 +351,13 @@ export default function DocumentsPanel(props: DocumentsPanelProps) {
         category_id: newCategoryId,
         project_id: newProjectId || null,
         content: newContent,
+        parent_document_id: newParentId || null,
       });
       setNewTitle('');
       setNewContent('');
       setUploadedName('');
       setNewProjectId('');
+      setNewParentId('');
       setShowCreate(false);
       await loadDocuments();
       onNotice(`Document filed: ${created.title}`);
@@ -347,27 +398,51 @@ export default function DocumentsPanel(props: DocumentsPanelProps) {
   }
 
   // Open a ticket to implement this Prototype, reusing the existing
-  // ticket creation (POST /api/tickets, PM only). The payload comes
-  // from src/documentTickets.ts: the ticket carries the document's
-  // reference — title, category, id and a link back to the Documents
-  // page — plus the document's full content, so the implementer can
-  // read the prototype from the ticket itself; the ticket captures
-  // the prototype as it was when implementation was requested, and
-  // the link points at the live document. The ticket inherits the
-  // document's project (a document with no project opens a ticket
-  // with no project). No workflow is named, so the ticket follows
-  // the built-in flow, like a ticket created without a workflow from
-  // the New ticket form.
-  async function handleImplement(doc: DocumentItem) {
+  // ticket creation (POST /api/tickets, PM only). Implement does not
+  // create the ticket at once (ticket 6df4ba74): it opens a confirm
+  // panel in the document's expanded row, listing what the
+  // implementer will receive — the visual prototype plus the attached
+  // build plan, when one exists — and only creates the ticket on
+  // Send. The payload comes from src/documentTickets.ts: the ticket
+  // carries the document's reference — title, category, id and a link
+  // back to the Documents page — plus the document's full content, so
+  // the implementer can read the prototype from the ticket itself;
+  // the ticket captures the prototype as it was when implementation
+  // was requested, and the link points at the live document. When the
+  // prototype has an attached build plan, the ticket also carries the
+  // plan — reference plus full content, marked "for the implementer".
+  // The plan's content is fetched at Send time, never rendered in
+  // Documents: the list only carries the plan's title. The ticket
+  // inherits the document's project (a document with no project opens
+  // a ticket with no project). No workflow is named, so the ticket
+  // follows the built-in flow, like a ticket created without a
+  // workflow from the New ticket form.
+  function openImplementConfirm(doc: DocumentItem) {
+    if (!isPm) return;
+    setConfirmImplementId(doc.id);
+    setExpandedId(doc.id);
+  }
+
+  async function handleImplementSend(doc: DocumentItem) {
     if (!isPm) return;
     setImplementingId(doc.id);
-    const payload = buildImplementTicketPayload(
-      doc,
-      projectNameFor(doc.project_id),
-      window.location.origin,
-    );
     try {
+      let plan: PrototypeDocumentRef | null = null;
+      if (doc.attached_plan) {
+        // The plan left Documents the moment this ticket is created,
+        // so a plan that vanished between the list load and Send must
+        // stop the handoff, not silently send a ticket without it.
+        const planDoc = await api.getDocument(doc.attached_plan.id);
+        plan = { id: planDoc.id, title: planDoc.title, content: planDoc.content, project_id: planDoc.project_id };
+      }
+      const payload = buildImplementTicketPayload(
+        doc,
+        projectNameFor(doc.project_id),
+        window.location.origin,
+        plan,
+      );
       const created = await api.createTicket(payload);
+      setConfirmImplementId(null);
       onNotice(`Ticket created: ${created.title}`);
       onOpenTicket(created.id);
     } catch (err) {
@@ -390,16 +465,20 @@ export default function DocumentsPanel(props: DocumentsPanelProps) {
   // ticket creation (POST /api/tickets, PM only). The payload comes
   // from src/documentTickets.ts: the title says this is a re-plan,
   // the description leads with the reviewer's reason, then the same
-  // document reference and full content as the Implement ticket. The
-  // ticket follows the Prototype flow: the flow's id is generated
-  // when an admin builds it in the editor, so it is resolved by name
-  // from GET /api/workflows at submit time, never hardcoded — the
-  // server rejects a ticket on an unknown workflow, and a missing
-  // Prototype flow is reported here instead of opening a ticket on
-  // the wrong flow. The reason is also passed as the ticket creation
-  // reason, so it shows in the ticket's history. On success the app
-  // navigates to the new ticket, like Implement does, so the
-  // submitter sees the ticket was created.
+  // document reference and full content as the Implement ticket. When
+  // the prototype has an attached build plan (ticket 6df4ba74), the
+  // description also carries the plan — marked "for the planner", so
+  // they can revise it — fetched at submit time, like Implement
+  // fetches it at Send time. The ticket follows the Prototype flow:
+  // the flow's id is generated when an admin builds it in the
+  // editor, so it is resolved by name from GET /api/workflows at
+  // submit time, never hardcoded — the server rejects a ticket on an
+  // unknown workflow, and a missing Prototype flow is reported here
+  // instead of opening a ticket on the wrong flow. The reason is
+  // also passed as the ticket creation reason, so it shows in the
+  // ticket's history. On success the app navigates to the new
+  // ticket, like Implement does, so the submitter sees the ticket
+  // was created.
   async function handleNotOkSubmit(doc: DocumentItem) {
     if (!isPm) return;
     if (!isValidReplanReason(notOkReason)) return;
@@ -411,11 +490,17 @@ export default function DocumentsPanel(props: DocumentsPanelProps) {
         onError('Prototype flow workflow not found. Ask an admin to create a workflow named "Prototype flow" before opening a re-planning ticket.');
         return;
       }
+      let plan: PrototypeDocumentRef | null = null;
+      if (doc.attached_plan) {
+        const planDoc = await api.getDocument(doc.attached_plan.id);
+        plan = { id: planDoc.id, title: planDoc.title, content: planDoc.content, project_id: planDoc.project_id };
+      }
       const { title, description, reason } = buildReplanTicket(
         doc,
         notOkReason,
         projectNameFor(doc.project_id),
         window.location.origin,
+        plan,
       );
       const created = await api.createTicket({
         title,
@@ -491,7 +576,13 @@ export default function DocumentsPanel(props: DocumentsPanelProps) {
                 <select
                   id="doc-new-project"
                   value={newProjectId}
-                  onChange={(e) => setNewProjectId(e.target.value)}
+                  onChange={(e) => {
+                    setNewProjectId(e.target.value);
+                    // The parent must sit in the same project: a
+                    // project change drops the selection rather than
+                    // submitting a parent from another project.
+                    setNewParentId('');
+                  }}
                 >
                   {projects.map((p) => (
                     <option key={p.id} value={p.id}>
@@ -501,6 +592,27 @@ export default function DocumentsPanel(props: DocumentsPanelProps) {
                 </select>
               </div>
             </div>
+            {prototypeCategoryId !== '' && newCategoryId === prototypeCategoryId && (
+              <>
+                <label className="field" htmlFor="doc-new-parent">Attach to prototype (optional)</label>
+                <select
+                  id="doc-new-parent"
+                  value={newParentId}
+                  onChange={(e) => setNewParentId(e.target.value)}
+                >
+                  <option value="">None — file as a standalone document</option>
+                  {parentCandidates.map((d) => (
+                    <option key={d.id} value={d.id}>
+                      {d.title}
+                    </option>
+                  ))}
+                </select>
+                <p className="muted">
+                  A build plan filed with its prototype is attached to it: it no longer appears as its
+                  own row, and it is handed to the implementer inside the implementation ticket.
+                </p>
+              </>
+            )}
             <label className="field" htmlFor="doc-new-content">Content (Markdown)</label>
             <textarea
               id="doc-new-content"
@@ -527,6 +639,7 @@ export default function DocumentsPanel(props: DocumentsPanelProps) {
                 setNewTitle('');
                 setNewContent('');
                 setUploadedName('');
+                setNewParentId('');
               }}
             >
               Cancel
@@ -658,6 +771,29 @@ export default function DocumentsPanel(props: DocumentsPanelProps) {
                                     {doc.title}
                                   </button>{' '}
                                   <ImplementationBadge doc={doc} onOpenTicket={onOpenTicket} />
+                                  {/* One row per prototype set (ticket 6df4ba74): a
+                                      prototype with an attached build plan
+                                      carries a grey pill; a plan with no
+                                      prototype stays visible with an amber
+                                      marker until an admin pairs or deletes
+                                      it. Attached plans never reach this
+                                      list, so they never need a pill. */}
+                                  {doc.attached_plan && (
+                                    <>
+                                      {' '}
+                                      <span className="pill grey" title={`Build plan attached: ${doc.attached_plan.title} — handed to the implementer on Implement; its content is not shown here.`}>
+                                        + Build plan attached
+                                      </span>
+                                    </>
+                                  )}
+                                  {unpairedPlans.has(doc.id) && (
+                                    <>
+                                      {' '}
+                                      <span className="pill amber" title="This build plan has no prototype — pair it to one or delete it.">
+                                        Plan — no prototype
+                                      </span>
+                                    </>
+                                  )}
                                 </td>
                                 <td>{projectNameFor(doc.project_id)}</td>
                                 <td>{new Date(doc.created_at).toLocaleDateString()}</td>
@@ -671,7 +807,7 @@ export default function DocumentsPanel(props: DocumentsPanelProps) {
                                       <button
                                         type="button"
                                         className="primary small"
-                                        onClick={() => handleImplement(doc)}
+                                        onClick={() => openImplementConfirm(doc)}
                                         disabled={!isPm || implementingId === doc.id || !!doc.implementation_status}
                                         title={
                                           !isPm
@@ -719,7 +855,49 @@ export default function DocumentsPanel(props: DocumentsPanelProps) {
                                         </button>
                                       </p>
                                     )}
+                                    {/* Attached build plan (ticket 6df4ba74): named
+                                        only — the plan's content is never
+                                        rendered in Documents; it travels
+                                        inside the implementation ticket. */}
+                                    {doc.attached_plan && (
+                                      <p className="muted" style={{ marginTop: 0 }}>
+                                        Build plan attached: {doc.attached_plan.title} — handed to the implementer
+                                        on Implement; its content is not shown here.
+                                      </p>
+                                    )}
                                     {renderDocumentContent(doc, isPrototype)}
+                                    {isPrototype && confirmImplementId === doc.id && isPm && (
+                                      <div
+                                        style={{
+                                          marginTop: '1rem',
+                                          border: '1px solid #d9e1e8',
+                                          background: '#f6f9fb',
+                                          borderRadius: '6px',
+                                          padding: '12px 14px',
+                                        }}
+                                      >
+                                        <p style={{ marginTop: 0 }}>The implementer will receive:</p>
+                                        <ul style={{ marginTop: 0 }}>
+                                          <li>Visual prototype: {doc.title}</li>
+                                          <li>
+                                            {doc.attached_plan
+                                              ? `Build plan (Prompt): ${doc.attached_plan.title}`
+                                              : 'No build plan attached — the ticket will carry the prototype only.'}
+                                          </li>
+                                        </ul>
+                                        <button
+                                          className="primary"
+                                          type="button"
+                                          onClick={() => void handleImplementSend(doc)}
+                                          disabled={implementingId === doc.id}
+                                        >
+                                          Send to implementation
+                                        </button>{' '}
+                                        <button type="button" className="link" onClick={() => setConfirmImplementId(null)}>
+                                          Cancel
+                                        </button>
+                                      </div>
+                                    )}
                                     {isPrototype && notOkId === doc.id && isPm && (
                                       <form
                                         onSubmit={(e) => {

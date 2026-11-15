@@ -48,6 +48,31 @@ const origin = 'http://129.146.97.44:3000';
     assert.ok(payload.description.includes('(No content)'));
   });
 
+  await ok('Implement: with an attached build plan the ticket carries the prototype and the plan, marked for the implementer (ticket 6df4ba74)', () => {
+    const plan = { id: 'doc-2', title: 'Gantt prototype — recommendations', content: '# Plan\nBuild the bars first.', project_id: 'proj-1' };
+    const payload = buildImplementTicket(doc, 'Relay', origin, plan);
+    assert.equal(payload.title, 'Implement Prototype: Gantt prototype');
+    // The prototype is still first, unchanged.
+    assert.ok(payload.description.includes('Implement the Prototype document "Gantt prototype".'));
+    assert.ok(payload.description.includes('Show bars.'));
+    assert.ok(payload.description.includes('Source plan document: Gantt prototype — recommendations (category: Prototype, document ID: doc-2)'));
+    assert.ok(payload.description.includes('Build the bars first.'));
+    // The plan section comes after the prototype content.
+    assert.ok(payload.description.indexOf('Show bars.') < payload.description.indexOf('Build plan (Prompt)'));
+    // The payload builder passes the plan through; the ticket still
+    // links to the prototype, not to the plan.
+    const full = buildImplementTicketPayload(doc, 'Relay', origin, plan);
+    assert.equal(full.document_id, 'doc-1');
+    assert.equal(full.description, payload.description);
+  });
+
+  await ok('Implement: without a plan the description has no plan section (ticket 6df4ba74)', () => {
+    const payload = buildImplementTicket(doc, 'Relay', origin);
+    assert.ok(!payload.description.includes('Build plan (Prompt)'));
+    const explicitNull = buildImplementTicket(doc, 'Relay', origin, null);
+    assert.equal(explicitNull.description, payload.description);
+  });
+
   await ok('Implement payload: the ticket inherits the document project (ticket 8f52044c)', () => {
     const payload = buildImplementTicketPayload(doc, 'Relay', origin);
     assert.equal(payload.project_id, 'proj-1');
@@ -101,6 +126,22 @@ const origin = 'http://129.146.97.44:3000';
   await ok('Re-plan: empty content falls back to (No content)', () => {
     const payload = buildReplanTicket({ ...doc, content: '' }, 'Missing the legend.', 'Relay', origin);
     assert.ok(payload.description.includes('(No content)'));
+  });
+
+  await ok('Re-plan: with an attached build plan the ticket carries the reason, the prototype and the plan, marked for the planner (ticket 6df4ba74)', () => {
+    const plan = { id: 'doc-2', title: 'Gantt prototype — recommendations', content: '# Plan\nBuild the bars first.', project_id: 'proj-1' };
+    const payload = buildReplanTicket(doc, 'The bars overlap.', 'Relay', origin, plan);
+    assert.equal(payload.title, 'Re-plan Prototype: Gantt prototype');
+    assert.ok(payload.description.includes('The bars overlap.'));
+    assert.ok(payload.description.includes('Show bars.'));
+    assert.ok(payload.description.includes('Build plan (Prompt) — for the planner:'));
+    assert.ok(payload.description.includes('Source plan document: Gantt prototype — recommendations (category: Prototype, document ID: doc-2)'));
+    assert.ok(payload.description.includes('Build the bars first.'));
+    assert.equal(payload.reason, 'The bars overlap.');
+    // An empty plan still falls back to (No content) in its section.
+    const emptyPlan = buildReplanTicket(doc, 'Too crowded.', 'Relay', origin, { ...plan, content: '' });
+    assert.ok(emptyPlan.description.includes('Build plan (Prompt) — for the planner:'));
+    assert.ok(emptyPlan.description.includes('(No content)'));
   });
 
   await ok('Re-plan reason: blank or whitespace-only is invalid, any text is valid', () => {
