@@ -92,7 +92,10 @@ export interface Transition {
   to_status: string;
   reason: string;
   handoff: string;
-  artifacts: string[];
+  // Artifacts attached to the transition: plain strings (the web UI
+  // sends one per line) or artifact objects (agents attach objects);
+  // the server stores both in the JSONB array (ticket 390f717f).
+  artifacts: Array<string | Record<string, unknown>>;
   result: string;
   created_at: string;
 }

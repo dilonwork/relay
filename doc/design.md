@@ -184,7 +184,7 @@ Traceability is not an add-on; it is one of the reasons this system exists. A ti
 - **When:** the server timestamp, unchangeable once written.
 - **From where to where:** a copy of the original state code and a copy of the new state code, not derived afterwards.
 - **Why:** a reason or work product note. Required for return, cancellation, and needs-clarification transitions; a blank reason must not switch. The handoff note (`handoff`) is a separate column: required for the two trial handoffs (decomposing → pending dev, in dev → pending review) during the trial phase, optional for other transitions; see Ch. 12.
-- **Attached output:** a reference to the step's deliverable, for example the decomposition list, change notes, test results, or deployment version.
+- **Attached output:** a reference to the step's deliverable, for example the decomposition list, change notes, test results, or deployment version. Artifacts are stored as a JSONB array on the transition record: plain strings stay strings, artifact objects stay objects (ticket 390f717f — `String()` on an object used to store the literal "[object Object]" and destroy the data). The read-back returns the same values, so a delivery can be verified from the ticket itself. Already-stored "[object Object]" rows are not rewritten; the data they lost cannot be recovered.
 
 ### Audit rules
 
@@ -1396,7 +1396,7 @@ No schema change: the list endpoint attaches a derived field to rows it already 
 
 ### Tests
 
-- `server/tickets.test.js` (3 new items, 43 total): the caller sees their pickup and forward steps on the built-in flow (requirement for the leader, pending_dev pickup and in_dev forward for the engineer, pending_review pickup and in_review forward for the reviewer, in_test forward for the tester, pending_deploy pickup and deploying forward for the deployer; delivered is null for everyone; the input rows are not mutated); clarify is the fallback when no forward step exists for the caller (needs_clarification and needs_acceptance_clarification for the PM, null for the engineer); a custom workflow reroutes the step (pending_dev belongs to the tester) and the queue agrees with the list on every claimable row.
+- `server/tickets.test.js` (3 new items, 44 total): the caller sees their pickup and forward steps on the built-in flow (requirement for the leader, pending_dev pickup and in_dev forward for the engineer, pending_review pickup and in_review forward for the reviewer, in_test forward for the tester, pending_deploy pickup and deploying forward for the deployer; delivered is null for everyone; the input rows are not mutated); clarify is the fallback when no forward step exists for the caller (needs_clarification and needs_acceptance_clarification for the PM, null for the engineer); a custom workflow reroutes the step (pending_dev belongs to the tester) and the queue agrees with the list on every claimable row. The 44th item is the artifact round-trip test (ticket 390f717f, ch. 7): an artifact object attached on delivery is stored and read back with its data, not as "[object Object]".
 
 ### Review return (2026-11-14)
 
