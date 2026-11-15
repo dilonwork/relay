@@ -62,27 +62,57 @@ function contentBlock(doc: PrototypeDocumentRef): string {
   ].join('\n');
 }
 
+// The attached build plan section (ticket 6df4ba74, design doc
+// ch. 34): the plan is never displayed in Documents — it travels
+// inside the ticket opened from its prototype, marked for its
+// audience. The implementer gets the plan "for the implementer", the
+// planner on a re-plan gets it "for the planner" (they revise it, so
+// they need it). The section carries the plan's reference and full
+// content, parallel to the prototype's source and content blocks.
+function planBlock(plan: PrototypeDocumentRef, projectName: string, origin: string, audience: 'implementer' | 'planner'): string {
+  const role = audience === 'implementer' ? 'for the implementer' : 'for the planner';
+  return [
+    '---',
+    `Build plan (Prompt) — ${role}:`,
+    `Source plan document: ${plan.title} (category: Prototype, document ID: ${plan.id})`,
+    `Document page: ${origin}/#/documents`,
+    `Project: ${projectName}`,
+    '',
+    'Plan content:',
+    plan.content ? plan.content : '(No content)',
+  ].join('\n');
+}
+
 // The Implement ticket (unchanged since ticket abe5fa10): the title
 // names the action, the description carries the document reference
 // plus the full content, so the implementer can read the prototype
 // from the ticket itself. No workflow is named, so the ticket follows
 // the built-in flow, like a ticket created without a workflow from
-// the New ticket form.
+// the New ticket form. When the prototype has an attached build plan
+// (ticket 6df4ba74), the description also carries the plan —
+// reference plus full content, marked "for the implementer" — so the
+// implementer reads the prototype and the Prompt from the ticket
+// itself, with nothing to hunt for. Without a plan the description
+// is exactly as before.
 export function buildImplementTicket(
   doc: PrototypeDocumentRef,
   projectName: string,
   origin: string,
+  plan?: PrototypeDocumentRef | null,
 ): TicketPayload {
-  const description = [
+  const parts = [
     `Implement the Prototype document "${doc.title}".`,
     '',
     sourceBlock(doc, projectName, origin),
     '',
     contentBlock(doc),
-  ].join('\n');
+  ];
+  if (plan) {
+    parts.push('', planBlock(plan, projectName, origin, 'implementer'));
+  }
   return {
     title: `Implement Prototype: ${doc.title}`,
-    description,
+    description: parts.join('\n'),
   };
 }
 
@@ -99,8 +129,9 @@ export function buildImplementTicketPayload(
   doc: PrototypeDocumentRef,
   projectName: string,
   origin: string,
+  plan?: PrototypeDocumentRef | null,
 ): { title: string; description: string; source: string; project_id: string | null; document_id: string } {
-  const { title, description } = buildImplementTicket(doc, projectName, origin);
+  const { title, description } = buildImplementTicket(doc, projectName, origin, plan);
   return { title, description, source: 'project', project_id: doc.project_id, document_id: doc.id };
 }
 
@@ -108,17 +139,21 @@ export function buildImplementTicketPayload(
 // that this is a re-plan, not an implementation, and the description
 // leads with the reviewer's reason, then the same document reference
 // and full content as the Implement ticket, so the planner can read
-// the prototype and the feedback from the ticket itself. The reason
-// is returned separately as well: the panel passes it as the ticket
-// creation reason, so it shows in the ticket's history.
+// the prototype and the feedback from the ticket itself. When the
+// prototype has an attached build plan (ticket 6df4ba74), the
+// description also carries the plan — marked "for the planner", so
+// they can revise it. The reason is returned separately as well: the
+// panel passes it as the ticket creation reason, so it shows in the
+// ticket's history.
 export function buildReplanTicket(
   doc: PrototypeDocumentRef,
   reason: string,
   projectName: string,
   origin: string,
+  plan?: PrototypeDocumentRef | null,
 ): TicketPayload & { reason: string } {
   const cleanReason = reason.trim();
-  const description = [
+  const parts = [
     `The Prototype document "${doc.title}" was reviewed as not OK and needs re-planning.`,
     '',
     'Reason / feedback:',
@@ -127,10 +162,13 @@ export function buildReplanTicket(
     sourceBlock(doc, projectName, origin),
     '',
     contentBlock(doc),
-  ].join('\n');
+  ];
+  if (plan) {
+    parts.push('', planBlock(plan, projectName, origin, 'planner'));
+  }
   return {
     title: `Re-plan Prototype: ${doc.title}`,
-    description,
+    description: parts.join('\n'),
     reason: cleanReason,
   };
 }

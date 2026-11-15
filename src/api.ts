@@ -156,6 +156,14 @@ export interface DocumentItem {
   // there is no (live) link. The server attaches both on every read.
   implementation_ticket_id: string | null;
   implementation_status: 'implemented' | 'in_progress' | null;
+  // Build-plan pairing (ticket 6df4ba74): a plan document points at
+  // its prototype through parent_document_id (null for a prototype
+  // and for every other document); the server attaches the plan's id
+  // and title to the prototype row as attached_plan — title only, the
+  // plan's content is never sent in the list — null when the
+  // prototype has no plan. The server attaches both on every read.
+  parent_document_id: string | null;
+  attached_plan: { id: string; title: string } | null;
 }
 
 // Public directory entry (ticket 978e4721): the ticket detail page
@@ -368,7 +376,7 @@ export const api = {
     return request<DocumentItem[]>(qs ? `/api/documents?${qs}` : '/api/documents');
   },
   getDocument: (id: string) => request<DocumentItem>(`/api/documents/${encodeURIComponent(id)}`),
-  createDocument: (payload: { title: string; category_id: string; project_id?: string | null; content?: string }) =>
+  createDocument: (payload: { title: string; category_id: string; project_id?: string | null; content?: string; parent_document_id?: string | null }) =>
     request<DocumentItem>('/api/documents', { method: 'POST', body: JSON.stringify(payload) }),
   deleteDocument: (id: string) =>
     request<DocumentItem>(`/api/documents/${encodeURIComponent(id)}`, { method: 'DELETE' }),

@@ -200,6 +200,42 @@ async function attachImplementationStatus(db, docs) {
   return docs;
 }
 
+// Attach each prototype's build plan (ticket 6df4ba74, design doc
+// ch. 34): the earliest plan pointing at the document (by created_at,
+// id), as { id, title } — title only, never content: the plan's
+// content is handed out inside the implementation ticket, never
+// displayed in Documents. Rows with no plan get attached_plan null,
+// so callers can always read the field. Only top-level rows carry
+// one: attached plans never appear in the list, so they never need
+// one of their own.
+async function attachAttachedPlans(db, docs) {
+  for (const doc of docs) {
+    doc.attached_plan = null;
+  }
+  if (!docs.length) return docs;
+  const ids = docs.map((d) => d.id);
+  const { rows } = await db.query(
+    'SELECT id, parent_document_id, title FROM documents WHERE parent_document_id = ANY($1) ORDER BY created_at ASC, id ASC',
+    [ids]
+  );
+  const byParent = new Map();
+  for (const row of rows) {
+    if (!byParent.has(row.parent_document_id)) {
+      byParent.set(row.parent_document_id, { id: row.id, title: row.title });
+    }
+  }
+  for (const doc of docs) {
+    doc.attached_plan = byParent.get(doc.id) || null;
+  }
+  return docs;
+}
+
+// Both read-time attachments, in one place: the implementation badge
+// (ticket b14207c5) and the attached build plan (ticket 6df4ba74).
+async function attachDocumentExtras(db, docs) {
+  return attachAttachedPlans(db, await attachImplementationStatus(db, docs));
+}
+
 // All categories, by name, so the order is deterministic everywhere:
 // the seeded defaults sort as Prototype before Undefined, and a
 // category added later lands in its alphabetical place. (Ordering by
@@ -245,6 +281,11 @@ async function createDocumentCategory(db, { actorId, actorRoles, name }) {
 // assignment overrides any project filter the caller passes,
 // including 'none' (unassigned documents are out of scope for
 // them, same as uncategorized tickets).
+//
+// One row per prototype set (ticket 6df4ba74, design doc ch. 34):
+// every list query excludes documents with a parent set, so an
+// attached build plan never appears as its own row — the prototype
+// row carries it as attached_plan (see attachAttachedPlans above).
 async function listDocuments(db, { projectId, categoryId, assignedProjectId } = {}) {
   const effectiveProject = assignedProjectId || cleanProjectId(projectId);
   if (assignedProjectId && projectId && cleanProjectId(projectId) !== assignedProjectId) {
@@ -257,39 +298,39 @@ async function listDocuments(db, { projectId, categoryId, assignedProjectId } = 
   if (cleanCategoryId && effectiveProject) {
     if (effectiveProject === 'none') {
       const { rows } = await db.query(
-        `SELECT * FROM documents WHERE category_id = $1 AND project_id IS NULL ${order}`,
+        `SELECT * FROM documents WHERE category_id = $1 AND project_id IS NULL AND parent_document_id IS NULL ${order}`,
         [cleanCategoryId]
       );
-      return attachImplementationStatus(db, rows);
+      return attachDocumentExtras(db, rows);
     }
     const { rows } = await db.query(
-      `SELECT * FROM documents WHERE category_id = $1 AND project_id = $2 ${order}`,
+      `SELECT * FROM documents WHERE category_id = $1 AND project_id = $2 AND parent_document_id IS NULL ${order}`,
       [cleanCategoryId, effectiveProject]
     );
-    return attachImplementationStatus(db, rows);
+    return attachDocumentExtras(db, rows);
   }
   if (cleanCategoryId) {
     const { rows } = await db.query(
-      `SELECT * FROM documents WHERE category_id = $1 ${order}`,
+      `SELECT * FROM documents WHERE category_id = $1 AND parent_document_id IS NULL ${order}`,
       [cleanCategoryId]
     );
-    return attachImplementationStatus(db, rows);
+    return attachDocumentExtras(db, rows);
   }
   if (effectiveProject) {
     if (effectiveProject === 'none') {
       const { rows } = await db.query(
-        `SELECT * FROM documents WHERE project_id IS NULL ${order}`
+        `SELECT * FROM documents WHERE project_id IS NULL AND parent_document_id IS NULL ${order}`
       );
-      return attachImplementationStatus(db, rows);
+      return attachDocumentExtras(db, rows);
     }
     const { rows } = await db.query(
-      `SELECT * FROM documents WHERE project_id = $1 ${order}`,
+      `SELECT * FROM documents WHERE project_id = $1 AND parent_document_id IS NULL ${order}`,
       [effectiveProject]
     );
-    return attachImplementationStatus(db, rows);
+    return attachDocumentExtras(db, rows);
   }
-  const { rows } = await db.query(`SELECT * FROM documents ${order}`);
-  return attachImplementationStatus(db, rows);
+  const { rows } = await db.query(`SELECT * FROM documents WHERE parent_document_id IS NULL ${order}`);
+  return attachDocumentExtras(db, rows);
 }
 
 async function getDocument(db, id, { assignedProjectId } = {}) {
@@ -303,17 +344,47 @@ async function getDocument(db, id, { assignedProjectId } = {}) {
   if (!documentVisibleTo(row, assignedProjectId)) {
     return { ok: false, status: 403, error: 'out_of_scope', message: 'This document belongs to a different project than the one you are assigned to.' };
   }
-  const [document] = await attachImplementationStatus(db, [row]);
+  const [document] = await attachDocumentExtras(db, [row]);
   return { ok: true, status: 200, document };
+}
+
+// Validate an optional parent_document_id (ticket 6df4ba74, design
+// doc ch. 34): the parent must exist, sit in the same project, be a
+// Prototype document, and not itself be an attached plan (no chains —
+// a plan attaches to a prototype, never to another plan). Returns
+// { parentId } when valid (or when no parent was given), else
+// { error } with the { ok, status, error, message } failure to
+// return. The caller passes the child's project (already resolved
+// to null when unassigned).
+async function validateParentDocument(db, parentDocumentId, projectId) {
+  const clean = parentDocumentId === undefined || parentDocumentId === null || !String(parentDocumentId).trim()
+    ? null
+    : String(parentDocumentId).trim();
+  if (!clean) return { parentId: null };
+  const parent = await getDocumentRow(db, clean);
+  if (!parent) {
+    return { error: { ok: false, status: 400, error: 'unknown_parent_document', message: `Unknown parent document: ${clean}.` } };
+  }
+  if ((parent.project_id || null) !== (projectId || null)) {
+    return { error: { ok: false, status: 400, error: 'parent_project_mismatch', message: 'The parent document belongs to a different project.' } };
+  }
+  const category = await getCategoryRow(db, parent.category_id);
+  if (!category || category.name !== 'Prototype') {
+    return { error: { ok: false, status: 400, error: 'parent_not_prototype', message: 'The parent document must be a Prototype document.' } };
+  }
+  if (parent.parent_document_id) {
+    return { error: { ok: false, status: 400, error: 'parent_is_attached', message: 'The parent document is itself an attached plan.' } };
+  }
+  return { parentId: clean };
 }
 
 // Shared insert for the two filing paths (hand-filed and agent
 // upload): same row, same columns; only the validation and the
 // permission rule in front of it differ.
-async function insertDocumentRow(db, { title, categoryId, projectId, content, source, actorId }) {
+async function insertDocumentRow(db, { title, categoryId, projectId, content, source, actorId, parentDocumentId }) {
   const { rows } = await db.query(
-    'INSERT INTO documents (title, category_id, project_id, content, source, created_by) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
-    [String(title).trim(), categoryId, projectId, content, source, String(actorId).trim()]
+    'INSERT INTO documents (title, category_id, project_id, content, source, created_by, parent_document_id) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *',
+    [String(title).trim(), categoryId, projectId, content, source, String(actorId).trim(), parentDocumentId || null]
   );
   return rows[0];
 }
@@ -323,8 +394,10 @@ async function insertDocumentRow(db, { title, categoryId, projectId, content, so
 // document as unassigned. `source` records where the document came
 // from ('manual' in v1 — there is no auto-generation to collect from
 // yet, so every document is filed by hand; a future generator files
-// with its own source value).
-async function createDocument(db, { actorId, actorRoles, title, categoryId, projectId, content, source }) {
+// with its own source value). `parentDocumentId` is optional: a build
+// plan filed with its prototype's id is attached to it (ticket
+// 6df4ba74) and no longer appears as its own row.
+async function createDocument(db, { actorId, actorRoles, title, categoryId, projectId, content, source, parentDocumentId }) {
   if (!requirePmOrAdmin(actorRoles)) {
     return { ok: false, status: 403, error: 'wrong_role', message: 'Only the PM or an Admin may file a document.' };
   }
@@ -348,6 +421,8 @@ async function createDocument(db, { actorId, actorRoles, title, categoryId, proj
   if (target && !(await projectExists(db, target))) {
     return { ok: false, status: 400, error: 'unknown_project', message: `Unknown project: ${target}.` };
   }
+  const { parentId, error } = await validateParentDocument(db, parentDocumentId, target);
+  if (error) return error;
   const cleanContent = content === undefined || content === null ? '' : String(content);
   const cleanSource = source === undefined || source === null || !String(source).trim()
     ? 'manual'
@@ -359,6 +434,7 @@ async function createDocument(db, { actorId, actorRoles, title, categoryId, proj
     content: cleanContent,
     source: cleanSource,
     actorId,
+    parentDocumentId: parentId,
   });
   return { ok: true, status: 201, document };
 }
@@ -379,8 +455,10 @@ async function createDocument(db, { actorId, actorRoles, title, categoryId, proj
 // assigned-project scope check is gone from this path. PM and Admin
 // file through POST /api/documents instead; the upload path carries
 // the same rule for every caller. `source` is always 'agent':
-// provenance is not caller-chosen.
-async function uploadDocument(db, { actorId, actorRoles, title, categoryId, projectId, contentBase64 }) {
+// provenance is not caller-chosen. `parentDocumentId` is optional: a
+// build plan uploaded with its prototype's id is attached to it
+// (ticket 6df4ba74) instead of appearing as its own row.
+async function uploadDocument(db, { actorId, actorRoles, title, categoryId, projectId, contentBase64, parentDocumentId }) {
   if (!actorId || !String(actorId).trim()) {
     return { ok: false, status: 400, error: 'bad_request', message: 'actor_id is required.' };
   }
@@ -407,6 +485,8 @@ async function uploadDocument(db, { actorId, actorRoles, title, categoryId, proj
   if (target && !(await projectExists(db, target))) {
     return { ok: false, status: 400, error: 'unknown_project', message: `Unknown project: ${target}.` };
   }
+  const { parentId, error } = await validateParentDocument(db, parentDocumentId, target);
+  if (error) return error;
   // Agent upload rule (ticket d8fced2a): a project must be named, it
   // must be the project of an in-progress ticket the caller holds,
   // and the category must be that project's Prototype category.
@@ -436,6 +516,7 @@ async function uploadDocument(db, { actorId, actorRoles, title, categoryId, proj
     content: decoded.content,
     source: 'agent',
     actorId,
+    parentDocumentId: parentId,
   });
   return { ok: true, status: 201, document };
 }

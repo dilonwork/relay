@@ -509,6 +509,7 @@ app.post('/api/documents', async (req, res) => {
       projectId: req.body ? req.body.project_id : undefined,
       content: req.body ? req.body.content : undefined,
       source: req.body ? req.body.source : undefined,
+      parentDocumentId: req.body ? req.body.parent_document_id : undefined,
     });
     if (!result.ok) return res.status(result.status).json({ error: result.error, message: result.message });
     res.status(201).json(result.document);
@@ -537,6 +538,7 @@ app.post('/api/documents/upload', async (req, res) => {
       categoryId: req.body ? req.body.category_id : undefined,
       projectId: req.body ? req.body.project_id : undefined,
       contentBase64: req.body ? req.body.content_base64 : undefined,
+      parentDocumentId: req.body ? req.body.parent_document_id : undefined,
     });
     if (!result.ok) return res.status(result.status).json({ error: result.error, message: result.message });
     res.status(201).json(result.document);

@@ -41,7 +41,7 @@ class FakeDb {
     return new Date(Date.now() + this.seq * 1000).toISOString();
   }
 
-  seedDocument({ id, project_id = 'proj-1', category_id = 'cat-proto', title = 'Seed doc', content = '', source = 'manual', implementation_ticket_id = null }) {
+  seedDocument({ id, project_id = 'proj-1', category_id = 'cat-proto', title = 'Seed doc', content = '', source = 'manual', implementation_ticket_id = null, parent_document_id = null }) {
     const row = {
       id: id || `doc-${++this.seq}`,
       project_id,
@@ -50,6 +50,7 @@ class FakeDb {
       content,
       source,
       implementation_ticket_id,
+      parent_document_id,
       created_by: 'pm-1',
       created_at: this._now(),
       updated_at: this._now(),
@@ -119,25 +120,32 @@ class FakeDb {
       this.categories.push(row);
       return { rows: [{ ...row }] };
     }
-    if (sql === 'SELECT * FROM documents WHERE category_id = $1 AND project_id = $2 ORDER BY created_at ASC, id ASC') {
-      return { rows: this.documents.filter((d) => d.category_id === params[0] && d.project_id === params[1]).map((d) => ({ ...d })) };
+    if (sql === 'SELECT id, parent_document_id, title FROM documents WHERE parent_document_id = ANY($1) ORDER BY created_at ASC, id ASC') {
+      const rows = this.documents
+        .filter((d) => params[0].includes(d.parent_document_id))
+        .sort((a, b) => (a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : a.id < b.id ? -1 : 1))
+        .map((d) => ({ id: d.id, parent_document_id: d.parent_document_id, title: d.title }));
+      return { rows };
     }
-    if (sql === 'SELECT * FROM documents WHERE category_id = $1 AND project_id IS NULL ORDER BY created_at ASC, id ASC') {
-      return { rows: this.documents.filter((d) => d.category_id === params[0] && !d.project_id).map((d) => ({ ...d })) };
+    if (sql === 'SELECT * FROM documents WHERE category_id = $1 AND project_id = $2 AND parent_document_id IS NULL ORDER BY created_at ASC, id ASC') {
+      return { rows: this.documents.filter((d) => d.category_id === params[0] && d.project_id === params[1] && !d.parent_document_id).map((d) => ({ ...d })) };
     }
-    if (sql === 'SELECT * FROM documents WHERE category_id = $1 ORDER BY created_at ASC, id ASC') {
-      return { rows: this.documents.filter((d) => d.category_id === params[0]).map((d) => ({ ...d })) };
+    if (sql === 'SELECT * FROM documents WHERE category_id = $1 AND project_id IS NULL AND parent_document_id IS NULL ORDER BY created_at ASC, id ASC') {
+      return { rows: this.documents.filter((d) => d.category_id === params[0] && !d.project_id && !d.parent_document_id).map((d) => ({ ...d })) };
     }
-    if (sql === 'SELECT * FROM documents WHERE project_id = $1 ORDER BY created_at ASC, id ASC') {
-      return { rows: this.documents.filter((d) => d.project_id === params[0]).map((d) => ({ ...d })) };
+    if (sql === 'SELECT * FROM documents WHERE category_id = $1 AND parent_document_id IS NULL ORDER BY created_at ASC, id ASC') {
+      return { rows: this.documents.filter((d) => d.category_id === params[0] && !d.parent_document_id).map((d) => ({ ...d })) };
     }
-    if (sql === 'SELECT * FROM documents WHERE project_id IS NULL ORDER BY created_at ASC, id ASC') {
-      return { rows: this.documents.filter((d) => !d.project_id).map((d) => ({ ...d })) };
+    if (sql === 'SELECT * FROM documents WHERE project_id = $1 AND parent_document_id IS NULL ORDER BY created_at ASC, id ASC') {
+      return { rows: this.documents.filter((d) => d.project_id === params[0] && !d.parent_document_id).map((d) => ({ ...d })) };
     }
-    if (sql === 'SELECT * FROM documents ORDER BY created_at ASC, id ASC') {
-      return { rows: this.documents.map((d) => ({ ...d })) };
+    if (sql === 'SELECT * FROM documents WHERE project_id IS NULL AND parent_document_id IS NULL ORDER BY created_at ASC, id ASC') {
+      return { rows: this.documents.filter((d) => !d.project_id && !d.parent_document_id).map((d) => ({ ...d })) };
     }
-    if (sql === 'INSERT INTO documents (title, category_id, project_id, content, source, created_by) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *') {
+    if (sql === 'SELECT * FROM documents WHERE parent_document_id IS NULL ORDER BY created_at ASC, id ASC') {
+      return { rows: this.documents.filter((d) => !d.parent_document_id).map((d) => ({ ...d })) };
+    }
+    if (sql === 'INSERT INTO documents (title, category_id, project_id, content, source, created_by, parent_document_id) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *') {
       const row = {
         id: `doc-${++this.seq}`,
         title: params[0],
@@ -146,6 +154,7 @@ class FakeDb {
         content: params[3],
         source: params[4],
         implementation_ticket_id: null,
+        parent_document_id: params[6] || null,
         created_by: params[5],
         created_at: this._now(),
         updated_at: this._now(),
@@ -627,6 +636,120 @@ async function main() {
     assert.deepEqual(all.map((d) => [d.title, d.project_id]), [['A', 'proj-1'], ['B', 'proj-2'], ['D', null]]);
     assert.deepEqual((await documents.listDocuments(db, { projectId: 'proj-1' })).map((d) => d.project_id), ['proj-1']);
     assert.deepEqual((await documents.listDocuments(db, { projectId: 'none' })).map((d) => [d.title, d.project_id]), [['D', null]]);
+  });
+
+  await ok('listDocuments: attached build plans never appear as their own row; the prototype carries the plan title only (ticket 6df4ba74)', async () => {
+    const db = new FakeDb();
+    const proto = db.seedDocument({ title: 'Dashboard redesign — interactive prototype', project_id: 'proj-1', category_id: 'cat-proto', content: '<html>prototype</html>' });
+    const plan = db.seedDocument({ title: 'Dashboard redesign — recommendations', project_id: 'proj-1', category_id: 'cat-proto', content: '# Plan\nBuild it.', parent_document_id: proto.id });
+    const other = db.seedDocument({ title: 'Gantt redesign — interactive prototype', project_id: 'proj-1', category_id: 'cat-proto', content: '<html>gantt</html>' });
+    // One row per delivery, in every filter shape: the plan is hidden,
+    // the prototype carries it as { id, title } — title only, never
+    // content (the plan's content is handed out inside the ticket).
+    for (const filter of [{}, { projectId: 'proj-1' }, { categoryId: 'cat-proto' }, { projectId: 'proj-1', categoryId: 'cat-proto' }]) {
+      const listed = await documents.listDocuments(db, filter);
+      assert.deepEqual(listed.map((d) => d.title), ['Dashboard redesign — interactive prototype', 'Gantt redesign — interactive prototype']);
+      assert.deepEqual(listed[0].attached_plan, { id: plan.id, title: 'Dashboard redesign — recommendations' });
+      assert.equal('content' in listed[0].attached_plan, false);
+      assert.equal(listed[1].attached_plan, null);
+    }
+    // The plan itself is still readable by id (the panel fetches its
+    // content at Implement time) — it is hidden from the list, not
+    // deleted.
+    const fetched = await documents.getDocument(db, plan.id, {});
+    assert.equal(fetched.ok, true);
+    assert.equal(fetched.document.content, '# Plan\nBuild it.');
+    assert.equal(fetched.document.attached_plan, null);
+    // And the prototype read carries the plan too.
+    const protoRead = await documents.getDocument(db, proto.id, {});
+    assert.deepEqual(protoRead.document.attached_plan, { id: plan.id, title: 'Dashboard redesign — recommendations' });
+    // An unpaired plan (no parent, no matching prototype) stays
+    // visible: the list never hides a plan that has nowhere to attach.
+    db.seedDocument({ title: 'Orphan — recommendations', project_id: 'proj-1', category_id: 'cat-proto', content: '# Orphan plan.' });
+    assert.deepEqual((await documents.listDocuments(db, {})).map((d) => d.title), [
+      'Dashboard redesign — interactive prototype',
+      'Gantt redesign — interactive prototype',
+      'Orphan — recommendations',
+    ]);
+  });
+
+  await ok('createDocument: a plan filed with its prototype id is attached to it (ticket 6df4ba74)', async () => {
+    const db = new FakeDb();
+    const proto = db.seedDocument({ title: 'Dashboard redesign — interactive prototype', project_id: 'proj-1', category_id: 'cat-proto' });
+    const filed = await documents.createDocument(db, {
+      actorId: 'pm-1', actorRoles: PM,
+      title: 'Dashboard redesign — recommendations', categoryId: 'cat-proto', projectId: 'proj-1',
+      content: '# Plan', parentDocumentId: proto.id,
+    });
+    assert.equal(filed.ok, true);
+    assert.equal(filed.status, 201);
+    assert.equal(filed.document.parent_document_id, proto.id);
+    assert.deepEqual((await documents.listDocuments(db, {})).map((d) => d.title), ['Dashboard redesign — interactive prototype']);
+    const listed = await documents.listDocuments(db, {});
+    assert.deepEqual(listed[0].attached_plan, { id: filed.document.id, title: 'Dashboard redesign — recommendations' });
+    // Without a parent the document files as a standalone row, as before.
+    const standalone = await documents.createDocument(db, {
+      actorId: 'pm-1', actorRoles: PM,
+      title: 'Standalone', categoryId: 'cat-proto', projectId: 'proj-1', content: '',
+    });
+    assert.equal(standalone.ok, true);
+    assert.equal(standalone.document.parent_document_id, null);
+  });
+
+  await ok('createDocument: an invalid parent is 400 — unknown, other project, not a Prototype, itself attached (ticket 6df4ba74)', async () => {
+    const db = new FakeDb();
+    const proto = db.seedDocument({ title: 'Dashboard redesign — interactive prototype', project_id: 'proj-1', category_id: 'cat-proto' });
+    const otherProject = db.seedDocument({ title: 'Other — interactive prototype', project_id: 'proj-2', category_id: 'cat-proto' });
+    const note = db.seedDocument({ title: 'A note', project_id: 'proj-1', category_id: 'cat-undef' });
+    const plan = db.seedDocument({ title: 'Dashboard redesign — recommendations', project_id: 'proj-1', category_id: 'cat-proto', parent_document_id: proto.id });
+    const base = { actorId: 'pm-1', actorRoles: PM, title: 'T', categoryId: 'cat-proto', projectId: 'proj-1', content: '' };
+    const unknown = await documents.createDocument(db, { ...base, parentDocumentId: 'doc-nope' });
+    assert.equal(unknown.status, 400);
+    assert.equal(unknown.error, 'unknown_parent_document');
+    const foreign = await documents.createDocument(db, { ...base, parentDocumentId: otherProject.id });
+    assert.equal(foreign.status, 400);
+    assert.equal(foreign.error, 'parent_project_mismatch');
+    const notProto = await documents.createDocument(db, { ...base, parentDocumentId: note.id });
+    assert.equal(notProto.status, 400);
+    assert.equal(notProto.error, 'parent_not_prototype');
+    const chained = await documents.createDocument(db, { ...base, parentDocumentId: plan.id });
+    assert.equal(chained.status, 400);
+    assert.equal(chained.error, 'parent_is_attached');
+  });
+
+  await ok('uploadDocument: a plan uploaded with its prototype id is attached to it; an invalid parent is 400 (ticket 6df4ba74)', async () => {
+    const db = new FakeDb();
+    db.seedTicket({ assignee_id: 'uiux-1', project_id: 'proj-1', status: 'spec_generation', workflow_id: 'wf-proto' });
+    db.seedWorkflow({
+      id: 'wf-proto',
+      states: [
+        { code: 'user_requirement', label: 'User requirement', sort_order: 0, is_start: true, is_terminal: false },
+        { code: 'feature_planning', label: 'Feature planning', sort_order: 1, is_start: false, is_terminal: false },
+        { code: 'spec_generation', label: 'Spec generation', sort_order: 2, is_start: false, is_terminal: false },
+        { code: 'delivered', label: 'Delivered', sort_order: 3, is_start: false, is_terminal: true },
+        { code: 'require_clarify', label: 'Require clarification', sort_order: 4, is_start: false, is_terminal: false },
+      ],
+      transitions: [
+        { from: 'user_requirement', to: 'feature_planning', kind: 'pickup', role: 'leader' },
+        { from: 'feature_planning', to: 'spec_generation', kind: 'forward', role: 'leader' },
+        { from: 'spec_generation', to: 'delivered', kind: 'forward', role: 'ui_ux' },
+        { from: 'feature_planning', to: 'require_clarify', kind: 'clarify', role: 'leader' },
+        { from: 'require_clarify', to: 'feature_planning', kind: 'forward', role: 'leader' },
+      ],
+    });
+    const proto = db.seedDocument({ title: 'Dashboard redesign — interactive prototype', project_id: 'proj-1', category_id: 'cat-proto' });
+    const b64 = Buffer.from('# Plan', 'utf8').toString('base64');
+    const base = { actorId: 'uiux-1', actorRoles: ['ui_ux'], title: 'Dashboard redesign — recommendations', categoryId: 'cat-proto', projectId: 'proj-1', contentBase64: b64 };
+    const uploaded = await documents.uploadDocument(db, { ...base, parentDocumentId: proto.id });
+    assert.equal(uploaded.ok, true);
+    assert.equal(uploaded.status, 201);
+    assert.equal(uploaded.document.parent_document_id, proto.id);
+    assert.equal(uploaded.document.source, 'agent');
+    assert.deepEqual((await documents.listDocuments(db, {})).map((d) => d.title), ['Dashboard redesign — interactive prototype']);
+    // An unknown parent is 400, before the upload rule is judged.
+    const unknown = await documents.uploadDocument(db, { ...base, parentDocumentId: 'doc-nope' });
+    assert.equal(unknown.status, 400);
+    assert.equal(unknown.error, 'unknown_parent_document');
   });
 
   await ok('listDocuments: an assigned caller only ever sees their own project', async () => {
