@@ -24,6 +24,7 @@ class FakeDb {
     ];
     this.documents = [];
     this.tickets = [];
+    this.workflows = [];
     this.projects = [
       { id: 'proj-1', name: 'Relay', description: '' },
       { id: 'proj-2', name: 'WebTracker', description: '' },
@@ -59,10 +60,20 @@ class FakeDb {
 
   // Seed a ticket for the implementation-badge attach (only id and
   // status matter) and for the agent upload rule (assignee_id,
-  // project_id and status decide whether the holder may upload).
-  seedTicket({ id, status = 'requirement', assignee_id = null, project_id = null }) {
-    const row = { id: id || `ticket-${++this.seq}`, status, assignee_id, project_id };
+  // project_id, status and workflow_id decide whether the holder may
+  // upload; a ticket with no workflow_id follows the built-in flow).
+  seedTicket({ id, status = 'requirement', assignee_id = null, project_id = null, workflow_id = null }) {
+    const row = { id: id || `ticket-${++this.seq}`, status, assignee_id, project_id, workflow_id };
     this.tickets.push(row);
+    return row;
+  }
+
+  // Seed a workflow row (states/transitions/roles as stored JSONB) for
+  // the agent upload rule: a ticket's in-progress status is judged
+  // against its own workflow definition.
+  seedWorkflow({ id, name = 'Seed workflow', project_id = null, states = [], transitions = [], roles = {} }) {
+    const row = { id: id || `wf-${++this.seq}`, name, project_id, states, transitions, roles };
+    this.workflows.push(row);
     return row;
   }
 
@@ -76,9 +87,16 @@ class FakeDb {
     if (sql === 'SELECT id, status FROM tickets WHERE id = ANY($1)') {
       return { rows: this.tickets.filter((t) => params[0].includes(t.id)).map((t) => ({ id: t.id, status: t.status })) };
     }
-    if (sql === 'SELECT 1 FROM tickets WHERE assignee_id = $1 AND project_id = $2 AND status = ANY($3) LIMIT 1') {
-      const hit = this.tickets.some((t) => t.assignee_id === params[0] && t.project_id === params[1] && params[2].includes(t.status));
-      return { rows: hit ? [{}] : [] };
+    if (sql === 'SELECT status, workflow_id FROM tickets WHERE assignee_id = $1 AND project_id = $2') {
+      return {
+        rows: this.tickets
+          .filter((t) => t.assignee_id === params[0] && t.project_id === params[1])
+          .map((t) => ({ status: t.status, workflow_id: t.workflow_id || null })),
+      };
+    }
+    if (sql === 'SELECT * FROM workflows WHERE id = $1') {
+      const w = this.workflows.find((x) => x.id === params[0]);
+      return { rows: w ? [{ ...w }] : [] };
     }
     if (sql === 'SELECT * FROM documents WHERE id = $1') {
       const d = this.documents.find((x) => x.id === params[0]);
@@ -481,17 +499,19 @@ async function main() {
   await ok('uploadDocument: only in-progress statuses count — terminal, requirement and clarification do not', async () => {
     const b64 = Buffer.from('x', 'utf8').toString('base64');
     const base = { actorId: 'eng-1', actorRoles: ENGINEER, title: 'T', categoryId: 'cat-proto', projectId: 'proj-1', contentBase64: b64 };
-    // Every in-progress status admits the upload.
-    for (const status of documents.IN_PROGRESS_TICKET_STATUSES) {
+    // Every working state of the built-in flow admits the upload (a
+    // ticket with no workflow follows the built-in definition).
+    for (const status of ['decomposing', 'in_dev', 'pending_review', 'in_review', 'pending_test', 'in_test', 'pending_deploy', 'deploying']) {
       const trial = new FakeDb();
       trial.seedTicket({ assignee_id: 'eng-1', project_id: 'proj-1', status });
       const uploaded = await documents.uploadDocument(trial, { ...base, title: `In ${status}` });
       assert.equal(uploaded.ok, true, `${status} should count as in progress`);
       assert.equal(uploaded.status, 201);
     }
-    // Everything else refuses it: not started, waiting on the PM,
-    // unclaimed, delivered, cancelled.
-    for (const status of ['requirement', 'pending_dev', 'needs_clarification', 'needs_acceptance_clarification', 'delivered', 'cancelled']) {
+    // Waiting on the PM, delivered, cancelled: refused even with an
+    // assignee — these states are terminal or clarification targets
+    // in the ticket's own workflow definition.
+    for (const status of ['needs_clarification', 'needs_acceptance_clarification', 'delivered', 'cancelled']) {
       const trial = new FakeDb();
       trial.seedTicket({ assignee_id: 'eng-1', project_id: 'proj-1', status });
       const refused = await documents.uploadDocument(trial, { ...base, title: `In ${status}` });
@@ -499,10 +519,87 @@ async function main() {
       assert.equal(refused.status, 403);
       assert.equal(refused.error, 'no_in_progress_ticket');
     }
+    // Not started and unclaimed: a ticket in 'requirement' or
+    // 'pending_dev' has no assignee in practice, so nothing anchors
+    // the upload. (An assigned ticket in the start state would count
+    // under the workflow-aware rule — that is how the Prototype
+    // flow's user_requirement, itself a start state, counts; see the
+    // Prototype flow test below.)
+    for (const status of ['requirement', 'pending_dev']) {
+      const trial = new FakeDb();
+      trial.seedTicket({ assignee_id: null, project_id: 'proj-1', status });
+      const refused = await documents.uploadDocument(trial, { ...base, title: `In ${status}` });
+      assert.equal(refused.ok, false, `${status} with no assignee should not count as in progress`);
+      assert.equal(refused.status, 403);
+      assert.equal(refused.error, 'no_in_progress_ticket');
+    }
     // A ticket assigned to someone else does not help either.
     const others = new FakeDb();
     others.seedTicket({ assignee_id: 'eng-9', project_id: 'proj-1', status: 'in_dev' });
     const refused = await documents.uploadDocument(others, base);
+    assert.equal(refused.status, 403);
+    assert.equal(refused.error, 'no_in_progress_ticket');
+  });
+
+  await ok('uploadDocument: a Prototype flow ticket counts by its own workflow definition — spec_generation admits (ticket d8fced2a review return)', async () => {
+    const b64 = Buffer.from('x', 'utf8').toString('base64');
+    const base = { actorId: 'uiux-1', actorRoles: ['ui_ux'], title: 'T', categoryId: 'cat-proto', projectId: 'proj-1', contentBase64: b64 };
+    // The live Prototype flow (705f225f): user_requirement ->
+    // feature_planning -> spec_generation -> delivered, with a
+    // clarification round-trip feature_planning -> require_clarify ->
+    // feature_planning. The old hardcoded eight-state set had an empty
+    // intersection with it, so no Prototype flow ticket could ever
+    // upload — the very case this ticket was opened for.
+    const prototypeFlow = {
+      states: [
+        { code: 'user_requirement', label: 'User requirement', sort_order: 0, is_start: true, is_terminal: false },
+        { code: 'feature_planning', label: 'Feature planning', sort_order: 1, is_start: false, is_terminal: false },
+        { code: 'spec_generation', label: 'Spec generation', sort_order: 2, is_start: false, is_terminal: false },
+        { code: 'delivered', label: 'Delivered', sort_order: 3, is_start: false, is_terminal: true },
+        { code: 'require_clarify', label: 'Require clarification', sort_order: 4, is_start: false, is_terminal: false },
+      ],
+      transitions: [
+        { from: 'user_requirement', to: 'feature_planning', role: 'leader', kind: 'pickup', requiresReason: false, requiresHandoff: true, selfCheck: false },
+        { from: 'feature_planning', to: 'spec_generation', role: 'leader', kind: 'forward', requiresReason: false, requiresHandoff: false, selfCheck: false },
+        { from: 'spec_generation', to: 'delivered', role: 'ui_ux', kind: 'forward', requiresReason: false, requiresHandoff: false, selfCheck: false },
+        { from: 'feature_planning', to: 'require_clarify', role: 'leader', kind: 'clarify', requiresReason: true, requiresHandoff: false, selfCheck: false },
+        { from: 'require_clarify', to: 'feature_planning', role: 'leader', kind: 'forward', requiresReason: false, requiresHandoff: true, selfCheck: false },
+      ],
+      roles: {
+        user_requirement: { role: 'leader', responsibilities: 'Pick up the requirement and start planning it.' },
+        feature_planning: { role: 'leader', responsibilities: 'Plan the prototype.' },
+        spec_generation: { role: 'ui_ux', responsibilities: 'Build the prototype.' },
+        delivered: { role: null, responsibilities: '' },
+        require_clarify: { role: 'leader', responsibilities: 'Answer the clarification.' },
+      },
+    };
+    // Working states admit — spec_generation is the pinned case: the
+    // UI&UX holder delivering a prototype from it must be able to
+    // upload (live ticket 8941c042 went user_requirement ->
+    // feature_planning -> spec_generation -> delivered).
+    for (const status of ['user_requirement', 'feature_planning', 'spec_generation']) {
+      const trial = new FakeDb();
+      trial.seedWorkflow({ id: 'wf-proto', name: 'Prototype flow', ...prototypeFlow });
+      trial.seedTicket({ assignee_id: 'uiux-1', project_id: 'proj-1', status, workflow_id: 'wf-proto' });
+      const uploaded = await documents.uploadDocument(trial, { ...base, title: `Prototype ${status}` });
+      assert.equal(uploaded.ok, true, `Prototype flow ${status} should count as in progress`);
+      assert.equal(uploaded.status, 201);
+    }
+    // Waiting on clarification, and delivered: refused.
+    for (const status of ['require_clarify', 'delivered']) {
+      const trial = new FakeDb();
+      trial.seedWorkflow({ id: 'wf-proto', name: 'Prototype flow', ...prototypeFlow });
+      trial.seedTicket({ assignee_id: 'uiux-1', project_id: 'proj-1', status, workflow_id: 'wf-proto' });
+      const refused = await documents.uploadDocument(trial, { ...base, title: `Prototype ${status}` });
+      assert.equal(refused.ok, false, `Prototype flow ${status} should not count as in progress`);
+      assert.equal(refused.status, 403);
+      assert.equal(refused.error, 'no_in_progress_ticket');
+    }
+    // A ticket naming a workflow that no longer exists never counts.
+    const missing = new FakeDb();
+    missing.seedTicket({ assignee_id: 'uiux-1', project_id: 'proj-1', status: 'spec_generation', workflow_id: 'wf-gone' });
+    const refused = await documents.uploadDocument(missing, base);
+    assert.equal(refused.ok, false);
     assert.equal(refused.status, 403);
     assert.equal(refused.error, 'no_in_progress_ticket');
   });

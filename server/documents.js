@@ -22,6 +22,9 @@
 // existing ticket creation (POST /api/tickets, PM only); this service
 // has no ticket-creation logic of its own.
 
+const sm = require('./stateMachine');
+const workflows = require('./workflows');
+
 function cleanProjectId(projectId) {
   return projectId === undefined || projectId === null || !String(projectId).trim()
     ? null
@@ -87,36 +90,62 @@ function slugifyTitle(title) {
   return slug || 'document';
 }
 
-// Statuses in which a ticket counts as "in progress" for the agent
-// upload rule (ticket d8fced2a): the assignee is actively working the
-// ticket. requirement (not started) does not count; pending_dev is
-// unclaimed, so it can never have an assignee; needs_clarification
-// and needs_acceptance_clarification wait on the PM, so the agent is
-// not working the ticket then; delivered and cancelled are terminal
-// (see TERMINAL_STATUSES in stateMachine.js). Custom-workflow states
-// are not in this list, so a ticket on a custom workflow never counts
-// — the ticket defines the set from the built-in flow.
-const IN_PROGRESS_TICKET_STATUSES = [
-  'decomposing',
-  'in_dev',
-  'pending_review',
-  'in_review',
-  'pending_test',
-  'in_test',
-  'pending_deploy',
-  'deploying',
-];
+// Whether a ticket's status counts as "in progress" for the agent
+// upload rule (ticket d8fced2a): the status is a working state in the
+// ticket's OWN workflow definition — not terminal (the state's
+// is_terminal flag; 'cancelled' is terminal in every workflow even
+// when unlisted, see isTerminalFor in stateMachine.js), and not a
+// clarification/waiting state. A clarification state is one the
+// ticket only ever enters by asking for clarification: every
+// transition into it has kind 'clarify'. ("Is the target of a
+// clarify transition" alone is not enough: the return leg of a
+// clarification round-trip is also kind 'clarify', so that test would
+// wrongly exclude the working state the round-trip returns to —
+// decomposing and in_test in the built-in flow — which also have
+// non-clarify entries.) Unknown states never count. The start state
+// is not excluded: in the Prototype flow the start state
+// (user_requirement) is a working state the leader picks up from,
+// while in the built-in flow a ticket in 'requirement' has no
+// assignee, so the assignee check in hasInProgressTicketInProject
+// already excludes it — as it does pending_dev, which is unclaimed.
+function isInProgressStatus(definition, status) {
+  if (!status) return false;
+  if (sm.isTerminalFor(definition, status)) return false;
+  if (!sm.stateByCode(definition, status)) return false;
+  const incoming = (definition.transitions || []).filter((t) => t.to === status);
+  if (incoming.length > 0 && incoming.every((t) => t.kind === 'clarify')) return false;
+  return true;
+}
 
 // Does the caller hold an in-progress ticket in this project? The
 // check is keyed on the ticket's project, not on the caller's assigned
 // project (ticket d8fced2a): an agent assigned to one project may hold
-// a ticket in another, and the upload follows the ticket.
+// a ticket in another, and the upload follows the ticket. Each ticket
+// is judged against its own workflow definition — a ticket with no
+// workflow follows the built-in definition — so a Prototype flow
+// ticket at spec_generation counts while a ticket waiting on the PM
+// in require_clarify does not. A ticket naming a workflow that no
+// longer exists counts as not in progress (the delete guard makes
+// this unreachable in practice). Definitions are cached per workflow
+// within the call, so one workflow is loaded at most once.
 async function hasInProgressTicketInProject(db, actorId, projectId) {
   const { rows } = await db.query(
-    'SELECT 1 FROM tickets WHERE assignee_id = $1 AND project_id = $2 AND status = ANY($3) LIMIT 1',
-    [actorId, projectId, IN_PROGRESS_TICKET_STATUSES]
+    'SELECT status, workflow_id FROM tickets WHERE assignee_id = $1 AND project_id = $2',
+    [actorId, projectId]
   );
-  return rows.length > 0;
+  const definitions = new Map();
+  for (const ticket of rows) {
+    const key = ticket.workflow_id || '';
+    if (!definitions.has(key)) {
+      definitions.set(
+        key,
+        key ? await workflows.getWorkflowDefinition(db, key) : sm.BUILTIN_DEFINITION
+      );
+    }
+    const definition = definitions.get(key);
+    if (definition && isInProgressStatus(definition, ticket.status)) return true;
+  }
+  return false;
 }
 
 async function projectExists(db, projectId) {
@@ -448,7 +477,6 @@ module.exports = {
   documentVisibleTo,
   implementationStatusFor,
   MAX_AGENT_UPLOAD_BYTES,
-  IN_PROGRESS_TICKET_STATUSES,
   listDocumentCategories,
   createDocumentCategory,
   listDocuments,
