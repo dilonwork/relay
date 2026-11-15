@@ -1113,6 +1113,7 @@ export default function App() {
           refreshKey={documentsRefreshKey}
           createRequest={documentsCreateRequest}
           onCreateOpenChange={setDocumentsCreateFormOpen}
+          onCreateRequestConsumed={() => setDocumentsCreateRequest(0)}
           onOpenTicket={openTicket}
           onError={setError}
           onNotice={setNotice}

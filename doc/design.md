@@ -1451,7 +1451,11 @@ No schema change: documents and categories already carry everything the redesign
 
 ### Tests
 
-- `server/documentsRedesign.test.js` (15 tests): the four helpers (counts, grouping order, empty categories dropped, unknown-category trailing group, title search, chip-plus-search combination) and source assertions — chips replace the select, collapsible headers with the Prototype default, no Category column and no intro paragraph, the toolbar with its count, the action hierarchy, the create form as a panel with no separate card, the review badge next to the title, the App wiring, and the CSS.
+- `server/documentsRedesign.test.js` (16 tests): the four helpers (counts, grouping order, empty categories dropped, unknown-category trailing group, title search, chip-plus-search combination) and source assertions — chips replace the select, collapsible headers with the Prototype default, no Category column and no intro paragraph, the toolbar with its count, the action hierarchy, the create form as a panel with no separate card, the review badge next to the title, the App wiring, the create-request consume wiring (review return), and the CSS.
+
+### Review return (2026-11-14)
+
+The Reviewer returned the first submission (commit 63ea7bf) on one defect, the same class as the Workflows page return (ch. 28): after one use of the title-bar "+ New document", every return to the Documents page auto-opened a blank create form — the panel's mount effect ran on `createRequest > 0` while the counter stayed ≥ 1 in App state, and the panel unmounts/remounts on view switch. Fixed with the same consumed-request fix as the Workflows page: the panel reports the request consumed when it opens the form, and App resets the counter to 0. The Reviewer's other suggested fix (a ref remembering the last-seen counter) was not used: it was already tried on the Workflows page and fails for the same remount reason — the ref resets when the panel remounts and the stale counter opens the form again. Everything else was verified as submitted.
 
 ## 31. Workflow Editor Mobile Redesign: Cards Below 700 px, a Sticky Save Bar
 
