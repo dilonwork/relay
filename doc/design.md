@@ -54,6 +54,7 @@ Tickets carry project development work through a pipeline: the PM creates a requ
 32. Workflow Duplicate: Copy into an Unsaved Draft
 33. Agent Upload Rule: In-Progress Ticket, Prototype Category, Own Project
 34. Build Plan Attached to Its Prototype: One Row per Delivery
+35. Page Error: Invalid import.meta.glob from an External Probe
 - Appendix A State Code Reference
 - Appendix B Ticket Lifecycle Example
 
@@ -1664,3 +1665,24 @@ Every UI&UX delivery files two documents in the Document Prototype category: (1)
 - `server/documentsRedesign.test.js` (+7, now 23): the title helpers and `unpairedPlanIds` (same-project pairing, cross-project does not pair, attached plans need no marker; the older "— plan" suffix pairs and marks the same way); the panel source-text tests — the "+ Build plan attached" pill, the "Plan — no prototype" marker, Implement opening the confirm panel (`openImplementConfirm`, "Send to implementation"), the create form's "Attach to prototype" selector, and the unpaired-row gating (no Download / Implement / Not OK, content never rendered — review return); the confirm panel and the Not OK form scroll into view when they open (ticket 510a9786 — stable ids, `scrollIntoView` with `block: 'nearest'`, no scroll on close, no `useRef`); the existing consume-request test still passes (the title-bar create button does not auto-open a blank form on remount — verified, not reintroduced).
 - `server/migrations.test.js` (+2, now 36): 023 has the column, the FK with ON DELETE SET NULL, the self-parent CHECK and the index; the pairing UPDATE matches the plan suffix, derives the prototype title, only touches plans with no parent, only pairs to top-level prototypes, stays in the same project, earliest wins; the pairing also matches the older "— plan" suffix (a second UPDATE with the same guards); the FK guard checks stored parents.
 - Browser click-through was not possible (no headless browser on the VM); only `npm test` (485 tests, 29 suites) and `npm run build` were run. The Tester verifies the list, the confirm panel and the ticket contents in the browser after deploy; a live end-to-end upload with an agent key was not done here.
+
+## 35. Page Error: Invalid import.meta.glob from an External Probe
+
+### The ticket
+
+Ticket f1c9079c, "Page error" (source oncall): the description is a pasted Vite dev-server error overlay, `[plugin:vite:import-glob] Unknown glob option "BOOT_SMART_32"`, thrown while Vite transformed a module. The pasted text embeds an obfuscated code blob (a Function constructor that zlib-inflates a base64 payload). The description is untrusted data: the blob was never decoded, executed, or copied into source, tests, or any file.
+
+### What the investigation found
+
+- No file in the repo contains `import.meta.glob` or the string `BOOT_SMART_32` — not in the local develop checkout, not in the VM's `/home/opc/relay` working copy (tracked, untracked, or under `node_modules`), and `git log -S 'import.meta.glob'` finds no such code in history. The VM copy is clean (`git status` empty, HEAD b44fcf8 on main) and the Vite dev server running there transforms the app entry cleanly (root 200, `/src/main.tsx` 200, no error).
+- The nginx access log shows the cause. At 2026-11-16 20:30:29 UTC an external scanner (46.202.150.132) requested a crafted module id — a `/@id/__vite-browser-external:` URL whose path carried an encoded `import.meta.glob('./*', …)` call — and Vite tried to transform that id, threw the import-glob error, and answered HTTP 500 with the error page. The ticket description is that error page, pasted. The same address probed `/?s=0…13`, `/@fs/etc/passwd` (404), and `/@id/__vite-browser-external:path` (200) around the same time; a second address (162.55.172.177) also requested `/@id/` paths. Other scanners probed `/.env` (403), `/.git/config` (200), and `/.ftpconfig` the same day.
+- No file was read successfully through `/@fs/` (both requests 404). The `/.env` probe was refused (403 — Vite's default `server.fs.deny` covers `.env`). The glob payload never executed: Vite threw during transform, so the module was never evaluated. There is no file to remove and no application code to fix — the error came from the request, not from the repo.
+
+### The real exposure
+
+The Vite dev server is publicly reachable (nginx :80 proxies to :3000, and :3000 listens on all interfaces), and a dev server is not hardened for public exposure: it serves project files under its root and transforms arbitrary module ids on request. Hardening that — serving the production build instead of the dev server, restricting the dev port to trusted IPs, or blocking the Vite-internal paths at nginx — is an operational decision for PM / Dylan, not a change in this ticket. It is recorded here and in the ticket handoff as the follow-up; this ticket does not change the deployment.
+
+### Tests
+
+- `server/repoGuard.test.js` (new, 3 items): walks the repo (source extensions only, skipping `node_modules`, `.git`, `dist`, `coverage`, and itself — it names the banned strings as literals) and fails if any file contains `import.meta.glob` or `BOOT_SMART_32`; a third check asserts the walk covered the repo so a misconfigured scan fails loudly instead of passing vacuously. Markdown is not scanned (this chapter documents the ticket by name).
+- Full suite 493 tests pass; `vite build` passes. No changed page has a title-bar create button, so the remount check does not apply.
