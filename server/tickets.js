@@ -245,7 +245,12 @@ async function createTicket(db, { actorId, actorRoles, title, description, sourc
   // project as the ticket (Implement inherits the document's
   // project), and have no live implementation ticket yet. A link to
   // a cancelled ticket is dead (documents.implementationStatusFor),
-  // so a fresh implementation may replace it.
+  // so a fresh implementation may replace it. A plan is a
+  // Prototype-category document with a parent (migration 023): the
+  // link, the badge and the duplicate block all belong on the parent
+  // prototype, so a plan resolves upward before any check (ticket
+  // f3642631) — the ticket description keeps naming the document the
+  // PM acted on; only the stored link resolves upward.
   const cleanDocumentId = documentId === undefined || documentId === null || !String(documentId).trim()
     ? null
     : String(documentId).trim();
@@ -255,6 +260,14 @@ async function createTicket(db, { actorId, actorRoles, title, description, sourc
     documentRow = docRows[0] || null;
     if (!documentRow) {
       return { ok: false, status: 400, error: 'unknown_document', message: `Unknown document: ${cleanDocumentId}.` };
+    }
+    if (documentRow.parent_document_id) {
+      const { rows: parentRows } = await db.query('SELECT * FROM documents WHERE id = $1', [documentRow.parent_document_id]);
+      const parentRow = parentRows[0] || null;
+      if (!parentRow) {
+        return { ok: false, status: 400, error: 'unknown_document', message: `Unknown parent document: ${documentRow.parent_document_id}.` };
+      }
+      documentRow = parentRow;
     }
     const { rows: catRows } = await db.query('SELECT * FROM document_categories WHERE id = $1', [documentRow.category_id]);
     const category = catRows[0];

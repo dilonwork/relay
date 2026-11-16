@@ -617,6 +617,34 @@ async function main() {
     assert.ok(sql.includes("WHEN t.status = 'cancelled' THEN 2"), '022: backfill must rank a cancelled implementation last');
   });
 
+  await ok('migration 024 moves implementation links from plans to their parent prototype', async () => {
+    const sql = readMigration('024_documents_implementation_link_to_parent.sql');
+    // The move is keyed on the plan's parent: only documents with a
+    // parent set are plans, and only those links move.
+    assert.ok(sql.includes('parent_document_id IS NOT NULL'), '024: must only consider documents with a parent (plans)');
+    assert.ok(sql.includes('plan.parent_document_id AS parent_id'), '024: must resolve each plan to its parent prototype');
+    assert.ok(sql.includes('r.id = sub.parent_id'), '024: must join the move to the parent prototype');
+    // (1) parent with no link yet: the plan's ticket moves up. The
+    // best ticket wins when two plans of one prototype both carry a
+    // link (delivered, then in progress, then cancelled — the 022
+    // ranking), so the move is deterministic.
+    assert.ok(sql.includes('r.implementation_ticket_id IS NULL'), '024: must only move a link onto a parent with no link yet');
+    assert.ok(sql.includes("WHEN t.status = 'delivered' THEN 0"), '024: must prefer a delivered implementation when ranking plan tickets');
+    assert.ok(sql.includes("WHEN t.status = 'cancelled' THEN 2"), '024: must rank a cancelled implementation last');
+    // (2) a dead (cancelled) link on the parent is replaced by the
+    // plan's live link — never by another cancelled one.
+    assert.ok(sql.includes("rt.status = 'cancelled'"), '024: must only replace a cancelled link on the parent');
+    assert.ok(sql.includes("t.status <> 'cancelled'"), '024: the replacement link must be live');
+    // (3) the plan's link is cleared once moved. A plan whose parent
+    // row is missing keeps its link instead of losing the only
+    // record of which ticket implemented what.
+    assert.ok(sql.includes('SET implementation_ticket_id = NULL'), '024: must clear the plan link after moving it');
+    assert.ok(sql.includes('EXISTS (SELECT 1 FROM documents r WHERE r.id = plan.parent_document_id)'), '024: must only clear a plan link when the parent exists');
+    // Idempotent: after the move no plan link is left to move, so a
+    // second run is a no-op.
+    assert.ok(sql.includes('implementation_ticket_id IS NOT NULL'), '024: must only touch plans that still carry a link');
+  });
+
   console.log(`\n${passed} migration tests passed.`);
 }
 

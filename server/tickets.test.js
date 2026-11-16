@@ -37,12 +37,15 @@ class FakeDb {
 
   // Seed a document for the Implement-link tests (ticket b14207c5):
   // only id, category, project and the link matter to createTicket.
-  seedDocument({ id, category_id = 'cat-proto', project_id = 'proj-1', implementation_ticket_id = null }) {
+  // parent_document_id marks a build plan (ticket f3642631): the
+  // plan's parent prototype is the document the link belongs on.
+  seedDocument({ id, category_id = 'cat-proto', project_id = 'proj-1', implementation_ticket_id = null, parent_document_id = null }) {
     const row = {
       id: id || `doc-${++this.seq}`,
       category_id,
       project_id,
       implementation_ticket_id,
+      parent_document_id,
       title: 'Seed prototype',
       content: '',
       source: 'manual',
@@ -344,6 +347,78 @@ async function main() {
     assert.equal(res.ok, true);
     const stored = db.documents.find((d) => d.id === doc.id);
     assert.equal(stored.implementation_ticket_id, res.ticket.id);
+  });
+
+  await ok('createTicket with a plan document_id links the parent prototype, not the plan (ticket f3642631)', async () => {
+    const db = new FakeDb();
+    db.seedActiveWorkflow('proj-1');
+    const proto = db.seedDocument({ id: 'doc-proto' });
+    const plan = db.seedDocument({ id: 'doc-plan', parent_document_id: 'doc-proto' });
+    const res = await tickets.createTicket(db, {
+      actorId: 'pm-1', actorRoles: ['pm'],
+      title: 'Implement Prototype: Seed prototype', description: 'Goal, scope and acceptance criteria.',
+      source: 'project', projectId: 'proj-1', documentId: plan.id,
+    });
+    assert.equal(res.ok, true);
+    const storedProto = db.documents.find((d) => d.id === proto.id);
+    assert.equal(storedProto.implementation_ticket_id, res.ticket.id);
+    const storedPlan = db.documents.find((d) => d.id === plan.id);
+    assert.equal(storedPlan.implementation_ticket_id, null);
+  });
+
+  await ok('createTicket via a plan: a second Implement via the plan or the prototype is 409 (ticket f3642631)', async () => {
+    const db = new FakeDb();
+    db.seedActiveWorkflow('proj-1');
+    const proto = db.seedDocument({ id: 'doc-proto' });
+    const plan = db.seedDocument({ id: 'doc-plan', parent_document_id: 'doc-proto' });
+    const base = {
+      actorId: 'pm-1', actorRoles: ['pm'],
+      title: 'Implement Prototype: Seed prototype', description: 'Goal, scope and acceptance criteria.',
+      source: 'project', projectId: 'proj-1',
+    };
+    const first = await tickets.createTicket(db, { ...base, documentId: plan.id });
+    assert.equal(first.ok, true);
+    const viaPlan = await tickets.createTicket(db, { ...base, documentId: plan.id });
+    assert.equal(viaPlan.status, 409);
+    assert.equal(viaPlan.error, 'duplicate_implementation');
+    assert.ok(viaPlan.message.includes(first.ticket.id));
+    const viaProto = await tickets.createTicket(db, { ...base, documentId: proto.id });
+    assert.equal(viaProto.status, 409);
+    assert.equal(viaProto.error, 'duplicate_implementation');
+    assert.equal((await tickets.listTickets(db, null)).length, 1);
+  });
+
+  await ok('createTicket via a plan: a cancelled link on the parent may be replaced (ticket f3642631)', async () => {
+    const db = new FakeDb();
+    db.seedActiveWorkflow('proj-1');
+    const dead = db.seedTicket({ status: 'cancelled' });
+    const proto = db.seedDocument({ id: 'doc-proto', implementation_ticket_id: dead.id });
+    const plan = db.seedDocument({ id: 'doc-plan', parent_document_id: 'doc-proto' });
+    const res = await tickets.createTicket(db, {
+      actorId: 'pm-1', actorRoles: ['pm'],
+      title: 'Implement Prototype: Seed prototype', description: 'Goal, scope and acceptance criteria.',
+      source: 'project', projectId: 'proj-1', documentId: plan.id,
+    });
+    assert.equal(res.ok, true);
+    const storedProto = db.documents.find((d) => d.id === proto.id);
+    assert.equal(storedProto.implementation_ticket_id, res.ticket.id);
+    const storedPlan = db.documents.find((d) => d.id === plan.id);
+    assert.equal(storedPlan.implementation_ticket_id, null);
+  });
+
+  await ok('createTicket via a plan: a missing parent prototype is 400 (ticket f3642631)', async () => {
+    const db = new FakeDb();
+    db.seedActiveWorkflow('proj-1');
+    const plan = db.seedDocument({ id: 'doc-plan', parent_document_id: 'doc-gone' });
+    const res = await tickets.createTicket(db, {
+      actorId: 'pm-1', actorRoles: ['pm'],
+      title: 'Implement Prototype: Seed prototype', description: 'Goal, scope and acceptance criteria.',
+      source: 'project', projectId: 'proj-1', documentId: plan.id,
+    });
+    assert.equal(res.ok, false);
+    assert.equal(res.status, 400);
+    assert.equal(res.error, 'unknown_document');
+    assert.equal((await tickets.listTickets(db, null)).length, 0);
   });
 
   await ok('createTicket with document_id: unknown document, non-Prototype and project mismatch are 400 (ticket b14207c5)', async () => {
