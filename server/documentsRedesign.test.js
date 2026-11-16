@@ -213,6 +213,33 @@ const docs = [
     assert.ok(panel.includes('No build plan attached — the ticket will carry the prototype only.'));
   });
 
+  await ok('the confirm panel and the Not OK form scroll into view when they open (ticket 510a9786)', () => {
+    // Root cause: the panel renders at the bottom of the expanded
+    // row, below the 600px prototype preview, so on a phone it sat a
+    // full screen below the Implement button and the user never saw
+    // it — the panel rendered, it was never visible. Opening either
+    // form must scroll it into view; block 'nearest' moves the page
+    // only as far as needed.
+    assert.ok(panel.includes('id={`doc-implement-confirm-${doc.id}`}'), 'the confirm panel needs a stable id to scroll to');
+    assert.ok(
+      panel.includes('document.getElementById(`doc-implement-confirm-${confirmImplementId}`)?.scrollIntoView({ behavior: \'smooth\', block: \'nearest\' })'),
+      'opening the confirm panel must scroll it into view'
+    );
+    assert.ok(panel.includes('id={`doc-not-ok-${doc.id}`}'), 'the Not OK form needs a stable id to scroll to');
+    assert.ok(
+      panel.includes('document.getElementById(`doc-not-ok-${notOkId}`)?.scrollIntoView({ behavior: \'smooth\', block: \'nearest\' })'),
+      'opening the Not OK form must scroll it into view'
+    );
+    // The scroll runs only when a panel opens (the effect returns
+    // early on a null id), so Cancel does not scroll the page.
+    assert.ok(panel.includes('if (!confirmImplementId) return;'), 'no scroll when the confirm panel closes');
+    assert.ok(panel.includes('if (!notOkId) return;'), 'no scroll when the Not OK form closes');
+    // The lookup is by id, as on the Workflows page — this panel must
+    // stay useRef-free (the create-request review return, ticket
+    // b2d67623, pins that a ref is not the fix here).
+    assert.ok(!panel.includes('useRef'), 'the panel must not gain a useRef');
+  });
+
   await ok('the create form offers attaching a plan to its prototype (ticket 6df4ba74)', () => {
     assert.ok(panel.includes('Attach to prototype (optional)'));
     assert.ok(panel.includes('parent_document_id: newParentId || null'));

@@ -263,6 +263,29 @@ export default function DocumentsPanel(props: DocumentsPanelProps) {
     onCreateOpenChange?.(showCreate);
   }, [showCreate, onCreateOpenChange]);
 
+  // Implement confirm panel (ticket 510a9786): the panel renders at
+  // the bottom of the expanded row, below the prototype preview — a
+  // 600px iframe for an HTML prototype — so on a phone it sits a full
+  // screen below the Implement button with nothing to say it is
+  // there. The panel rendered; the user never saw it. Scroll it into
+  // view when it opens; block 'nearest' moves the page only as far as
+  // needed, so a panel already in view does not move at all. The
+  // lookup is by id, as on the Workflows page — this panel must stay
+  // free of refs: the create-request review return pins the file
+  // ref-free (ticket b2d67623).
+  useEffect(() => {
+    if (!confirmImplementId) return;
+    document.getElementById(`doc-implement-confirm-${confirmImplementId}`)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }, [confirmImplementId]);
+
+  // Not OK form (ticket 510a9786): same position, same problem — it
+  // renders below the same preview in the same expanded row, so it
+  // gets the same scroll-into-view when it opens.
+  useEffect(() => {
+    if (!notOkId) return;
+    document.getElementById(`doc-not-ok-${notOkId}`)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }, [notOkId]);
+
   function categoryNameFor(categoryId: string): string {
     return categories.find((c) => c.id === categoryId)?.name || '—';
   }
@@ -887,6 +910,7 @@ export default function DocumentsPanel(props: DocumentsPanelProps) {
                                     {!isUnpairedPlan && renderDocumentContent(doc, isPrototype)}
                                     {isPrototype && !isUnpairedPlan && confirmImplementId === doc.id && isPm && (
                                       <div
+                                        id={`doc-implement-confirm-${doc.id}`}
                                         style={{
                                           marginTop: '1rem',
                                           border: '1px solid #d9e1e8',
@@ -919,6 +943,7 @@ export default function DocumentsPanel(props: DocumentsPanelProps) {
                                     )}
                                     {isPrototype && !isUnpairedPlan && notOkId === doc.id && isPm && (
                                       <form
+                                        id={`doc-not-ok-${doc.id}`}
                                         onSubmit={(e) => {
                                           e.preventDefault();
                                           void handleNotOkSubmit(doc);
