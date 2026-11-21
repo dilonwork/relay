@@ -316,6 +316,38 @@ async function getOnboardingPackage(db, { projectId, role, baseUrl, origin }) {
   };
 }
 
+// The operating rules as the agent API serves them (ticket 9a6ad11b):
+// the two rule sets, read live from server/operatingRules.js — the
+// single source — with ids and text, nothing else. Fresh objects on
+// every call, so a caller cannot mutate the module's arrays.
+function getOperatingRules() {
+  const shape = (rules) => rules.map((r) => ({ id: r.id, text: r.text }));
+  return {
+    work_mode_rules: shape(WORK_MODE_RULES),
+    standing_rules: shape(STANDING_RULES),
+  };
+}
+
+// The onboarding package for the caller's own role in its own project
+// (ticket 9a6ad11b): the same getOnboardingPackage as the admin
+// endpoint, generated live from the same definitions, but scoped by
+// the authenticated account — the project and the role are checked
+// against the caller's users row, never trusted from the request —
+// and with every key field stripped: the agent endpoint never returns
+// a key, not the full key, not a masked prefix, not a hash. A
+// caller with no project assignment, or asking for another project
+// or a role it does not hold, is 403 out_of_scope.
+async function getOwnOnboardingPackage(db, { actor, projectId, role, baseUrl, origin }) {
+  const actorRoles = (actor && actor.roles) || [];
+  if (!actor || !actor.project_id || actor.project_id !== projectId || !actorRoles.includes(role)) {
+    return { ok: false, status: 403, error: 'out_of_scope', message: 'You can only read your own onboarding package: your assigned project and a role you hold.' };
+  }
+  const result = await getOnboardingPackage(db, { projectId, role, baseUrl, origin });
+  if (!result.ok) return result;
+  const { key: _key, ...pkg } = result;
+  return pkg;
+}
+
 module.exports = {
   ROLE_LABELS,
   roleLabel,
@@ -324,4 +356,6 @@ module.exports = {
   buildOnboardingDocument,
   buildProjectPromptBundle,
   getOnboardingPackage,
+  getOperatingRules,
+  getOwnOnboardingPackage,
 };

@@ -734,6 +734,40 @@ app.post('/api/admin/api-keys/:id/revoke', async (req, res) => {
   }
 });
 
+// --- Agent-readable operating rules and own onboarding (ticket 9a6ad11b) ---
+// These live under /api, NOT /api/admin: any authenticated role agent
+// may call them, so a role agent can re-read the live rules and its
+// own onboarding document without an admin. The admin onboarding
+// endpoint below is unchanged (admin only, masked key included).
+// Both are behind the /api requireAuth middleware above: no session
+// or API key is 401.
+app.get('/api/operating-rules', (req, res) => {
+  res.json(onboarding.getOperatingRules());
+});
+
+// An agent reads its own onboarding package only: the project and the
+// role in the path are checked against the authenticated account
+// (getOwnOnboardingPackage enforces it) and the response carries no
+// key data of any kind.
+app.get('/api/projects/:id/onboarding/:role', async (req, res) => {
+  try {
+    const result = await onboarding.getOwnOnboardingPackage(db, {
+      actor: req.user,
+      projectId: req.params.id,
+      role: req.params.role,
+      // The origin the request came in on: the prompt bundle prints
+      // it as the platform's base URL (PUBLIC_URL env wins when it
+      // is set; see server/publicUrl.js).
+      origin: `${req.protocol}://${req.get('host')}`,
+    });
+    if (!result.ok) return res.status(result.status).json({ error: result.error, message: result.message });
+    const { ok: _ok, status: _status, ...pkg } = result;
+    res.json(pkg);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // --- Admin onboarding package (design doc ch. 18) ---
 // The handoff for one role agent of an external project: the agent,
 // its active API key (masked — the full key was shown exactly once

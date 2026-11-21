@@ -134,7 +134,7 @@ relay/
 │   ├── tickets.js        # ticket service: create / transition / history / claim queue
 │   ├── documents.js      # document service: file / list / categories / download
 │   ├── projects.js       # project service (internal/external, role agents on external creation)
-│   ├── onboarding.js     # onboarding packages: live doc from the project's chosen workflow + role definitions, project prompt bundle
+│   ├── onboarding.js     # onboarding packages: live doc from the project's chosen workflow + role definitions, project prompt bundle; agent-readable operating rules and own onboarding
 │   ├── operatingRules.js # standing operating rules: the single source for the onboarding doc and the prompt bundle
 │   ├── publicUrl.js      # public base URL resolution (explicit > PUBLIC_URL env > request origin > localhost default)
 │   ├── workflows.js      # workflow service: CRUD, chosen workflow, role maps
@@ -145,6 +145,7 @@ relay/
 │   ├── tickets.test.js
 │   ├── projects.test.js
 │   ├── onboarding.test.js
+│   ├── operatingRules.test.js
 │   ├── publicUrl.test.js
 │   ├── auth.test.js
 │   ├── admin.test.js
@@ -286,7 +287,7 @@ onboarding document regenerating from a live workflow edit, and the
 project prompt bundle (whole project context, base-URL resolution,
 no token in the bundle).
 
-493 tests in total: state machine 21, tickets 48, projects 16, onboarding 12, public base URL 5, auth 21,
+503 tests in total: state machine 21, tickets 48, projects 16, onboarding 12, agent-readable operating rules 10, public base URL 5, auth 21,
 admin 7, API keys 8, monitor 18, workflows 30, quick-create builder 11, documents 36, document tickets 16, document render 18, gantt helpers 27, admin nav 5, view hash 8, migrations 37, role lists 4, title bar 7, dashboard redesign 17, ticket detail redesign 16, projects redesign 15, tickets list redesign 8, workflows redesign 15, admin API keys redesign 12, documents redesign 23, workflow editor mobile redesign 17, workflow duplicate 12, repo guard 3.
 
 ## Accounts & authentication
@@ -422,6 +423,16 @@ admin 7, API keys 8, monitor 18, workflows 30, quick-create builder 11, document
   chat-room recommendation. The document and the bundle never contain
   a token; the full key is only shown once, at creation. See
   the design doc, ch. 18 and ch. 20.
+- **Agent-readable rules and own onboarding:** any authenticated role
+  agent may also read the live operating rules (`GET
+  /api/operating-rules` — the work-mode rules and the standing rules,
+  ids and text exactly as in `server/operatingRules.js`) and its own
+  onboarding package (`GET /api/projects/:id/onboarding/:role` — the
+  same live document and prompt bundle as the admin endpoint, but
+  scoped to the caller's own project and a role it holds, and with no
+  key data of any kind: not the full key, not a masked prefix, not a
+  hash; another project or another role is 403). The admin endpoint
+  is unchanged. See the design doc, ch. 18.
 
 ## Admin
 
@@ -817,6 +828,8 @@ log records the role actually exercised.
 | `POST` | `/api/admin/users/agents` | Create an agent account with its first API key; full key returned exactly once (admin only) |
 | `PATCH` | `/api/admin/users/:id` | Edit display name, roles, kind, active flag (admin only) |
 | `GET` | `/api/admin/projects/:id/onboarding/:role` | Onboarding package for a role agent: masked key, live document, project prompt bundle, chat room (admin only) |
+| `GET` | `/api/operating-rules` | The live operating rules for any authenticated agent: `{work_mode_rules: [{id, text}], standing_rules: [{id, text}]}`, read from `server/operatingRules.js` on every call |
+| `GET` | `/api/projects/:id/onboarding/:role` | The caller's own onboarding package: same live document and prompt bundle as the admin endpoint, but only for the caller's own project and a role it holds (anything else is 403 `out_of_scope`), and with no key data of any kind |
 | `PATCH` | `/api/admin/users/:id/project` | Assign an account to a project, or clear the assignment (`project_id` null; admin only) |
 | `POST` | `/api/admin/users/:id/reset-password` | Set a new password, revokes sessions (admin only) |
 | `GET` | `/api/admin/users/:id/api-keys` | List an account's API keys, without hashes (admin only) |
