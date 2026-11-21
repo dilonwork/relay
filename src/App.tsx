@@ -100,6 +100,33 @@ export default function App() {
   // Projects (Project view): the formal list tickets belong to.
   // 'all' shows every project; 'none' shows uncategorized tickets only;
   // a project id shows that one project (single-project view).
+  // Theme preference state: 'light' or 'dark', stored in localStorage and applied to document.documentElement.
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
+    try {
+      const saved = localStorage.getItem('relay_theme');
+      if (saved === 'light' || saved === 'dark') return saved;
+      if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+        return 'dark';
+      }
+    } catch {}
+    return 'light';
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('relay_theme', theme);
+    } catch {}
+    if (theme === 'dark') {
+      document.documentElement.setAttribute('data-theme', 'dark');
+    } else {
+      document.documentElement.removeAttribute('data-theme');
+    }
+  }, [theme]);
+
+  const toggleTheme = () => {
+    setTheme(prev => (prev === 'light' ? 'dark' : 'light'));
+  };
+
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectFilter, setProjectFilter] = useState('all');
   const [newProjectName, setNewProjectName] = useState('');
