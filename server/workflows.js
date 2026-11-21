@@ -608,15 +608,33 @@ function builtinDefinition() {
   };
 }
 
+// Compare JSON values ignoring object key order. JSON.stringify
+// keeps insertion order, so a stored definition whose keys were
+// serialized in a different order compares unequal even when it
+// holds the same content (the Default workflow row in the database
+// is one such case). Canonicalize by sorting object keys
+// recursively; array order is kept — the order of states and
+// transitions is meaningful.
+function canonicalize(value) {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (value && typeof value === 'object') {
+    const out = {};
+    for (const key of Object.keys(value).sort()) out[key] = canonicalize(value[key]);
+    return out;
+  }
+  return value;
+}
+
 // Whether a definition is the built-in 14-state definition: the
-// same states and transitions. Roles may differ (a project workflow
-// may override who owns a state) — roles do not change the shape of
-// the flow, and the roles map stays the authority for who may act.
+// same states and transitions, ignoring JSON key order. Roles may
+// differ (a project workflow may override who owns a state) — roles
+// do not change the shape of the flow, and the roles map stays the
+// authority for who may act.
 function isBuiltinDefinition(definition) {
   if (!definition) return false;
   return (
-    JSON.stringify(definition.states || []) === JSON.stringify(sm.BUILTIN_STATES) &&
-    JSON.stringify(definition.transitions || []) === JSON.stringify(sm.BUILTIN_DEFINITION.transitions)
+    JSON.stringify(canonicalize(definition.states || [])) === JSON.stringify(canonicalize(sm.BUILTIN_STATES)) &&
+    JSON.stringify(canonicalize(definition.transitions || [])) === JSON.stringify(canonicalize(sm.BUILTIN_DEFINITION.transitions))
   );
 }
 

@@ -215,6 +215,30 @@ async function main() {
     assert.equal(workflows.isBuiltinDefinition(null), false);
   });
 
+  await ok('isBuiltinDefinition: a stored definition with reordered keys still matches, a reordered different flow does not', async () => {
+    // A stored workflow row serializes its states and transitions
+    // with whatever key order the JSONB round-trip produced; the
+    // comparison must ignore key order (ticket 41d93d61).
+    const reorderKeys = (value) => {
+      if (Array.isArray(value)) return value.map(reorderKeys);
+      if (value && typeof value === 'object') {
+        const out = {};
+        for (const key of Object.keys(value).reverse()) out[key] = reorderKeys(value[key]);
+        return out;
+      }
+      return value;
+    };
+    const stored = reorderKeys(workflows.builtinDefinition());
+    // Prove the test exercises the key-order difference: the raw
+    // JSON strings differ, so the old string comparison would fail.
+    assert.notEqual(JSON.stringify(stored.states), JSON.stringify(sm.BUILTIN_STATES));
+    assert.notEqual(JSON.stringify(stored.transitions), JSON.stringify(sm.BUILTIN_DEFINITION.transitions));
+    assert.equal(workflows.isBuiltinDefinition(stored), true);
+    const different = reorderKeys(workflows.builtinDefinition());
+    different.transitions = different.transitions.slice(0, 5);
+    assert.equal(workflows.isBuiltinDefinition(different), false);
+  });
+
   await ok('validateRolesMap: complete map passes, missing/extra/illegal entries fail', async () => {
     assert.equal(workflows.validateRolesMap(workflows.BUILTIN_WORKFLOW_ROLES).ok, true);
     const missing = rolesWith();
