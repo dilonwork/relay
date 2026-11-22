@@ -637,45 +637,45 @@ button.link {
   flex-direction: column;
   gap: 6px;
   text-align: left;
-  background: #fff;
-  border: 1px solid #d9e1e8;
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
   border-radius: 8px;
   padding: 12px 14px;
   cursor: pointer;
   font-size: 14px;
   font-family: inherit;
-  color: #1a2332;
+  color: var(--text);
 }
-.project-card:hover { border-color: #0f2a3d; }
-.project-card.selected { border-color: #0f2a3d; }
+.project-card:hover { border-color: var(--text); }
+.project-card.selected { border-color: var(--text); }
 .project-card-head {
   display: flex;
   justify-content: space-between;
   align-items: center;
   gap: 8px;
 }
-.project-card-head h3 { margin: 0; font-size: 15px; color: #0f2a3d; }
-.project-desc { font-size: 12px; color: #5a6b7c; min-height: 15px; }
+.project-card-head h3 { margin: 0; font-size: 15px; color: var(--text); }
+.project-desc { font-size: 12px; color: var(--text-muted); min-height: 15px; }
 .project-counts { display: flex; gap: 12px; font-size: 12px; flex-wrap: wrap; }
 .project-counts b { font-size: 14px; }
-.project-counts .wait b { color: #b45309; }
+.project-counts .wait b { color: var(--warning); }
 
 /* Type as two compact cards instead of paragraph radio labels. */
 .projects-typecards { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 8px 0; }
 .typecard {
-  border: 1px solid #c4d0da;
+  border: 1px solid var(--border-strong);
   border-radius: 6px;
   padding: 10px 12px;
   cursor: pointer;
   font-size: 13px;
-  background: #fff;
+  background: var(--card-bg);
   text-align: left;
   font-family: inherit;
-  color: #1a2332;
+  color: var(--text);
 }
-.typecard.on { border-color: #0f2a3d; background: #f6f9fb; }
+.typecard.on { border-color: var(--text); background: var(--card-selected); }
 .typecard b { display: block; margin-bottom: 2px; }
-.typecard span { color: #5a6b7c; font-size: 12px; }
+.typecard span { color: var(--text-muted); font-size: 12px; }
 
 /* External role-agent preview as username chips, not a table. */
 .chiprow { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
