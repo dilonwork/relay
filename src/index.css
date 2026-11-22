@@ -679,10 +679,17 @@ button.link {
   gap: 8px;
 }
 .project-card-head h3 { margin: 0; font-size: 15px; color: var(--text); }
-.project-desc { font-size: 12px; color: var(--text-muted); min-height: 15px; }
+/* Kept at the original #5a6b7c (ticket 68d017d9, review return):
+   var(--text-muted) drops light contrast to 2.56:1, below the WCAG
+   text 4.5:1 floor. Awaits a muted-text variable dark enough in
+   light theme (variable-definition fix, separate ticket). */
+.project-desc { font-size: 12px; color: #5a6b7c; min-height: 15px; }
 .project-counts { display: flex; gap: 12px; font-size: 12px; flex-wrap: wrap; }
 .project-counts b { font-size: 14px; }
-.project-counts .wait b { color: var(--warning); }
+/* Kept at the original #b45309 (ticket 68d017d9, review return):
+   var(--warning) drops light contrast to 2.39:1. Awaits a darker
+   warning value (variable-definition fix, separate ticket). */
+.project-counts .wait b { color: #b45309; }
 
 /* Type as two compact cards instead of paragraph radio labels. */
 .projects-typecards { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 8px 0; }
@@ -699,7 +706,11 @@ button.link {
 }
 .typecard.on { border-color: var(--text); background: var(--card-selected); }
 .typecard b { display: block; margin-bottom: 2px; }
-.typecard span { color: var(--text-muted); font-size: 12px; }
+/* Kept at the original #5a6b7c (ticket 68d017d9, review return):
+   var(--text-muted) drops light contrast to 2.56:1, below the WCAG
+   text 4.5:1 floor. Awaits a muted-text variable dark enough in
+   light theme (variable-definition fix, separate ticket). */
+.typecard span { color: #5a6b7c; font-size: 12px; }
 
 /* External role-agent preview as username chips, not a table. */
 .chiprow { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
