@@ -234,9 +234,9 @@ async function main() {
     const css = readSrc('index.css');
     assert.match(css, /\.detail-columns \{[^}]*grid-template-columns: 1fr 250px/, 'desktop must be two columns with a 250px rail');
     assert.match(css, /\.callout \{[^}]*border-left: 4px solid #2563eb/, 'the callout must have a blue left edge');
-    assert.match(css, /\.target-btns button\.on \{[^}]*background: #0f2a3d/, 'the selected target button must be marked');
+    assert.match(css, /\.target-btns button\.on \{[^}]*background: var\(--sidebar-bg\)/, 'the selected target button must be marked');
     assert.match(css, /\.hist-row \{[^}]*cursor: pointer/, 'history rows must look clickable');
-    assert.match(css, /\.hist-detail td \{[^}]*background: #fbfcfd/, 'expanded history rows must be visually distinct');
+    assert.match(css, /\.hist-detail td \{[^}]*background: var\(--surface\)/, 'expanded history rows must be visually distinct');
     assert.match(css, /@media \(max-width: 720px\) \{\s*\.detail-columns \{[^}]*grid-template-columns: 1fr/, 'the rail must stack below on mobile');
   });
 
