@@ -287,8 +287,8 @@ onboarding document regenerating from a live workflow edit, and the
 project prompt bundle (whole project context, base-URL resolution,
 no token in the bundle).
 
-513 tests in total: state machine 21, tickets 49, projects 16, onboarding 12, agent-readable operating rules 10, public base URL 5, auth 22,
-admin 7, API keys 8, monitor 18, workflows 31, quick-create builder 11, documents 36, document tickets 16, document render 18, gantt helpers 27, admin nav 5, view hash 8, migrations 37, role lists 4, title bar 7, dashboard redesign 17, ticket detail redesign 16, projects redesign 15, tickets list redesign 8, workflows redesign 15, admin API keys redesign 12, documents redesign 23, workflow editor mobile redesign 17, workflow duplicate 12, repo guard 3, nginx allowlist 4, admin users 3.
+517 tests in total: state machine 21, tickets 49, projects 16, onboarding 12, agent-readable operating rules 10, public base URL 5, auth 22,
+admin 7, API keys 8, monitor 18, workflows 31, quick-create builder 11, documents 36, document tickets 16, document render 18, gantt helpers 27, admin nav 5, view hash 8, migrations 37, role lists 4, title bar 7, dashboard redesign 17, ticket detail redesign 16, projects redesign 15, tickets list redesign 8, workflows redesign 15, admin API keys redesign 12, documents redesign 23, workflow editor mobile redesign 17, workflow duplicate 12, repo guard 3, nginx allowlist 4, admin users 3, theme tints 4.
 
 ## Accounts & authentication
 
