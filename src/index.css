@@ -613,7 +613,11 @@ button.link {
 .banner.error { background: #fbe9e7; border: 1px solid #e0a49c; color: #7a2318; }
 .banner.notice { background: #e2f2e9; border: 1px solid #9fd0ae; color: #1d6b3c; }
 
-.muted { color: var(--text-muted); font-size: 13px; }
+/* Kept at the original #5a6b7c (ticket 9719ee35, review return):
+   var(--text-muted) drops light contrast to 2.38:1, below the WCAG
+   text 4.5:1 floor. Awaits a muted-text variable dark enough in
+   light theme (variable-definition fix, separate ticket). */
+.muted { color: #5a6b7c; font-size: 13px; }
 
 /* Dashboard: attention-first overview (ticket 4c7601fb, UI&UX prototype
    "Dashboard redesign — recommendations"). The summary strip answers
@@ -633,12 +637,18 @@ button.link {
   background: var(--card-bg);
 }
 .dashboard-stat-num { font-size: 22px; font-weight: 700; line-height: 1.1; color: var(--text); }
-.dashboard-stat-label { font-size: 12px; color: var(--text-muted); }
-/* The hot stat keeps its pale amber background (#fffbeb): the variable
-   blocks have no amber-tint variable, and mapping it to a neutral would
-   erase the attention meaning (same call as the badge status tints). */
+/* Kept at the original #5a6b7c (ticket 9719ee35, review return):
+   var(--text-muted) drops light contrast to 2.56:1, below the WCAG
+   text 4.5:1 floor. Awaits a muted-text variable dark enough in
+   light theme (variable-definition fix, separate ticket). The hot
+   stat's label is overridden below with amber text (dark 1.65:1
+   otherwise). */
+.dashboard-stat-label { font-size: 12px; color: #5a6b7c; }
+/* The hot stat uses the amber tint variables (ticket 9719ee35):
+   background var(--tint-amber-bg-soft) with amber text on it. */
 .dashboard-stat.hot { border-color: var(--warning); background: var(--tint-amber-bg-soft); }
-.dashboard-stat.hot .dashboard-stat-num { color: var(--warning); }
+.dashboard-stat.hot .dashboard-stat-num { color: var(--tint-amber-text); }
+.dashboard-stat.hot .dashboard-stat-label { color: var(--tint-amber-text); }
 
 .dashboard-toolbar { display: flex; gap: 8px; align-items: center; margin: 10px 0; flex-wrap: wrap; }
 .dashboard-toolbar input[type="text"] { width: 200px; }
@@ -672,7 +682,11 @@ button.link {
   gap: 8px;
 }
 .dashboard-card-head h3 { margin: 0; font-size: 15px; color: var(--text); }
-.dashboard-desc { font-size: 12px; color: var(--text-muted); min-height: 15px; }
+/* Kept at the original #5a6b7c (ticket 9719ee35, review return):
+   var(--text-muted) drops light contrast to 2.56:1, below the WCAG
+   text 4.5:1 floor. Awaits a muted-text variable dark enough in
+   light theme (variable-definition fix, separate ticket). */
+.dashboard-desc { font-size: 12px; color: #5a6b7c; min-height: 15px; }
 .dashboard-bar-track {
   height: 6px;
   background: var(--border);
@@ -682,9 +696,13 @@ button.link {
 .dashboard-bar-fill { display: block; height: 100%; background: var(--success); border-radius: 999px; }
 .dashboard-counts3 { display: flex; gap: 12px; font-size: 12px; }
 .dashboard-counts3 b { font-size: 14px; }
-.dashboard-counts3 .wait b { color: var(--warning); }
+.dashboard-counts3 .wait b { color: var(--tint-amber-text); }
 .dashboard-foot { display: flex; justify-content: space-between; align-items: center; margin-top: 2px; }
-.dashboard-empty { text-align: center; padding: 36px 10px; color: var(--text-muted); }
+/* Kept at the original #5a6b7c (ticket 9719ee35, review return):
+   var(--text-muted) drops light contrast to 2.38:1, below the WCAG
+   text 4.5:1 floor. Awaits a muted-text variable dark enough in
+   light theme (variable-definition fix, separate ticket). */
+.dashboard-empty { text-align: center; padding: 36px 10px; color: #5a6b7c; }
 .dashboard-empty b { display: block; font-size: 15px; color: var(--text); margin-bottom: 4px; }
 
 /* The title bar's action slot: a primary button there must not carry
