@@ -573,15 +573,15 @@ tbody tr.selected { background: #eef6f6; }
   border-radius: 999px;
   padding: 1px 9px;
   font-size: 12px;
-  background: #eef2f5;
-  color: #0f2a3d;
+  background: var(--badge-bg);
+  color: var(--badge-text);
   white-space: nowrap;
 }
 
 .badge.applied { background: #e2f2e9; color: #1d6b3c; }
 .badge.rejected { background: #fbe9e7; color: #a03325; }
 .badge.delivered { background: #e2f2e9; color: #1d6b3c; }
-.badge.cancelled { background: #f4f7f9; color: #5a6b7c; }
+.badge.cancelled { background: var(--bg); color: #5a6b7c; }
 /* Implementation badge (ticket b14207c5): amber, like the stalled
    signal — the work is under way, not done. A button wearing a
    badge keeps the badge look; the pointer cursor says it opens the
