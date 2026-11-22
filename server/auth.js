@@ -218,9 +218,14 @@ async function createUser(db, { username, password, displayName, roles, kind, pr
 // commit together, or neither does). No validation here: the caller
 // (createAgent, or a flow that supplies valid roles by construction)
 // is responsible for it.
-async function createAgentTx(client, { username, displayName, role, projectId }) {
+async function createAgentTx(client, { username, displayName, role, roles, projectId }) {
+  // Accept either the legacy single `role` (external project creation)
+  // or the `roles` array (Admin create-agent form). No validation here:
+  // the caller (createAgent, or a flow that supplies valid roles by
+  // construction) is responsible for it.
+  const roleList = Array.isArray(roles) ? roles : (role !== undefined && role !== null ? [role] : []);
   const created = await insertUser(client, {
-    username, password: null, displayName, roles: [role], kind: 'agent', projectId,
+    username, password: null, displayName, roles: roleList, kind: 'agent', projectId,
   });
   if (!created.ok) return created;
   const key = await createApiKey(client, { userId: created.user.id, name: `${created.user.username} key` });
@@ -234,9 +239,12 @@ async function createAgentTx(client, { username, displayName, role, projectId })
 // caller supplies no password (agents have none); the project, when
 // given, must exist — the foreign key is the backstop, this check is
 // the readable error. The full key is returned exactly once, here.
-async function createAgent(db, { username, displayName, role, projectId }) {
-  if (!WORKFLOW_ROLES.includes(role)) {
-    return { ok: false, status: 400, error: 'bad_request', message: `Role must be one of: ${WORKFLOW_ROLES.join(', ')}.` };
+async function createAgent(db, { username, displayName, role, roles, projectId }) {
+  // Accept either the legacy single `role` or the `roles` array (Admin
+  // create-agent form). At least one workflow role is required.
+  const roleList = Array.isArray(roles) ? roles : (role !== undefined && role !== null ? [role] : []);
+  if (roleList.length === 0 || !roleList.every((r) => WORKFLOW_ROLES.includes(r))) {
+    return { ok: false, status: 400, error: 'bad_request', message: `At least one role is required; each role must be one of: ${WORKFLOW_ROLES.join(', ')}.` };
   }
   const cleanProjectId = projectId === undefined || projectId === null || !String(projectId).trim()
     ? null
@@ -248,7 +256,7 @@ async function createAgent(db, { username, displayName, role, projectId }) {
     }
   }
   return db.withTransaction(async (client) => createAgentTx(client, {
-    username, displayName, role, projectId: cleanProjectId,
+    username, displayName, roles: roleList, projectId: cleanProjectId,
   }));
 }
 

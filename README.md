@@ -287,7 +287,7 @@ onboarding document regenerating from a live workflow edit, and the
 project prompt bundle (whole project context, base-URL resolution,
 no token in the bundle).
 
-504 tests in total: state machine 21, tickets 48, projects 16, onboarding 12, agent-readable operating rules 10, public base URL 5, auth 21,
+506 tests in total: state machine 21, tickets 49, projects 16, onboarding 12, agent-readable operating rules 10, public base URL 5, auth 22,
 admin 7, API keys 8, monitor 18, workflows 31, quick-create builder 11, documents 36, document tickets 16, document render 18, gantt helpers 27, admin nav 5, view hash 8, migrations 37, role lists 4, title bar 7, dashboard redesign 17, ticket detail redesign 16, projects redesign 15, tickets list redesign 8, workflows redesign 15, admin API keys redesign 12, documents redesign 23, workflow editor mobile redesign 17, workflow duplicate 12, repo guard 3.
 
 ## Accounts & authentication
@@ -405,7 +405,7 @@ admin 7, API keys 8, monitor 18, workflows 31, quick-create builder 11, document
   project, API key status, last seen and chat room, with Edit, Keys,
   Project, Deactivate and Responsibilities; they have no password
   actions. Creating a human takes a password (min 8 characters) and
-  role checkboxes; creating an agent takes a username, a workflow role
+  role checkboxes; creating an agent takes a username, one or more workflow roles (checkboxes)
   and a project (internal projects only, or assign later) and returns
   its first API key exactly once, in a notice banner with a Copy
   button. Last seen reuses `api_keys.last_used_at`. The chat room is a
@@ -825,7 +825,7 @@ log records the role actually exercised.
 | `GET` | `/api/admin/overview` | System overview (admin only) |
 | `GET` | `/api/admin/users` | List accounts with kind and, for agents, key status (admin only) |
 | `POST` | `/api/admin/users` | Create an account (admin only); accepts `kind` (human default) |
-| `POST` | `/api/admin/users/agents` | Create an agent account with its first API key; full key returned exactly once (admin only) |
+| `POST` | `/api/admin/users/agents` | Create an agent account with its first API key; body takes `roles` (one or more workflow roles, at least one required); full key returned exactly once (admin only) |
 | `PATCH` | `/api/admin/users/:id` | Edit display name, roles, kind, active flag (admin only) |
 | `GET` | `/api/admin/projects/:id/onboarding/:role` | Onboarding package for a role agent: masked key, live document, project prompt bundle, chat room (admin only) |
 | `GET` | `/api/operating-rules` | The live operating rules for any authenticated agent: `{work_mode_rules: [{id, text}], standing_rules: [{id, text}]}`, read from `server/operatingRules.js` on every call |

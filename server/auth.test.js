@@ -580,6 +580,32 @@ async function main() {
     assert.equal(await auth.countUsers(db), 1);
   });
 
+  await ok('createAgent accepts a roles array and stores all of them (ticket bc283a0b)', async () => {
+    const db = new FakeDb();
+    const created = await auth.createAgent(db, {
+      username: 'multi-1', displayName: 'Multi One', roles: ['engineer', 'reviewer'],
+    });
+    assert.equal(created.ok, true, JSON.stringify(created));
+    assert.equal(created.status, 201);
+    assert.deepEqual(created.user.roles, ['engineer', 'reviewer']);
+    assert.ok(created.key.startsWith('rl_'), 'key has the rl_ prefix');
+    // Zero roles and a non-workflow role are rejected.
+    const empty = await auth.createAgent(db, { username: 'multi-2', displayName: 'M', roles: [] });
+    assert.equal(empty.ok, false);
+    assert.equal(empty.status, 400);
+    const badRole = await auth.createAgent(db, { username: 'multi-3', displayName: 'M', roles: ['engineer', 'admin'] });
+    assert.equal(badRole.ok, false);
+    assert.equal(badRole.status, 400);
+    // Duplicate roles are stored once.
+    const dupes = await auth.createAgent(db, { username: 'multi-4', displayName: 'M', roles: ['engineer', 'engineer'] });
+    assert.equal(dupes.ok, true, JSON.stringify(dupes));
+    assert.deepEqual(dupes.user.roles, ['engineer']);
+    // The legacy single-role shape still works.
+    const legacy = await auth.createAgent(db, { username: 'multi-5', displayName: 'M', role: 'tester' });
+    assert.equal(legacy.ok, true, JSON.stringify(legacy));
+    assert.deepEqual(legacy.user.roles, ['tester']);
+  });
+
   await ok('listUsersWithKeyStatus reports key status for agents only', async () => {
     const db = new FakeDb();
     const human = await auth.createUser(db, {
