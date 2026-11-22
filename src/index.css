@@ -770,7 +770,12 @@ button.link {
 
 .gantt-grid { display: grid; grid-template-columns: 240px 1fr; column-gap: 12px; }
 .gantt-axis { position: relative; height: 20px; border-bottom: 1px solid var(--border); }
-.gantt-axis span { position: absolute; top: 0; font-size: 11px; color: var(--text-muted); white-space: nowrap; }
+/* Kept at the original #5a6b7c (ticket e01284ca, review return):
+   var(--text-muted) drops light contrast to 2.38:1 on #f4f7f9,
+   below the WCAG text 4.5:1 floor. Awaits a muted-text variable
+   dark enough in light theme (variable-definition fix, separate
+   ticket). */
+.gantt-axis span { position: absolute; top: 0; font-size: 11px; color: #5a6b7c; white-space: nowrap; }
 .gantt-group { grid-column: 1 / -1; font-weight: 600; color: var(--text); margin: 12px 0 2px 0; }
 .gantt-label { padding: 4px 0; overflow: hidden; }
 .gantt-label .gantt-title {
@@ -874,7 +879,11 @@ button.link {
    Stalled badge next to the status badge. The border is inset
    (box-sizing) so the 16px bar height does not change. */
 .gantt-bar { box-sizing: border-box; }
-.gantt-bar.stalled { border: 2px solid var(--warning); }
+/* Kept at the original #d97706 (ticket e01284ca, review return):
+   var(--warning) drops light contrast to 2.22:1 on #f4f7f9, below
+   the WCAG non-text 3:1 floor. Awaits a darker warning value
+   (variable-definition fix, separate ticket). */
+.gantt-bar.stalled { border: 2px solid #d97706; }
 .badge.stalled { background: #fef3c7; color: #92400e; margin-left: 4px; }
 
 /* Today line (ticket 78462e97): a dashed amber rule across the whole
@@ -886,7 +895,10 @@ button.link {
   top: 0;
   bottom: 0;
   width: 0;
-  border-left: 2px dashed var(--warning);
+  /* Kept at the original #d97706 (ticket e01284ca, review return):
+     var(--warning) drops light contrast to 2.22:1 on #f4f7f9, below
+     the WCAG non-text 3:1 floor. Awaits a darker warning value. */
+  border-left: 2px dashed #d97706;
   pointer-events: none;
   z-index: 2;
 }
