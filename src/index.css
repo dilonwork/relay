@@ -820,8 +820,15 @@ button.link {
 .summary { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0; }
 .stat { border: 1px solid var(--card-border); border-radius: 6px; padding: 8px 14px; background: var(--card-selected); min-width: 100px; }
 .stat b { font-size: 18px; display: block; }
-.stat span { font-size: 12px; color: var(--text-muted); }
-.stat.warn b { color: var(--warning); }
+/* Uses var(--text), not var(--text-muted) (ticket cd4d406c, review
+   return): --text-muted is below the 4.5:1 floor on the card
+   background in both themes, and the .stat background is now
+   theme-aware var(--card-selected), so no single hard-coded text
+   color can pass both themes (restoring #5a6b7c would be 1.73:1 in
+   dark). A theme-aware muted-text variable is the follow-up path;
+   the cost is the label loses its muted hierarchy. */
+.stat span { font-size: 12px; color: var(--text); }
+.stat.warn b { color: var(--tint-amber-text); }
 
 /* The one-time key panel: amber, distinct from the rest of the page.
    It only closes when the admin confirms the key is saved. */
