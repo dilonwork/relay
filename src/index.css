@@ -227,7 +227,16 @@ body {
   color: var(--sidebar-text);
 }
 .sidebar-nav button:hover { background: var(--sidebar-hover); }
-.sidebar-nav button.active { background: var(--sidebar-active); color: var(--sidebar-text); }
+/* Kept at the original hard-coded colors (ticket 8b25e589, review
+   return): var(--sidebar-text) #dbe7ee on var(--sidebar-active) is
+   3.98:1 in light theme and 1.48:1 in dark theme, below the WCAG
+   text 4.5:1 floor — in dark theme the active label is essentially
+   unreadable (dark --sidebar-active #2dd4bf is too light for any
+   light text). The original #fff on #0e7c7b is 5.01:1 in both
+   themes. A theme-aware active state (a darker dark
+   --sidebar-active, or a new active-text variable) needs a separate
+   follow-up ticket. */
+.sidebar-nav button.active { background: #0e7c7b; color: #fff; }
 .nav-icon { width: 20px; text-align: center; flex: 0 0 auto; }
 
 /* Tickets nav group: expandable sub-pages (All tickets / Gantt). */
