@@ -1104,7 +1104,7 @@ button.amber-outline:disabled { opacity: 0.5; cursor: default; }
 .section-dot.ok { background: var(--success); }
 .validation-summary { background: #fef2f2; border: 1px solid #fecaca; color: #7f1d1d; border-radius: 6px; padding: 10px 14px; margin-bottom: 16px; }
 .validation-summary ul { margin: 4px 0 8px 20px; }
-.section-error { color: #b91c1c; font-size: 13px; margin: 4px 0 12px; }
+.section-error { color: var(--error); font-size: 13px; margin: 4px 0 12px; }
 .replace-notice { background: #fef3c7; border: 1px solid #fcd34d; color: #92400e; border-radius: 6px; padding: 10px 14px; margin-bottom: 12px; }
 .workflow-preview { margin-bottom: 12px; }
 
@@ -1244,8 +1244,8 @@ button.amber-outline:disabled { opacity: 0.5; cursor: default; }
     position: sticky;
     bottom: 0;
     z-index: 5;
-    background: #fff;
-    border-top: 1px solid #e2e8ee;
+    background: var(--card-bg);
+    border-top: 1px solid var(--border);
     margin: 12px -16px -16px;
     padding: 10px 16px;
     border-radius: 0 0 8px 8px;
