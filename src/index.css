@@ -29,6 +29,30 @@
   --error: #e53e3e;
   --success: #38a169;
   --warning: #d69e2e;
+  /* State tints (ticket 5ac8689c): bg = tint background, bg-soft = paler
+     variant, border/mid/edge = decorative, text/text-strong = text on the
+     tint, muted = secondary text on the blue tint. Light values are the
+     hardcoded hexes the six Dark Theme color tickets replace; dark values
+     are chosen so every text-on-bg pair stays >= 4.5:1 in both themes
+     (enforced by server/themeTints.test.js). */
+  --tint-amber-bg: #fef3c7;
+  --tint-amber-bg-soft: #fffbeb;
+  --tint-amber-border: #fcd34d;
+  --tint-amber-text: #92400e;
+  --tint-green-bg: #e2f2e9;
+  --tint-green-bg-soft: #dcfce7;
+  --tint-green-mid: #9fd0ae;
+  --tint-green-text: #1d6b3c;
+  --tint-green-text-strong: #166534;
+  --tint-red-bg: #fbe9e7;
+  --tint-red-bg-soft: #fef2f2;
+  --tint-red-border: #fecaca;
+  --tint-red-text: #a03325;
+  --tint-red-text-strong: #7f1d1d;
+  --tint-blue-bg: #eff6ff;
+  --tint-blue-border: #bfdbfe;
+  --tint-blue-edge: #2563eb;
+  --tint-blue-muted: #5a6b7c;
 }
 
 [data-theme='dark'] {
@@ -62,6 +86,28 @@
   --error: #fc8181;
   --success: #68d391;
   --warning: #f6e05e;
+  /* State tints (ticket 5ac8689c): same names as :root. Dark values are the
+     Tailwind-scale inversions of the light tints, chosen so every
+     text-on-bg pair stays >= 4.5:1 (enforced by
+     server/themeTints.test.js). */
+  --tint-amber-bg: #451a03;
+  --tint-amber-bg-soft: #78350f;
+  --tint-amber-border: #92400e;
+  --tint-amber-text: #fcd34d;
+  --tint-green-bg: #052e16;
+  --tint-green-bg-soft: #14532d;
+  --tint-green-mid: #166534;
+  --tint-green-text: #86efac;
+  --tint-green-text-strong: #4ade80;
+  --tint-red-bg: #450a0a;
+  --tint-red-bg-soft: #7f1d1d;
+  --tint-red-border: #991b1b;
+  --tint-red-text: #fca5a5;
+  --tint-red-text-strong: #fecaca;
+  --tint-blue-bg: #172554;
+  --tint-blue-border: #1e40af;
+  --tint-blue-edge: #60a5fa;
+  --tint-blue-muted: #93c5fd;
 }
 
 * { box-sizing: border-box; }
