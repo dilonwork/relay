@@ -452,13 +452,21 @@ h3.section { margin: 14px 0 6px; font-size: 13px; color: #0f2a3d; }
    without opening the ticket. */
 .ticket-id { font-size: 12px; }
 /* Stalled marker (ticket 7da410a5): the same 36h rule as the Gantt
-   marker, an amber dot on the Updated cell with a tooltip. */
-.stalled-dot { color: var(--warning); margin-left: 4px; }
+   marker, an amber dot on the Updated cell with a tooltip.
+   Kept at the original #b45309 (ticket 1e248c03, review return):
+   var(--warning) drops light-theme contrast to 2.39:1, below the
+   WCAG non-text 3:1 floor. Awaits a deeper amber from the tint
+   variables ticket 5ac8689c. */
+.stalled-dot { color: #b45309; margin-left: 4px; }
 /* Compact density (ticket 7da410a5): tighter rows for scanning long
    queues; Comfortable is today's row height, the default. */
 .card.ticket-compact .ticket-table td { padding: 3px 8px; }
 .card.ticket-compact .ticket-card { padding: 8px 12px; }
-.ticket-card-assignee { margin-top: 4px; font-size: 13px; color: var(--text-muted); }
+/* Assignee line under a ticket card (ticket 1e248c03, review return):
+   kept at the original #5a6b7c — var(--text-muted) drops light-theme
+   contrast to 2.56:1 for 13px text, below the WCAG text 4.5:1 floor.
+   Awaits a suitable muted-text variable. */
+.ticket-card-assignee { margin-top: 4px; font-size: 13px; color: #5a6b7c; }
 
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
 th { text-align: left; color: #5a6b7c; border-bottom: 2px solid #d9e1e8; padding: 6px 8px; }
