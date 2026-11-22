@@ -211,7 +211,7 @@ async function main() {
     assert.match(src, /no project/, 'the Uncategorized card must carry the no-project badge');
     const css = readSrc('index.css');
     assert.match(css, /\.dashboard-card\.uncategorized \{[^}]*border-style: dashed/, 'the Uncategorized card must be dashed');
-    assert.match(css, /\.dashboard-card\.uncategorized \{[^}]*background: #fbfcfd/, 'the Uncategorized card must be muted');
+    assert.match(css, /\.dashboard-card\.uncategorized \{[^}]*background: var\(--surface-alt\)/, 'the Uncategorized card must be muted');
   });
 
   await ok('Dashboard has search, sort and a clear-search empty state', async () => {
