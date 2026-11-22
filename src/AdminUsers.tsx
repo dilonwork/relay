@@ -48,11 +48,11 @@ export default function AdminUsers({
   const [newDisplayName, setNewDisplayName] = useState('');
   const [newRoles, setNewRoles] = useState<string[]>(['engineer']);
 
-  // Create agent form (Agents tab): username, one workflow role, and
+  // Create agent form (Agents tab): username, workflow roles, and
   // an internal project — or assign later. The new key is shown
   // exactly once, below the form.
   const [newAgentUsername, setNewAgentUsername] = useState('');
-  const [newAgentRole, setNewAgentRole] = useState('engineer');
+  const [newAgentRoles, setNewAgentRoles] = useState<string[]>(['engineer']);
   const [newAgentProject, setNewAgentProject] = useState('');
   const [createdAgentKey, setCreatedAgentKey] = useState<{ username: string; key: string } | null>(null);
   const [agentKeyCopied, setAgentKeyCopied] = useState(false);
@@ -147,16 +147,20 @@ export default function AdminUsers({
     e.preventDefault();
     onError('');
     onNotice('');
+    if (newAgentRoles.length === 0) {
+      onError('Select at least one role.');
+      return;
+    }
     setBusy(true);
     try {
       const created = await api.adminCreateAgent({
         username: newAgentUsername.trim(),
         display_name: newAgentUsername.trim(),
-        role: newAgentRole,
+        roles: newAgentRoles,
         project_id: newAgentProject || null,
       });
       setNewAgentUsername('');
-      setNewAgentRole('engineer');
+      setNewAgentRoles(['engineer']);
       setNewAgentProject('');
       setCreatedAgentKey({ username: created.user.username, key: created.key });
       setAgentKeyCopied(false);
@@ -625,18 +629,19 @@ export default function AdminUsers({
                 />
               </div>
               <div>
-                <label className="field" htmlFor="new-agent-role">Role</label>
-                <select
-                  id="new-agent-role"
-                  value={newAgentRole}
-                  onChange={(e) => setNewAgentRole(e.target.value)}
-                >
+                <span className="field">Roles</span>
+                <div className="checkbox-row">
                   {WORKFLOW_ROLES.map((r) => (
-                    <option key={r} value={r}>
+                    <label key={r}>
+                      <input
+                        type="checkbox"
+                        checked={newAgentRoles.includes(r)}
+                        onChange={(e) => setNewAgentRoles(toggleRole(newAgentRoles, r, e.target.checked))}
+                      />
                       {ROLE_LABELS[r]}
-                    </option>
+                    </label>
                   ))}
-                </select>
+                </div>
               </div>
             </div>
             <label className="field" htmlFor="new-agent-project">Project</label>

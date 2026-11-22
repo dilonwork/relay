@@ -637,6 +637,7 @@ app.post('/api/admin/users/agents', async (req, res) => {
       username: req.body ? req.body.username : undefined,
       displayName: req.body ? req.body.display_name : undefined,
       role: req.body ? req.body.role : undefined,
+      roles: req.body ? req.body.roles : undefined,
       projectId: req.body ? req.body.project_id : undefined,
     });
     if (!result.ok) return res.status(result.status).json({ error: result.error, message: result.message });

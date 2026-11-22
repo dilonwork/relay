@@ -437,7 +437,7 @@ export const api = {
     request<User>('/api/admin/users', { method: 'POST', body: JSON.stringify(payload) }),
   // Create an agent account with its first API key. The response
   // carries the full key exactly once — copy it now.
-  adminCreateAgent: (payload: { username: string; display_name: string; role: string; project_id?: string | null }) =>
+  adminCreateAgent: (payload: { username: string; display_name: string; roles: string[]; project_id?: string | null }) =>
     request<{ user: User; key: string }>('/api/admin/users/agents', { method: 'POST', body: JSON.stringify(payload) }),
   adminUpdateUser: (id: string, payload: { display_name?: string; roles?: string[]; is_active?: boolean; kind?: string }) =>
     request<User>(`/api/admin/users/${encodeURIComponent(id)}`, {

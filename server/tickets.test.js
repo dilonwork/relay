@@ -873,6 +873,22 @@ async function main() {
     assert.deepEqual(both.map((t) => t.id).sort(), [a.ticket.id, b.ticket.id].sort());
   });
 
+  await ok('multi-role agent can claim tickets in each of its roles states (ticket bc283a0b)', async () => {
+    const db = new FakeDb();
+    const pm = { actorId: 'pm-1', actorRoles: ['pm'] };
+    const a = await tickets.createTicket(db, { ...pm, title: 'a', description: 'd' });
+    const b = await tickets.createTicket(db, { ...pm, title: 'b', description: 'd' });
+    await tickets.transitionTicket(db, b.ticket.id, { actorId: 'leader-1', actorRoles: ['leader'], toStatus: 'decomposing', reason: '' });
+    await tickets.transitionTicket(db, b.ticket.id, {
+      actorId: 'leader-1', actorRoles: ['leader'], toStatus: 'pending_dev', reason: 'done', handoff: 'work list',
+    });
+    // The roles array createAgent stored for the agent; /api/queue passes
+    // exactly this array to listClaimable, so the agent sees both queues.
+    const agentRoles = ['leader', 'engineer'];
+    const queue = await tickets.listClaimable(db, agentRoles);
+    assert.deepEqual(queue.map((t) => t.id).sort(), [a.ticket.id, b.ticket.id].sort());
+  });
+
   await ok('workflow override: a custom workflow reroutes the queue and the transition role', async () => {
     const db = new FakeDb();
     // proj-1 runs a custom workflow where pending_dev belongs to the
