@@ -755,9 +755,9 @@ button.link {
 /* Gantt view: shared time axis, one bar per ticket. */
 
 .gantt-grid { display: grid; grid-template-columns: 240px 1fr; column-gap: 12px; }
-.gantt-axis { position: relative; height: 20px; border-bottom: 1px solid #d9e1e8; }
-.gantt-axis span { position: absolute; top: 0; font-size: 11px; color: #5a6b7c; white-space: nowrap; }
-.gantt-group { grid-column: 1 / -1; font-weight: 600; color: #0f2a3d; margin: 12px 0 2px 0; }
+.gantt-axis { position: relative; height: 20px; border-bottom: 1px solid var(--border); }
+.gantt-axis span { position: absolute; top: 0; font-size: 11px; color: var(--text-muted); white-space: nowrap; }
+.gantt-group { grid-column: 1 / -1; font-weight: 600; color: var(--text); margin: 12px 0 2px 0; }
 .gantt-label { padding: 4px 0; overflow: hidden; }
 .gantt-label .gantt-title {
   display: block;
@@ -773,7 +773,7 @@ button.link {
    with no history for its ticket keeps one full-width slice in the
    current status colour, plus the end dot below. */
 .gantt-bar { height: 16px; border-radius: 4px; cursor: pointer; display: flex; overflow: hidden; }
-.gantt-bar.selected { outline: 2px solid #0f2a3d; outline-offset: 1px; }
+.gantt-bar.selected { outline: 2px solid var(--text); outline-offset: 1px; }
 .gantt-segment { height: 100%; min-width: 0; flex: none; }
 /* End dot (ticket 2b62f706): the documented fallback for a bar with
    no segment data — a visible marker at the last update, positioned
@@ -784,7 +784,7 @@ button.link {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #0f2a3d;
+  background: var(--text);
   transform: translate(-50%, -50%);
   pointer-events: none;
 }
@@ -800,42 +800,42 @@ button.link {
 /* Project chip (ticket 2b62f706): the single-project header collapsed
    to one line — name + ticket count, ✕ to show all projects. The
    description lives on the Projects page. */
-.gantt-project-chip { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: #0f2a3d; }
+.gantt-project-chip { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: var(--text); }
 /* Summary line (ticket 2b62f706): stalled count + oldest stalled
    ticket, above the chart. */
-.gantt-summary { margin: 8px 0 4px 0; font-size: 13px; color: #0f2a3d; }
+.gantt-summary { margin: 8px 0 4px 0; font-size: 13px; color: var(--text); }
 .gantt-controls input[type="search"] {
   flex: 1 1 200px;
   min-width: 0;
-  border: 1px solid #cfdbe4;
+  border: 1px solid var(--input-border);
   border-radius: 6px;
   padding: 6px 10px;
   font-size: 14px;
   font-family: inherit;
-  background: #fff;
-  color: #1a2332;
+  background: var(--input-bg);
+  color: var(--input-text);
 }
 .gantt-chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .chip {
-  border: 1px solid #cfdbe4;
-  background: #fff;
+  border: 1px solid var(--input-border);
+  background: var(--input-bg);
   border-radius: 999px;
   padding: 2px 10px;
   font-size: 12px;
-  color: #0f2a3d;
+  color: var(--text);
   cursor: pointer;
   white-space: nowrap;
 }
-.chip.active { background: #0f2a3d; color: #fff; border-color: #0f2a3d; }
-.gantt-options { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; font-size: 13px; color: #0f2a3d; }
+.chip.active { background: var(--text); color: var(--surface); border-color: var(--text); }
+.gantt-options { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; font-size: 13px; color: var(--text); }
 .gantt-options select {
-  border: 1px solid #cfdbe4;
+  border: 1px solid var(--input-border);
   border-radius: 6px;
   padding: 4px 6px;
   font-size: 13px;
   font-family: inherit;
-  background: #fff;
-  color: #1a2332;
+  background: var(--input-bg);
+  color: var(--input-text);
 }
 .gantt-options label { display: flex; align-items: center; gap: 4px; cursor: pointer; }
 .gantt-zoom { display: flex; gap: 4px; }
@@ -860,7 +860,7 @@ button.link {
    Stalled badge next to the status badge. The border is inset
    (box-sizing) so the 16px bar height does not change. */
 .gantt-bar { box-sizing: border-box; }
-.gantt-bar.stalled { border: 2px solid #d97706; }
+.gantt-bar.stalled { border: 2px solid var(--warning); }
 .badge.stalled { background: #fef3c7; color: #92400e; margin-left: 4px; }
 
 /* Today line (ticket 78462e97): a dashed amber rule across the whole
@@ -872,7 +872,7 @@ button.link {
   top: 0;
   bottom: 0;
   width: 0;
-  border-left: 2px dashed #d97706;
+  border-left: 2px dashed var(--warning);
   pointer-events: none;
   z-index: 2;
 }
