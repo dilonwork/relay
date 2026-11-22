@@ -1,4 +1,4 @@
-import { Fragment, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import { api } from './api';
 import type { Project, User, Workflow } from './api';
 import { ALL_ROLES, ROLE_LABELS, WORKFLOW_ROLES, chatRoomFor, formatTime, stateLabelFor } from './helpers';
@@ -193,6 +193,18 @@ export default function AdminUsers({
     setAssignId(null);
   }
 
+  // Edit form (ticket 62a85e4f): the form renders below the table, so
+  // with 20 agent rows it sits a full screen below the Edit button
+  // with nothing to say it is there. The form rendered; the admin
+  // never saw it. Scroll it into view when it opens; block 'nearest'
+  // moves the page only as far as needed, so a form already in view
+  // does not move at all. The lookup is by id, as on the Documents
+  // page.
+  useEffect(() => {
+    if (!editingId) return;
+    document.getElementById('admin-edit-user-form')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }, [editingId]);
+
   async function handleSaveEdit(e: React.FormEvent, id: string) {
     e.preventDefault();
     onError('');
@@ -306,7 +318,8 @@ export default function AdminUsers({
           humans.length === 0 ? (
             <p className="muted">No human accounts.</p>
           ) : (
-            <table>
+            <div className="table-scroll">
+            <table className="admin-users-table">
               <thead>
                 <tr>
                   <th>Username</th>
@@ -354,11 +367,13 @@ export default function AdminUsers({
                 ))}
               </tbody>
             </table>
+            </div>
           )
         ) : agents.length === 0 ? (
           <p className="muted">No agent accounts.</p>
         ) : (
-          <table>
+          <div className="table-scroll">
+          <table className="admin-users-table">
             <thead>
               <tr>
                 <th>Username</th>
@@ -403,6 +418,7 @@ export default function AdminUsers({
               ))}
             </tbody>
           </table>
+          </div>
         )}
 
         {responsibilitiesUserId && (() => {
@@ -438,6 +454,7 @@ export default function AdminUsers({
 
         {editingId && (
           <form
+            id="admin-edit-user-form"
             onSubmit={(e) => handleSaveEdit(e, editingId)}
             style={{ marginTop: 12, borderTop: '1px solid #e2e8ee', paddingTop: 12 }}
           >

@@ -467,6 +467,19 @@ tbody tr { cursor: pointer; }
 tbody tr:hover { background: #eef6f6; }
 tbody tr.selected { background: #eef6f6; }
 
+/* Admin Users tables (ticket 62a85e4f): the 6/7-column tables are
+   wider than a phone, and without a scroll container the columns
+   squeeze and wrap — the Actions column stacked vertically and the
+   Edit button sank into a tall row. The wrapper scrolls the table
+   horizontally at every width instead, and the cells never wrap, so
+   each row stays one line tall and the Actions column is always
+   reachable by scrolling right. The wrapper table keeps `display:
+   table` so the ≤720px `table { display: block }` rule does not turn
+   it into a second, nested scroll container. */
+.table-scroll { overflow-x: auto; }
+.table-scroll table { display: table; max-width: none; }
+.admin-users-table th, .admin-users-table td { white-space: nowrap; }
+
 .badge {
   display: inline-block;
   border-radius: 999px;

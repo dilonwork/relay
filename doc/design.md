@@ -55,6 +55,7 @@ Tickets carry project development work through a pipeline: the PM creates a requ
 33. Agent Upload Rule: In-Progress Ticket, Prototype Category, Own Project
 34. Build Plan Attached to Its Prototype: One Row per Delivery
 35. Page Error: Invalid import.meta.glob from an External Probe
+36. Admin Users: Edit Form Scrolls into View, Tables Scroll Horizontally
 - Appendix A State Code Reference
 - Appendix B Ticket Lifecycle Example
 
@@ -1709,3 +1710,31 @@ Verified against the live site after reload (2026-11-22): `/.git/config`, `/.env
 - `server/nginxAllowlist.test.js` (new, 4 items, ticket d2282133): reads the checked-in config and fails if it loses the `/@fs/` and `/@id/` block, the dotfile block, any allowlist entry, or the final default-deny location, so the exposure cannot come back silently when the file is edited.
 - `server/repoGuard.test.js` (3 items): walks the repo (source extensions only, skipping `node_modules`, `.git`, `dist`, `coverage`, and itself — it names the banned strings as literals) and fails if any file contains `import.meta.glob` or `BOOT_SMART_32`; a third check asserts the walk covered the repo so a misconfigured scan fails loudly instead of passing vacuously. Markdown is not scanned (this chapter documents the ticket by name).
 - Full suite 510 tests pass; `vite build` passes. No changed page has a title-bar create button, so the remount check does not apply.
+---
+
+## 36. Admin Users: Edit Form Scrolls into View, Tables Scroll Horizontally
+
+### The ticket
+
+Ticket 62a85e4f, "Admin Users: no GUI to modify agent and user accounts (Edit not reachable on the live site)". Dylan reported there was no GUI to modify agents and users. The Edit button and the "Edit user" form already exist in source (`src/AdminUsers.tsx`: Edit buttons call `startEdit`, the form renders below the tables, Save goes through `adminUpdateUser`), so this is reproduce-and-fix, not build-from-scratch.
+
+### What the live reproduction found
+
+Reproduced on the live site by browser click-through (2026-11-22, signed in as Dylan):
+
+- Humans tab, desktop 1920x1000: clicking Edit on a row opens the form immediately in the viewport — no scroll needed. The form sits below the 7-row table, fully visible; the Actions column is on one line with no horizontal scrollbar. Not broken at desktop.
+- Agents tab, narrow width (~500px): the form exists in the DOM below the table but is not visible at click time — the admin must scroll past all 20 rows to reach it. The table overflows: columns are cut off and the Actions column wraps vertically (Edit/Keys, then Project, Deactivate, Responsibilities each on their own line), so each row is several lines tall. A horizontal scrollbar is visible below the table, but the layout is broken.
+- Not verified: the Agents tab at 1920px desktop width (the viewport narrowed mid-task and could not be restored), and the true 390px iPhone width (the cloud browser cannot render a true 390px viewport; device browsers were unavailable). The fix is width-independent, so it covers 390px too; live click-through after deploy is the Tester's job.
+- Side observation, out of scope: on first load the page briefly showed Humans (0) / Agents (0) with "No human accounts yet" until Refresh showed 7 / 20 (async load flash). Not fixed here.
+
+### The fix
+
+Two parts, both in the existing Edit flow — no page redesign, no new form:
+
+1. The Edit form scrolls into view when it opens. A `useEffect` keyed on `editingId` calls `document.getElementById('admin-edit-user-form')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })`. `block: 'nearest'` moves the page only as far as needed, so a form already in view (Humans at desktop) does not move at all. Same pattern as the Documents confirm panel (ticket 510a9786); the lookup is by id. Both tabs share one `startEdit` and one form, so one fix covers both.
+2. The user tables sit in a horizontal-scroll wrapper. Each table is wrapped in `<div className="table-scroll">` (`overflow-x: auto`) and carries `className="admin-users-table"` whose cells never wrap (`white-space: nowrap`), so each row stays one line tall and the Actions column is always reachable by scrolling right — the Edit button is never hidden or stacked away. The wrapper table keeps `display: table` so the ≤720px `table { display: block }` rule does not turn it into a second, nested scroll container. This applies at every width, not just below 720px: between 721px and ~800px the sidebar is visible and the content column is narrower than the 7-column table, so the same squeeze would occur there.
+
+### Tests
+
+- `server/adminUsers.test.js` (new, 3 items): source assertions — there is no frontend test harness in this repo, following the repo guard pattern. The edit form carries the stable id and a `useEffect` keyed on `editingId` scrolls it into view with `block: 'nearest'`; both user tables sit in a `table-scroll` wrapper and carry the `admin-users-table` class; the stylesheet has the wrapper overflow rule, the wrapper-table `display: table` rule, and the no-wrap cell rule.
+- Full suite 513 tests pass; `vite build` passes.
