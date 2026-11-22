@@ -203,7 +203,7 @@ body {
 .sidebar-user .sidebar-username { color: var(--sidebar-muted); font-weight: 400; }
 .sidebar-user .roles { display: flex; flex-wrap: wrap; gap: 4px; }
 .sidebar-user button.link {
-  color: var(--accent);
+  color: var(--sidebar-text);
   display: flex;
   align-items: center;
   gap: 10px;
