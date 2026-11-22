@@ -127,8 +127,8 @@ body {
   flex-wrap: wrap;
   gap: 10px;
   align-items: center;
-  background: #fff;
-  border: 1px solid #cfdbe4;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
   border-radius: 8px;
   padding: 10px 14px;
   margin-bottom: 16px;
@@ -140,8 +140,8 @@ body {
 .sidebar {
   width: 232px;
   flex: 0 0 auto;
-  background: #0f2a3d;
-  color: #dbe7ee;
+  background: var(--sidebar-bg);
+  color: var(--sidebar-text);
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -152,12 +152,12 @@ body {
 }
 
 .sidebar-brand { display: flex; align-items: center; justify-content: space-between; padding: 0 6px; }
-.brand-text { font-size: 20px; font-weight: 700; color: #fff; }
+.brand-text { font-size: 20px; font-weight: 700; color: var(--sidebar-text); }
 
 .collapse-toggle {
   background: none;
-  border: 1px solid rgba(255, 255, 255, 0.3);
-  color: #dbe7ee;
+  border: 1px solid var(--sidebar-border);
+  color: var(--sidebar-text);
   border-radius: 6px;
   cursor: pointer;
   padding: 2px 9px;
@@ -178,32 +178,32 @@ body {
   padding: 9px 10px;
   cursor: pointer;
   font-size: 14px;
-  color: #dbe7ee;
+  color: var(--sidebar-text);
 }
-.sidebar-nav button:hover { background: rgba(255, 255, 255, 0.08); }
-.sidebar-nav button.active { background: #0e7c7b; color: #fff; }
+.sidebar-nav button:hover { background: var(--sidebar-hover); }
+.sidebar-nav button.active { background: var(--sidebar-active); color: var(--sidebar-text); }
 .nav-icon { width: 20px; text-align: center; flex: 0 0 auto; }
 
 /* Tickets nav group: expandable sub-pages (All tickets / Gantt). */
 .sidebar-group { display: flex; flex-direction: column; gap: 4px; }
 .sidebar-subnav { display: flex; flex-direction: column; gap: 4px; padding-left: 16px; }
-.nav-chevron { margin-left: auto; font-size: 11px; color: #9fb4c0; }
+.nav-chevron { margin-left: auto; font-size: 11px; color: var(--sidebar-muted); }
 
 .sidebar-filter label.field { color: #9fb4c0; margin: 0 0 4px 0; }
 
 .sidebar-user {
   margin-top: auto;
-  border-top: 1px solid rgba(255, 255, 255, 0.15);
+  border-top: 1px solid var(--sidebar-border);
   padding-top: 12px;
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
-.sidebar-user .who { font-weight: 600; color: #fff; }
-.sidebar-user .sidebar-username { color: #9fb4c0; font-weight: 400; }
+.sidebar-user .who { font-weight: 600; color: var(--sidebar-text); }
+.sidebar-user .sidebar-username { color: var(--sidebar-muted); font-weight: 400; }
 .sidebar-user .roles { display: flex; flex-wrap: wrap; gap: 4px; }
 .sidebar-user button.link {
-  color: #8fd0cf;
+  color: var(--accent);
   display: flex;
   align-items: center;
   gap: 10px;
