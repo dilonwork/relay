@@ -537,7 +537,7 @@ button.link {
 .banner.error { background: #fbe9e7; border: 1px solid #e0a49c; color: #7a2318; }
 .banner.notice { background: #e2f2e9; border: 1px solid #9fd0ae; color: #1d6b3c; }
 
-.muted { color: #5a6b7c; font-size: 13px; }
+.muted { color: var(--text-muted); font-size: 13px; }
 
 /* Dashboard: attention-first overview (ticket 4c7601fb, UI&UX prototype
    "Dashboard redesign — recommendations"). The summary strip answers
@@ -551,15 +551,18 @@ button.link {
   margin: 4px 0 12px;
 }
 .dashboard-stat {
-  border: 1px solid #d9e1e8;
+  border: 1px solid var(--card-border);
   border-radius: 6px;
   padding: 10px 12px;
-  background: #fff;
+  background: var(--card-bg);
 }
-.dashboard-stat-num { font-size: 22px; font-weight: 700; line-height: 1.1; color: #0f2a3d; }
-.dashboard-stat-label { font-size: 12px; color: #5a6b7c; }
-.dashboard-stat.hot { border-color: #f59e0b; background: #fffbeb; }
-.dashboard-stat.hot .dashboard-stat-num { color: #b45309; }
+.dashboard-stat-num { font-size: 22px; font-weight: 700; line-height: 1.1; color: var(--text); }
+.dashboard-stat-label { font-size: 12px; color: var(--text-muted); }
+/* The hot stat keeps its pale amber background (#fffbeb): the variable
+   blocks have no amber-tint variable, and mapping it to a neutral would
+   erase the attention meaning (same call as the badge status tints). */
+.dashboard-stat.hot { border-color: var(--warning); background: #fffbeb; }
+.dashboard-stat.hot .dashboard-stat-num { color: var(--warning); }
 
 .dashboard-toolbar { display: flex; gap: 8px; align-items: center; margin: 10px 0; flex-wrap: wrap; }
 .dashboard-toolbar input[type="text"] { width: 200px; }
@@ -575,38 +578,38 @@ button.link {
   flex-direction: column;
   gap: 6px;
   text-align: left;
-  background: #fff;
-  border: 1px solid #d9e1e8;
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
   border-radius: 8px;
   padding: 12px 14px;
   cursor: pointer;
   font-size: 14px;
   font-family: inherit;
-  color: #1a2332;
+  color: var(--text);
 }
-.dashboard-card:hover { border-color: #0f2a3d; }
-.dashboard-card.uncategorized { border-style: dashed; background: #fbfcfd; }
+.dashboard-card:hover { border-color: var(--text); }
+.dashboard-card.uncategorized { border-style: dashed; background: var(--surface-alt); }
 .dashboard-card-head {
   display: flex;
   justify-content: space-between;
   align-items: center;
   gap: 8px;
 }
-.dashboard-card-head h3 { margin: 0; font-size: 15px; color: #0f2a3d; }
-.dashboard-desc { font-size: 12px; color: #5a6b7c; min-height: 15px; }
+.dashboard-card-head h3 { margin: 0; font-size: 15px; color: var(--text); }
+.dashboard-desc { font-size: 12px; color: var(--text-muted); min-height: 15px; }
 .dashboard-bar-track {
   height: 6px;
-  background: #e2e8ee;
+  background: var(--border);
   border-radius: 999px;
   overflow: hidden;
 }
-.dashboard-bar-fill { display: block; height: 100%; background: #16a34a; border-radius: 999px; }
+.dashboard-bar-fill { display: block; height: 100%; background: var(--success); border-radius: 999px; }
 .dashboard-counts3 { display: flex; gap: 12px; font-size: 12px; }
 .dashboard-counts3 b { font-size: 14px; }
-.dashboard-counts3 .wait b { color: #b45309; }
+.dashboard-counts3 .wait b { color: var(--warning); }
 .dashboard-foot { display: flex; justify-content: space-between; align-items: center; margin-top: 2px; }
-.dashboard-empty { text-align: center; padding: 36px 10px; color: #5a6b7c; }
-.dashboard-empty b { display: block; font-size: 15px; color: #0f2a3d; margin-bottom: 4px; }
+.dashboard-empty { text-align: center; padding: 36px 10px; color: var(--text-muted); }
+.dashboard-empty b { display: block; font-size: 15px; color: var(--text); margin-bottom: 4px; }
 
 /* The title bar's action slot: a primary button there must not carry
    the form margin-top, or it drops below Refresh. */
