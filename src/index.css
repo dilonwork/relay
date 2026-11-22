@@ -637,7 +637,7 @@ button.link {
 /* The hot stat keeps its pale amber background (#fffbeb): the variable
    blocks have no amber-tint variable, and mapping it to a neutral would
    erase the attention meaning (same call as the badge status tints). */
-.dashboard-stat.hot { border-color: var(--warning); background: #fffbeb; }
+.dashboard-stat.hot { border-color: var(--warning); background: var(--tint-amber-bg-soft); }
 .dashboard-stat.hot .dashboard-stat-num { color: var(--warning); }
 
 .dashboard-toolbar { display: flex; gap: 8px; align-items: center; margin: 10px 0; flex-wrap: wrap; }
