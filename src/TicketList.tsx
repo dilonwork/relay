@@ -81,6 +81,20 @@ export default function TicketList(props: TicketListProps) {
       : '—';
   }
 
+  // Task progress (ticket 0ae37c3b, design doc ch. 38): "n/m" from
+  // the list payload — the list fires no extra request per ticket.
+  // Tickets without Tasks show nothing extra.
+  function taskProgress(t: QueueEntry): ReactElement | null {
+    const total = t.task_total || 0;
+    if (total <= 0) return null;
+    const completed = t.task_completed || 0;
+    return (
+      <span className="muted" title={`${completed} of ${total} tasks completed`}>
+        {completed}/{total}
+      </span>
+    );
+  }
+
   function stalledDot(t: QueueEntry): ReactElement | null {
     if (!isStalledTicket(t, workflowFor(t))) return null;
     return (
@@ -190,6 +204,7 @@ export default function TicketList(props: TicketListProps) {
                     <td>
                       {t.title}
                       <div className="muted ticket-id">{shortId(t.id)}</div>
+                      {taskProgress(t)}
                     </td>
                     <td>{projectName(t.project_id)}</td>
                     <td>
@@ -219,6 +234,7 @@ export default function TicketList(props: TicketListProps) {
                 <div className="ticket-card-title">
                   {t.title}
                   <div className="muted ticket-id">{shortId(t.id)}</div>
+                  {taskProgress(t)}
                 </div>
                 <div className="ticket-card-meta">
                   <span className={`badge ${t.status}`}>{labelFor(t, t.status)}</span>

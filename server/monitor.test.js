@@ -112,6 +112,13 @@ class FakeDb {
     if (sql === 'SELECT * FROM tickets ORDER BY created_at ASC, id ASC') {
       return { rows: this.tickets.map((t) => ({ ...t })) };
     }
+    if (sql.startsWith('SELECT ticket_id, COUNT(*)')) {
+      // Task counts aggregate (ticket 0ae37c3b): listTickets carries
+      // task_completed / task_total on every row. The monitor's
+      // tickets have no Tasks, so the aggregate is empty and every
+      // row reports 0/0.
+      return { rows: [] };
+    }
     if (sql === 'SELECT * FROM tickets WHERE project_id = $1 ORDER BY created_at ASC, id ASC') {
       return { rows: this.tickets.filter((t) => t.project_id === params[0]).map((t) => ({ ...t })) };
     }

@@ -13,6 +13,26 @@ export interface Ticket {
   workflow_id: string | null;
   created_at: string;
   updated_at: string;
+  // Task progress (ticket 0ae37c3b, design doc ch. 38): completed /
+  // total Tasks on the ticket, computed server-side; 0/0 when the
+  // ticket has no Tasks. Optional so older payloads still type-check.
+  task_completed?: number;
+  task_total?: number;
+}
+
+// A Task under a ticket (ticket 0ae37c3b, design doc ch. 38): a
+// leader's decomposition of a ticket into smaller pieces engineers
+// and agents complete independently. Statuses are Pending /
+// In Progress / Completed; sort_order is server-assigned.
+export interface Task {
+  id: string;
+  ticket_id: string;
+  title: string;
+  status: string;
+  sort_order: number;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
 }
 
 // A project (Project view): a formal list every ticket belongs to, or
@@ -357,6 +377,23 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify({ project_id: projectId }),
     }),
+  // Tasks (ticket 0ae37c3b, design doc ch. 38): create / edit /
+  // delete are leader-only, status updates are leader or engineer —
+  // the server enforces it and answers 403 otherwise.
+  listTasks: (ticketId: string) =>
+    request<Task[]>(`/api/tickets/${encodeURIComponent(ticketId)}/tasks`),
+  createTask: (ticketId: string, title: string) =>
+    request<Task>(`/api/tickets/${encodeURIComponent(ticketId)}/tasks`, {
+      method: 'POST',
+      body: JSON.stringify({ title }),
+    }),
+  updateTask: (taskId: string, payload: { title?: string; status?: string }) =>
+    request<Task>(`/api/tasks/${encodeURIComponent(taskId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
+  deleteTask: (taskId: string) =>
+    request<void>(`/api/tasks/${encodeURIComponent(taskId)}`, { method: 'DELETE' }),
   getQueue: (projectId?: string) =>
     request<QueueEntry[]>(projectId ? `/api/queue?project_id=${encodeURIComponent(projectId)}` : '/api/queue'),
   listProjects: () => request<Project[]>('/api/projects'),

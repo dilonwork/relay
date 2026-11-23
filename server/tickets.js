@@ -60,7 +60,37 @@ async function listTransitions(db, ticketId) {
   return rows;
 }
 
+// Task progress counts (ticket 0ae37c3b, design doc ch. 38): one
+// aggregate query over the tasks table, merged into the ticket rows
+// by id — never one query per ticket. Tickets with no Tasks report
+// 0/0. pg returns COUNT(*) as a string, so the merge coerces to a
+// number; the in-memory test fake returns numbers already.
+async function attachTaskCounts(db, rows) {
+  if (!rows || rows.length === 0) return rows;
+  const { rows: countRows } = await db.query(
+    `SELECT ticket_id, COUNT(*) AS task_total,
+            COUNT(*) FILTER (WHERE status = 'Completed') AS task_completed
+     FROM tasks GROUP BY ticket_id`
+  );
+  const byTicket = new Map();
+  for (const c of countRows) {
+    byTicket.set(c.ticket_id, {
+      task_completed: Number(c.task_completed) || 0,
+      task_total: Number(c.task_total) || 0,
+    });
+  }
+  return rows.map((t) => ({
+    ...t,
+    ...(byTicket.get(t.id) || { task_completed: 0, task_total: 0 }),
+  }));
+}
+
 async function listTickets(db, statuses, projectFilter, assignedProjectId) {
+  const rows = await listTicketRows(db, statuses, projectFilter, assignedProjectId);
+  return attachTaskCounts(db, rows);
+}
+
+async function listTicketRows(db, statuses, projectFilter, assignedProjectId) {
   // Project scope (Agent assignment): an assigned caller only ever sees
   // their own project's tickets — the assignment overrides any project
   // filter the caller passes, including 'none'. An unassigned caller
@@ -148,7 +178,8 @@ async function getTicketDetail(db, id, { actorId, actorRoles, assignedProjectId 
     return { ok: false, status: 403, error: scope.error, message: scope.message, transition };
   }
   const result = await getTicketWithHistory(db, id);
-  return { ok: true, status: 200, ticket: result };
+  const [withCounts] = await attachTaskCounts(db, [result]);
+  return { ok: true, status: 200, ticket: withCounts };
 }
 
 // Transition history of one ticket, under the same scope check.
@@ -415,6 +446,35 @@ async function transitionTicket(db, ticketId, { actorId, actorRoles, toStatus, r
         [ticket.id, String(actorId).trim(), check.attemptedRole, ticket.status, toStatus, check.message, cleanHandoff.trim(), JSON.stringify([])]
       );
       return { ok: false, status, error: check.error, message: check.message, transition: rejectedRows[0] };
+    }
+
+    // Closure guard (ticket 0ae37c3b, design doc ch. 38): a ticket
+    // cannot move into a terminal state while any of its Tasks is
+    // still open. The guard runs after validation passes and before
+    // the status UPDATE, inside the same transaction, so a Task
+    // completed in the same instant cannot slip through. `cancelled`
+    // stays allowed — abandoning work is a deliberate decision, not
+    // a closure to guard — and non-terminal moves are unaffected.
+    // A blocked move is audited as a rejected transition, the same
+    // INSERT pattern as the validation failures above.
+    if (sm.isTerminalFor(resolved.definition, toStatus) && toStatus !== 'cancelled') {
+      const { rows: openRows } = await client.query(
+        `SELECT id, title FROM tasks
+         WHERE ticket_id = $1 AND status <> $2
+         ORDER BY sort_order ASC, created_at ASC, id ASC`,
+        [ticket.id, 'Completed']
+      );
+      if (openRows.length > 0) {
+        const titles = openRows.slice(0, 5).map((t) => t.title);
+        const more = openRows.length - titles.length;
+        const message = `${openRows.length} task(s) still open: ${titles.join(', ')}${more > 0 ? `, and ${more} more` : ''}`;
+        const { rows: rejectedRows } = await client.query(
+          `INSERT INTO ticket_transitions (ticket_id, actor_id, actor_role, from_status, to_status, reason, handoff, artifacts, result)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'rejected') RETURNING *`,
+          [ticket.id, String(actorId).trim(), check.rule.role, ticket.status, toStatus, message, cleanHandoff.trim(), JSON.stringify([])]
+        );
+        return { ok: false, status: 409, error: 'tasks_incomplete', message, transition: rejectedRows[0] };
+      }
     }
 
     const { assigneeId, developerId } = isCustom

@@ -5,6 +5,7 @@ const cors = require('cors');
 const db = require('./database');
 const { legalTransitions, legalTransitionsFor } = require('./stateMachine');
 const tickets = require('./tickets');
+const tasks = require('./tasks');
 const documents = require('./documents');
 const monitor = require('./monitor');
 const projects = require('./projects');
@@ -205,6 +206,71 @@ app.post('/api/tickets/:id/transitions', async (req, res) => {
     });
     if (!result.ok) return res.status(result.status).json({ error: result.error, message: result.message });
     res.json({ ticket: result.ticket, transition: result.transition });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- Task endpoints (ticket 0ae37c3b, design doc ch. 38) ---
+// The Task sub-dimension under Tickets. Create / edit / delete are
+// leader-only; status updates are leader or engineer; reads are open
+// to anyone who can read the parent ticket (same project scope as
+// the ticket detail). The service enforces it all; the routes pass
+// the result straight through, like the ticket routes above.
+app.get('/api/tickets/:id/tasks', async (req, res) => {
+  try {
+    const result = await tasks.listTasks(db, req.params.id, {
+      actorId: req.user.id,
+      actorRoles: req.user.roles,
+      assignedProjectId: req.user.project_id,
+    });
+    if (!result.ok) return res.status(result.status).json({ error: result.error, message: result.message });
+    res.json(result.tasks);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/tickets/:id/tasks', async (req, res) => {
+  try {
+    const result = await tasks.createTask(db, req.params.id, {
+      actorId: req.user.id,
+      actorRoles: req.user.roles,
+      title: req.body ? req.body.title : undefined,
+      assignedProjectId: req.user.project_id,
+    });
+    if (!result.ok) return res.status(result.status).json({ error: result.error, message: result.message });
+    res.status(201).json(result.task);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.patch('/api/tasks/:taskId', async (req, res) => {
+  try {
+    const result = await tasks.updateTask(db, req.params.taskId, {
+      actorId: req.user.id,
+      actorRoles: req.user.roles,
+      title: req.body && req.body.title !== undefined ? req.body.title : undefined,
+      status: req.body && req.body.status !== undefined ? req.body.status : undefined,
+      assignedProjectId: req.user.project_id,
+    });
+    if (!result.ok) return res.status(result.status).json({ error: result.error, message: result.message });
+    res.json(result.task);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/tasks/:taskId', async (req, res) => {
+  try {
+    const result = await tasks.deleteTask(db, req.params.taskId, {
+      actorId: req.user.id,
+      actorRoles: req.user.roles,
+      assignedProjectId: req.user.project_id,
+    });
+    if (!result.ok) return res.status(result.status).json({ error: result.error, message: result.message });
+    res.status(204).end();
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

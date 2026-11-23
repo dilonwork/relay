@@ -128,5 +128,17 @@ const queue = [
     assert.ok(css.includes('.ticket-card-assignee'));
   });
 
+  await ok('task progress (ticket 0ae37c3b): n/m on rows with Tasks, nothing without', () => {
+    const src = fs.readFileSync(path.join(__dirname, '../src/TicketList.tsx'), 'utf8');
+    assert.ok(src.includes('taskProgress(t)'), 'the list must render a task progress element per row');
+    assert.ok(src.includes("`${completed} of ${total} tasks completed`"), 'the progress must carry the full text as a title attribute');
+    assert.ok(src.includes('{completed}/{total}'), 'the progress must render as n/m');
+    assert.ok(src.includes('if (total <= 0) return null;'), 'tickets without Tasks must show nothing extra');
+    assert.ok(src.includes('t.task_total'), 'the progress must come from the list payload task_total');
+    assert.ok(src.includes('t.task_completed'), 'the progress must come from the list payload task_completed');
+    // Same position on desktop rows and mobile cards.
+    assert.ok(src.includes('{taskProgress(t)}'), 'both the table row and the mobile card must show it');
+  });
+
   console.log(`\n${passed} tickets list redesign tests passed.`);
 })();

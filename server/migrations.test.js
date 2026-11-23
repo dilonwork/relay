@@ -645,6 +645,21 @@ async function main() {
     assert.ok(sql.includes('implementation_ticket_id IS NOT NULL'), '024: must only touch plans that still carry a link');
   });
 
+  await ok('migration 025 creates the tasks table with cascade, status CHECK and index', async () => {
+    const sql = readMigration('025_create_tasks.sql');
+    // The table: id, ticket FK with ON DELETE CASCADE, title, the
+    // three Task statuses, server-assigned sort_order, created_by,
+    // timestamps — and the index the guard and counts read through.
+    assert.ok(sql.includes('CREATE TABLE IF NOT EXISTS tasks'), '025: must create the tasks table idempotently');
+    assert.ok(sql.includes("ticket_id UUID NOT NULL REFERENCES tickets(id) ON DELETE CASCADE"), '025: deleting a ticket must remove its Tasks (AC6)');
+    assert.ok(sql.includes("CHECK (status IN ('Pending', 'In Progress', 'Completed'))"), '025: must constrain status to the three Task statuses');
+    assert.ok(sql.includes("status TEXT NOT NULL DEFAULT 'Pending'"), '025: status must start as Pending');
+    assert.ok(sql.includes('sort_order INTEGER NOT NULL DEFAULT 0'), '025: must carry sort_order');
+    assert.ok(sql.includes('created_by TEXT NOT NULL'), '025: must carry created_by');
+    assert.ok(sql.includes('CREATE INDEX IF NOT EXISTS idx_tasks_ticket ON tasks (ticket_id)'), '025: must index ticket_id');
+    assert.ok(sql.includes('0ae37c3b'), '025: header must name this ticket');
+  });
+
   console.log(`\n${passed} migration tests passed.`);
 }
 
