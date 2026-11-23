@@ -19,6 +19,68 @@ export const STATUS_LABELS: Record<string, string> = {
 
 export const ALL_STATUSES = Object.keys(STATUS_LABELS);
 
+export const STATUS_GROUPS: { key: string; label: string; statuses: string[] }[] = [
+  { key: 'working', label: 'Working', statuses: ['decomposing', 'in_dev', 'in_review', 'in_test', 'deploying'] },
+  { key: 'waiting', label: 'Waiting', statuses: ['requirement', 'pending_dev', 'pending_review', 'pending_test', 'pending_deploy'] },
+  { key: 'needs_attention', label: 'Needs attention', statuses: ['needs_clarification', 'needs_acceptance_clarification'] },
+  { key: 'done', label: 'Done', statuses: ['delivered', 'cancelled'] },
+];
+
+export const SHORT_STATUS_LABELS: Record<string, string> = {
+  requirement: 'Requirement',
+  decomposing: 'Decomposing',
+  needs_clarification: 'Needs info',
+  pending_dev: 'Pending dev',
+  in_dev: 'In dev',
+  pending_review: 'Pending review',
+  in_review: 'In review',
+  pending_test: 'Pending test',
+  in_test: 'In test',
+  needs_acceptance_clarification: 'Acceptance?',
+  pending_deploy: 'Pending deploy',
+  deploying: 'Deploying',
+  delivered: 'Delivered',
+  cancelled: 'Cancelled',
+};
+
+export function shortStatusLabel(code: string): string {
+  return SHORT_STATUS_LABELS[code] || STATUS_LABELS[code] || code;
+}
+
+export function filterTicketsByStatusGroup<T extends { status: string }>(tickets: T[], groupKey: string): T[] {
+  if (!groupKey || groupKey === 'all') return tickets;
+  const group = STATUS_GROUPS.find((g) => g.key === groupKey);
+  if (!group) return tickets;
+  const set = new Set(group.statuses);
+  return tickets.filter((t) => set.has(t.status));
+}
+
+export function countTicketsByStatusGroup<T extends { status: string }>(tickets: T[]): Record<string, number> {
+  const counts: Record<string, number> = { all: tickets.length };
+  for (const g of STATUS_GROUPS) counts[g.key] = 0;
+  for (const t of tickets) {
+    for (const g of STATUS_GROUPS) {
+      if (g.statuses.includes(t.status)) {
+        counts[g.key]++;
+        break;
+      }
+    }
+  }
+  return counts;
+}
+
+export function groupTicketsByStatus<T extends { status: string }>(
+  tickets: T[]
+): { group: { key: string; label: string; statuses: string[] }; rows: T[] }[] {
+  return STATUS_GROUPS.map((g) => {
+    const set = new Set(g.statuses);
+    return {
+      group: g,
+      rows: tickets.filter((t) => set.has(t.status)),
+    };
+  });
+}
+
 export const ROLE_LABELS: Record<string, string> = {
   pm: 'PM',
   leader: 'Leader',
