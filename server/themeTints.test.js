@@ -134,6 +134,42 @@ function checkMutedStrong(lightVars, darkVars) {
   }
 }
 
+// Ticket 5d67f208: Admin link buttons must stay readable in Dark theme.
+// button.link -> var(--accent), .danger -> var(--tint-red-text),
+// .amber -> var(--tint-amber-text). The old hard-coded colors were
+// 2.92:1 / 2.26:1 / 2.91:1 on dark card surfaces. The pairs below are
+// checked against --card-bg (the surface Admin buttons sit on) in both
+// themes; the rule check pins the mapping itself, not just the values.
+const LINK_BUTTON_RULES = [
+  ['button.link', '--accent'],
+  ['button.link.danger', '--tint-red-text'],
+  ['button.link.amber', '--tint-amber-text'],
+];
+const LINK_BUTTON_PAIRS = [
+  ['accent', 'card-bg'],
+  ['tint-red-text', 'card-bg'],
+  ['tint-amber-text', 'card-bg'],
+];
+
+function checkLinkButtons(css, lightVars, darkVars) {
+  for (const [selector, variable] of LINK_BUTTON_RULES) {
+    const re = new RegExp(
+      selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*\\{[^}]*color:\\s*var\\('
+        + variable.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\)',
+    );
+    assert.ok(re.test(css), `${selector} must use color: var(${variable}) (ticket 5d67f208)`);
+  }
+  for (const [theme, vars] of [['light', lightVars], ['dark', darkVars]]) {
+    for (const [textVar, bgVar] of LINK_BUTTON_PAIRS) {
+      const ratio = contrast(vars[textVar], vars[bgVar]);
+      assert.ok(
+        ratio >= 4.5,
+        `${theme}: --${textVar} (${vars[textVar]}) on --${bgVar} (${vars[bgVar]}) is ${ratio.toFixed(2)}:1, below 4.5:1`,
+      );
+    }
+  }
+}
+
 (async () => {
   const css = fs.readFileSync(CSS_PATH, 'utf8');
   const light = parseVars(readBlock(css, ':root'));
@@ -162,6 +198,10 @@ function checkMutedStrong(lightVars, darkVars) {
 
   await ok('muted-strong text is readable in both themes (ticket b73fac07)', () => {
     checkMutedStrong(light, dark);
+  });
+
+  await ok('Admin link buttons use theme variables and stay readable (ticket 5d67f208)', () => {
+    checkLinkButtons(css, light, dark);
   });
 
   console.log(`\n${passed} theme tint tests passed.`);
