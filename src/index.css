@@ -424,6 +424,52 @@ body {
   }
   .ticket-card-next { margin-top: 4px; font-size: 13px; color: #5a6b7c; }
 
+  /* Mobile rows (ticket 506116ea): collapsed 2-line rows in
+     Comfortable, 1 line in Compact; tap to expand to the full card.
+     The card background is hard-coded light in both themes (not yet
+     converted), so the row text keeps the card's own dark colours —
+     #0f2a3d / #5a6b7c, as .ticket-card-title / .ticket-card-assignee
+     already do — instead of theme variables that would wash out on
+     the light card in dark theme. */
+  .ticket-row-main {
+    display: block;
+    width: 100%;
+    text-align: left;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    padding: 0;
+    font: inherit;
+    color: #0f2a3d;
+    min-height: 44px;
+  }
+  .ticket-row-line1 { display: flex; align-items: center; gap: 7px; min-width: 0; }
+  .ticket-row-status { font-size: 12px; font-weight: 700; color: #5a6b7c; flex: none; }
+  .ticket-row-title { font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 1; color: #0f2a3d; }
+  .ticket-row-chev { flex: none; color: #5a6b7c; font-size: 12px; }
+  .ticket-row-line2 { display: block; margin-top: 2px; font-size: 12px; color: #5a6b7c; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* Compact density: 1 line — dot + title only. */
+  .card.ticket-compact .ticket-row-line2,
+  .card.ticket-compact .ticket-row-status { display: none; }
+  .ticket-card-detail { margin-top: 8px; }
+  /* Collapsed rows: tighter padding so more rows fit on the first
+     screen; the expanded card keeps the 12px padding. */
+  .ticket-card:not(.expanded) { padding: 8px 12px; }
+
+  /* Tickets list tabs (ticket 506116ea, spec §3.1): the 10-tab row
+     wraps to 2–3 lines on iPhone — that wrapped row is itself part of
+     the scroll problem, so on mobile it scrolls horizontally instead
+     of wrapping. Labels, counts and behaviour are unchanged. */
+  .tickets-toolbar + .tabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: 4px;
+    scrollbar-width: none;
+  }
+  .tickets-toolbar + .tabs::-webkit-scrollbar { display: none; }
+  .tickets-toolbar + .tabs button { flex: none; }
+
   /* Other tables (history, admin, projects) scroll horizontally
      inside their card instead of overflowing the page. */
   table { display: block; max-width: 100%; overflow-x: auto; }
@@ -500,8 +546,24 @@ h3.section { margin: 14px 0 6px; font-size: 13px; color: var(--text); }
 .tabs button.claimable:not(.active) { background: #fef3c7; border-color: #d97706; color: #92400e; }
 
 /* Tickets list toolbar (ticket 7da410a5): search + density + the
-   one-line project chip, above the tabs. */
-.tickets-toolbar { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; margin-bottom: 12px; }
+   one-line project chip, above the tabs.
+   Sticky (ticket 506116ea): the toolbar — search, density, status
+   chips — sticks to the top while the list scrolls. The title bar is
+   not sticky, so it scrolls away first and the toolbar never overlaps
+   it. The card background keeps rows from showing through while stuck. */
+.tickets-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  align-items: center;
+  margin-bottom: 12px;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: var(--card-bg);
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 8px;
+}
 .tickets-search {
   flex: 1 1 200px;
   min-width: 0;
@@ -547,6 +609,60 @@ h3.section { margin: 14px 0 6px; font-size: 13px; color: var(--text); }
    contrast to 2.56:1 for 13px text, below the WCAG text 4.5:1 floor.
    Awaits a suitable muted-text variable. */
 .ticket-card-assignee { margin-top: 4px; font-size: 13px; color: #5a6b7c; }
+
+/* Tickets list redesign (ticket 506116ea): status group chips, group
+   headers and the group-by row. The toolbar itself is sticky — see the
+   .tickets-toolbar rule above. */
+/* Status group chips (ticket 506116ea): one horizontally scrollable
+   row on the ALL tab, never wraps. The chips reuse the Gantt .chip
+   style (ticket 78462e97); the dots are the group's status colours. */
+.tickets-chips {
+  display: flex;
+  flex: 1 1 100%;
+  gap: 6px;
+  overflow-x: auto;
+  flex-wrap: nowrap;
+  padding: 2px 1px 4px;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+.tickets-chips::-webkit-scrollbar { display: none; }
+.tickets-chips .chip { flex: none; display: inline-flex; align-items: center; gap: 6px; }
+.tickets-chip-dots { display: inline-flex; gap: 2.5px; align-items: center; }
+.tickets-status-dot { width: 8px; height: 8px; border-radius: 50%; background: #999; flex: none; }
+.tickets-chip-dots .tickets-status-dot { width: 6px; height: 6px; }
+/* Group-by row (ticket 506116ea): toggle + result count, inside the
+   sticky toolbar on the ALL tab. */
+.tickets-group-row { display: flex; flex: 1 1 100%; align-items: center; gap: 8px; }
+.tickets-group-toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; color: var(--text); cursor: pointer; }
+.tickets-group-toggle input { width: auto; margin: 0; }
+.tickets-result-count { margin-left: auto; font-size: 12px; color: var(--text-muted-strong); font-weight: 600; }
+/* Group headers (ticket 506116ea): collapsible "Working — 5" headers
+   on the ALL tab when grouping is on, in workflow order. The count
+   pill mirrors the prototype; both themes pass 4.5:1 (light 5.24:1,
+   dark 4.94:1). */
+.ticket-group-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  background: none;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted-strong);
+  padding: 8px 12px;
+}
+.ticket-group-count { font-size: 11px; background: var(--surface-alt); color: var(--text-muted-strong); border-radius: 999px; padding: 1px 7px; letter-spacing: 0; }
+.ticket-group-chev { margin-left: auto; }
+.ticket-group-head-row td { padding: 0; border-bottom: 1px solid var(--border); }
+.ticket-group-head-row .ticket-group-head { border-bottom: none; }
 
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
 th { text-align: left; color: var(--text-muted-strong); border-bottom: 2px solid #d9e1e8; padding: 6px 8px; }
