@@ -57,6 +57,7 @@ Tickets carry project development work through a pipeline: the PM creates a requ
 35. Page Error: Invalid import.meta.glob from an External Probe
 36. Admin Users: Edit Form Scrolls into View, Tables Scroll Horizontally
 37. Title Bar: Theme Toggle Button
+38. Task Sub-Dimension: Tasks under Tickets, Progress, and the Closure Guard
 - Appendix A State Code Reference
 - Appendix B Ticket Lifecycle Example
 
