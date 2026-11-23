@@ -426,7 +426,7 @@ export default function AdminUsers({
           if (!u) return null;
           const rows = responsibilitiesFor(u);
           return (
-            <div style={{ marginTop: 12, borderTop: '1px solid #e2e8ee', paddingTop: 12 }}>
+            <div style={{ marginTop: 12, borderTop: '1px solid var(--border)', paddingTop: 12 }}>
               <h3 className="section">Workflow responsibilities — {u.display_name || u.username}</h3>
               <p className="muted">
                 Derived from the user&apos;s roles against each workflow&apos;s own
@@ -456,7 +456,7 @@ export default function AdminUsers({
           <form
             id="admin-edit-user-form"
             onSubmit={(e) => handleSaveEdit(e, editingId)}
-            style={{ marginTop: 12, borderTop: '1px solid #e2e8ee', paddingTop: 12 }}
+            style={{ marginTop: 12, borderTop: '1px solid var(--border)', paddingTop: 12 }}
           >
             <h3 className="section">Edit user</h3>
             <label className="field" htmlFor="edit-display-name">Display name</label>
@@ -511,7 +511,7 @@ export default function AdminUsers({
         {assignId && (
           <form
             onSubmit={(e) => handleSaveAssignProject(e, assignId)}
-            style={{ marginTop: 12, borderTop: '1px solid #e2e8ee', paddingTop: 12 }}
+            style={{ marginTop: 12, borderTop: '1px solid var(--border)', paddingTop: 12 }}
           >
             <h3 className="section">Assign project</h3>
             <p className="muted">
@@ -547,7 +547,7 @@ export default function AdminUsers({
               const u = users.find((x) => x.id === resetId);
               handleResetPassword(e, resetId, u ? u.username : resetId);
             }}
-            style={{ marginTop: 12, borderTop: '1px solid #e2e8ee', paddingTop: 12 }}
+            style={{ marginTop: 12, borderTop: '1px solid var(--border)', paddingTop: 12 }}
           >
             <h3 className="section">Reset password</h3>
             <p className="muted">
