@@ -647,8 +647,24 @@ button.link {
   white-space: pre-wrap;
 }
 
-.banner.error { background: #fbe9e7; border: 1px solid #e0a49c; color: #7a2318; }
-.banner.notice { background: #e2f2e9; border: 1px solid #9fd0ae; color: #1d6b3c; }
+/* Admin banners (ticket a1efa937): state tint variables so the
+   background, border and text all adapt to the theme. Light values
+   are the same as the old hard-coded colors (notice #e2f2e9 / #9fd0ae /
+   #1d6b3c; error bg #fbe9e7, text #7f1d1d vs old #7a2318, border #fecaca
+   vs old #e0a49c), so light theme looks the same as today. The old
+   fixed-light backgrounds broke the nested .muted in dark theme
+   (#94a3b8 on #e2f2e9 was 2.21:1); on the theme-aware backgrounds
+   .muted reads 4.73:1 light / 5.81:1 dark (notice) and 4.68:1 / 6.30:1
+   (error). */
+.banner.error { background: var(--tint-red-bg); border: 1px solid var(--tint-red-border); color: var(--tint-red-text-strong); }
+.banner.notice { background: var(--tint-green-bg); border: 1px solid var(--tint-green-mid); color: var(--tint-green-text); }
+/* Links inside a banner use the banner's own text color: the global
+   button.link color var(--accent) is 4.32:1 on the light notice
+   background and 4.28:1 on the light error background, below the 4.5:1
+   floor. The banner text colors pass on their own backgrounds
+   (notice 5.62:1 / 10.62:1, error 8.55:1 / 11.16:1). */
+.banner.notice button.link { color: var(--tint-green-text); }
+.banner.error button.link { color: var(--tint-red-text-strong); }
 
 /* Kept at the original #5a6b7c in light theme (ticket 9719ee35, review
    return): var(--text-muted) drops light contrast to 2.38:1, below the
