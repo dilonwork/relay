@@ -581,10 +581,15 @@ tbody tr.selected { background: #eef6f6; }
 .badge.applied { background: var(--tint-green-bg); color: var(--tint-green-text); }
 .badge.rejected { background: var(--tint-red-bg); color: var(--tint-red-text); }
 .badge.delivered { background: var(--tint-green-bg); color: var(--tint-green-text); }
-/* .badge.cancelled text stays #5a6b7c: mapping it to --text-muted would drop
-   contrast to 2.56:1 on white (see the 68d017d9 review return); no tint
-   variable fits a muted grey text. */
-.badge.cancelled { background: var(--bg); color: #5a6b7c; }
+/* .badge.cancelled text uses --text-muted-strong (ticket b73fac07,
+   review return on bc7cd7aa): the text sits on the badge pill's own
+   background (var(--bg)), so the contrast pair is text vs --bg —
+   light #5a6b7c on #f4f7f9 is 5.10:1, dark #94a3b8 on #0f172a is
+   6.96:1, both pass 4.5:1. Mapping it to --text-muted would drop
+   light contrast to 2.56:1 (see the 68d017d9 review return). The
+   background stays var(--bg); do not restore hard-coded #f4f7f9,
+   which would freeze the badge in dark theme. */
+.badge.cancelled { background: var(--bg); color: var(--text-muted-strong); }
 /* Implementation badge (ticket b14207c5): amber, like the stalled
    signal — the work is under way, not done. A button wearing a
    badge keeps the badge look; the pointer cursor says it opens the
