@@ -1143,6 +1143,7 @@ export default function App() {
       ) : adminActive && isAdmin ? (
         <AdminPanel
           tab={adminTabForView(mainView) || 'overview'}
+          user={user}
           onTabChange={(t: AdminTab) => setMainView(adminViewForTab(t))}
           workflowsCreateRequest={workflowsCreateRequest}
           onWorkflowsFormOpenChange={setWorkflowsFormOpen}

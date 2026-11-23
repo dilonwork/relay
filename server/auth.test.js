@@ -20,6 +20,10 @@ class FakeDb {
     this.users = [];
     this.sessions = [];
     this.apiKeys = [];
+    // Tickets and their audit rows, for deleteUser: the endpoint
+    // unassigns tickets but never touches the audit rows.
+    this.tickets = [];
+    this.transitions = [];
     this.seq = 0;
   }
 
@@ -153,11 +157,31 @@ class FakeDb {
       this.sessions = this.sessions.filter((x) => new Date(x.expires_at).getTime() >= now);
       return { rows: [] };
     }
+    // deleteUser: unassign the user's in-progress tickets (they
+    // return to the claimable queue).
+    if (sql.startsWith('UPDATE tickets SET assignee_id = NULL WHERE assignee_id = $1')) {
+      const changed = this.tickets.filter((t) => t.assignee_id === params[0]);
+      for (const t of changed) t.assignee_id = null;
+      return { rows: changed.map((t) => ({ ...t })) };
+    }
+    // deleteUser: revoke the user's keys explicitly (the endpoint
+    // does not rely on the ON DELETE CASCADE of the users row).
+    if (sql.startsWith('UPDATE api_keys SET revoked_at = CURRENT_TIMESTAMP WHERE user_id = $1 AND revoked_at IS NULL')) {
+      const changed = this.apiKeys.filter((k) => k.user_id === params[0] && !k.revoked_at);
+      const now = new Date().toISOString();
+      for (const k of changed) k.revoked_at = now;
+      return { rows: changed.map((k) => ({ ...k })) };
+    }
+    if (sql.startsWith('DELETE FROM users WHERE id = $1')) {
+      const u = this.users.find((x) => x.id === params[0]);
+      if (u) this.users = this.users.filter((x) => x.id !== params[0]);
+      return { rows: u ? [{ ...u, roles: [...u.roles] }] : [] };
+    }
     throw new Error(`FakeDb: unhandled query: ${sql}`);
   }
 
   async withTransaction(fn) {
-    const snap = JSON.stringify({ users: this.users, sessions: this.sessions, apiKeys: this.apiKeys });
+    const snap = JSON.stringify({ users: this.users, sessions: this.sessions, apiKeys: this.apiKeys, tickets: this.tickets, transitions: this.transitions });
     try {
       return await fn(this);
     } catch (err) {
@@ -165,6 +189,8 @@ class FakeDb {
       this.users = restored.users;
       this.sessions = restored.sessions;
       this.apiKeys = restored.apiKeys;
+      this.tickets = restored.tickets;
+      this.transitions = restored.transitions;
       throw err;
     }
   }
@@ -383,6 +409,79 @@ async function main() {
     assert.equal(deactivateOk.user.is_active, false);
     const missing = await auth.updateUser(db, 'no-such-id', { displayName: 'x' });
     assert.equal(missing.status, 404);
+  });
+
+  // Remove a user or agent entirely (ticket c1ff08e3): the account row
+  // is deleted, its sessions end, its in-progress tickets are
+  // unassigned back to the claimable queue, and the audit rows
+  // naming the user survive untouched.
+  await ok('deleteUser removes the account, ends its sessions, unassigns its tickets and keeps the audit rows', async () => {
+    const db = new FakeDb();
+    const admin = await auth.createFirstAdmin(db, { username: 'dylan', password: 'correct horse battery staple', displayName: 'Dylan' });
+    const dev = await auth.createUser(db, {
+      username: 'dev', password: 'correct horse battery staple', displayName: 'Dev', roles: ['engineer'],
+    });
+    const logged = await auth.login(db, { username: 'dev', password: 'correct horse battery staple' });
+    assert.equal(logged.ok, true);
+    // A ticket in progress with this user, and an audit row naming them.
+    db.tickets.push({ id: 'ticket-1', assignee_id: dev.user.id, status: 'in_dev' });
+    db.transitions.push({ id: 'transition-1', ticket_id: 'ticket-1', actor_id: dev.user.id, from_status: 'pending_dev', to_status: 'in_dev' });
+    const removed = await auth.deleteUser(db, dev.user.id, admin.user.id);
+    assert.equal(removed.ok, true);
+    assert.equal(removed.status, 200);
+    assert.equal(await auth.findUserById(db, dev.user.id), null);
+    assert.equal(await auth.authenticate(db, logged.token), null);
+    assert.equal(db.tickets[0].assignee_id, null);
+    assert.equal(db.transitions.length, 1);
+    assert.equal(db.transitions[0].actor_id, dev.user.id);
+  });
+
+  await ok('deleteUser revokes the account API keys explicitly', async () => {
+    const db = new FakeDb();
+    const admin = await auth.createFirstAdmin(db, { username: 'dylan', password: 'correct horse battery staple', displayName: 'Dylan' });
+    const agent = await auth.createAgent(db, { username: 'worker', displayName: 'Worker', roles: ['engineer'] });
+    assert.equal(agent.ok, true);
+    const keys = await auth.listApiKeys(db, agent.user.id);
+    assert.equal(keys.ok, true);
+    assert.equal(keys.keys.length, 1);
+    assert.equal(keys.keys[0].revoked_at, null);
+    const removed = await auth.deleteUser(db, agent.user.id, admin.user.id);
+    assert.equal(removed.ok, true);
+    // The key row was revoked by the endpoint itself, not left to the
+    // ON DELETE CASCADE of the users row.
+    assert.ok(db.apiKeys[0].revoked_at);
+  });
+
+  await ok('deleteUser refuses self-removal', async () => {
+    const db = new FakeDb();
+    const admin = await auth.createFirstAdmin(db, { username: 'dylan', password: 'correct horse battery staple', displayName: 'Dylan' });
+    const refused = await auth.deleteUser(db, admin.user.id, admin.user.id);
+    assert.equal(refused.ok, false);
+    assert.equal(refused.status, 403);
+    assert.equal(refused.error, 'cannot_delete_self');
+    assert.notEqual(await auth.findUserById(db, admin.user.id), null);
+  });
+
+  await ok('deleteUser refuses removing the last active admin', async () => {
+    const db = new FakeDb();
+    const admin = await auth.createFirstAdmin(db, { username: 'dylan', password: 'correct horse battery staple', displayName: 'Dylan' });
+    const dev = await auth.createUser(db, {
+      username: 'dev', password: 'correct horse battery staple', displayName: 'Dev', roles: ['engineer'],
+    });
+    const refused = await auth.deleteUser(db, admin.user.id, dev.user.id);
+    assert.equal(refused.ok, false);
+    assert.equal(refused.status, 409);
+    assert.equal(refused.error, 'last_admin');
+    assert.notEqual(await auth.findUserById(db, admin.user.id), null);
+  });
+
+  await ok('deleteUser reports an unknown account as not found', async () => {
+    const db = new FakeDb();
+    const admin = await auth.createFirstAdmin(db, { username: 'dylan', password: 'correct horse battery staple', displayName: 'Dylan' });
+    const missing = await auth.deleteUser(db, 'no-such-user', admin.user.id);
+    assert.equal(missing.ok, false);
+    assert.equal(missing.status, 404);
+    assert.equal(missing.error, 'user_not_found');
   });
 
   await ok('reset password: old password stops working, new works, sessions revoked', async () => {

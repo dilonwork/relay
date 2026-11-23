@@ -5,6 +5,9 @@ import { ALL_ROLES, ROLE_LABELS, WORKFLOW_ROLES, chatRoomFor, formatTime, stateL
 
 interface AdminUsersProps {
   users: User[];
+  // The signed-in admin: Remove is hidden on their own row (the
+  // server refuses self-removal too).
+  user: User | null;
   projects: Project[];
   // All workflows, for the derived "Workflow responsibilities" display:
   // which states each user owns in each workflow, by their roles.
@@ -30,6 +33,7 @@ interface AdminUsersProps {
 // and handlers live here.
 export default function AdminUsers({
   users,
+  user,
   projects,
   workflows,
   adminError,
@@ -72,6 +76,9 @@ export default function AdminUsers({
   // Which user's workflow responsibilities are shown below the table.
   const [responsibilitiesUserId, setResponsibilitiesUserId] = useState<string | null>(null);
 
+  // Which user the two-step remove confirm panel is open for.
+  const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null);
+
   // Rows written before migration 019 carry no kind; they are human
   // by default, so only an explicit 'agent' counts as an agent.
   const humans = users.filter((u) => u.kind !== 'agent');
@@ -93,6 +100,7 @@ export default function AdminUsers({
     setResetId(null);
     setAssignId(null);
     setResponsibilitiesUserId(null);
+    setConfirmRemoveId(null);
   }
 
   // The states this user owns in each workflow: a state is theirs when
@@ -267,6 +275,43 @@ export default function AdminUsers({
     }
   }
 
+  // The remove confirm panel renders below the table, like the edit
+  // form, so scroll it into view when it opens (same pattern as the
+  // edit form above).
+  useEffect(() => {
+    if (!confirmRemoveId) return;
+    document.getElementById('admin-remove-user-confirm')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }, [confirmRemoveId]);
+
+  function startRemove(u: User) {
+    setConfirmRemoveId(u.id);
+    setEditingId(null);
+    setResetId(null);
+    setAssignId(null);
+    setResponsibilitiesUserId(null);
+  }
+
+  // Remove an account entirely (ticket c1ff08e3): the account row is
+  // deleted, its API keys are revoked, its sessions are ended, and
+  // its in-progress tickets return to the claimable queue. The
+  // server refuses self-removal and removing the last active admin;
+  // those errors surface here through onError.
+  async function handleRemoveUser(id: string, username: string) {
+    onError('');
+    onNotice('');
+    setBusy(true);
+    try {
+      await api.adminDeleteUser(id);
+      setConfirmRemoveId(null);
+      onNotice(`Account removed: ${username}`);
+      await onRefresh();
+    } catch (err) {
+      onError(err instanceof Error ? err.message : 'Failed to remove user.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function startAssignProject(u: User) {
     setAssignId(u.id);
     setAssignProjectValue(u.project_id || '');
@@ -361,7 +406,12 @@ export default function AdminUsers({
                         onClick={() => setResponsibilitiesUserId(responsibilitiesUserId === u.id ? null : u.id)}
                       >
                         Responsibilities
-                      </button>
+                      </button>{' '}
+                      {user?.id !== u.id && (
+                        <button className="link danger" onClick={() => startRemove(u)}>
+                          Remove
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -412,7 +462,12 @@ export default function AdminUsers({
                       onClick={() => setResponsibilitiesUserId(responsibilitiesUserId === u.id ? null : u.id)}
                     >
                       Responsibilities
-                    </button>
+                    </button>{' '}
+                    {user?.id !== u.id && (
+                      <button className="link danger" onClick={() => startRemove(u)}>
+                        Remove
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -447,6 +502,35 @@ export default function AdminUsers({
               )}
               <button type="button" className="link" onClick={() => setResponsibilitiesUserId(null)}>
                 Close
+              </button>
+            </div>
+          );
+        })()}
+
+        {confirmRemoveId && (() => {
+          const u = users.find((x) => x.id === confirmRemoveId);
+          if (!u) return null;
+          return (
+            <div
+              id="admin-remove-user-confirm"
+              style={{ marginTop: 12, borderTop: '1px solid var(--border)', paddingTop: 12 }}
+            >
+              <h3 className="section">Remove user</h3>
+              <p className="muted">
+                Remove {u.display_name || u.username} ({u.username})? This deletes the account,
+                revokes its API keys, ends its sessions, and returns its in-progress tickets to the
+                claimable queue. The ticket history keeps the account&apos;s name. This cannot be undone.
+              </p>
+              <button
+                className="primary"
+                type="button"
+                onClick={() => void handleRemoveUser(u.id, u.username)}
+                disabled={busy}
+              >
+                Remove account
+              </button>{' '}
+              <button type="button" className="link" onClick={() => setConfirmRemoveId(null)}>
+                Cancel
               </button>
             </div>
           );

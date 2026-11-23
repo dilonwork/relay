@@ -18,12 +18,16 @@ import WorkflowsPanel from './WorkflowsPanel';
 // views on the admin role).
 export default function AdminPanel({
   tab,
+  user,
   onTabChange,
   workflowsCreateRequest,
   onWorkflowsFormOpenChange,
   onWorkflowsCreateRequestConsumed,
 }: {
   tab: AdminTab;
+  // The signed-in admin, threaded to the Users sub-page so it can
+  // hide Remove on their own row.
+  user: User | null;
   onTabChange: (tab: AdminTab) => void;
   // Title-bar "+ New workflow" (ticket b56b1145): App increments this
   // counter; the Workflows sub-page opens a fresh create form per click.
@@ -80,6 +84,7 @@ export default function AdminPanel({
       ) : tab === 'users' ? (
         <AdminUsers
           users={users}
+          user={user}
           projects={projects}
           workflows={workflows}
           adminError={adminError}

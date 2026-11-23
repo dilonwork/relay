@@ -316,6 +316,44 @@ async function updateUser(db, id, { displayName, roles, isActive, kind }) {
   return { ok: true, status: 200, user: publicUser(rows[0]) };
 }
 
+// Remove an account entirely (ticket c1ff08e3). Admin-only at the
+// route level (the /api/admin router enforces it); the caller is
+// identified by requesterId for the self-delete check below. In one
+// transaction: in-progress tickets assigned to the user are
+// unassigned (assignee_id NULL, so they return to the claimable
+// queue — the deletion is NOT blocked by in-progress tickets),
+// all of the user's API keys are revoked, all of their sessions are
+// ended, and the users row is deleted. The keys are revoked
+// explicitly rather than left to the ON DELETE CASCADE, so the
+// operation is correct on its own. Audit rows are never touched:
+// ticket_transitions.actor_id is plain text with no foreign key, so
+// the removed user's id stays in the history.
+async function deleteUser(db, id, requesterId) {
+  const user = await findUserById(db, id);
+  if (!user) {
+    return { ok: false, status: 404, error: 'user_not_found', message: 'User not found.' };
+  }
+  if (requesterId && requesterId === id) {
+    return { ok: false, status: 403, error: 'cannot_delete_self', message: 'You cannot remove your own account.' };
+  }
+  // Never strand the system without an admin: refuse to delete the
+  // last active admin (same invariant as updateUser).
+  if (user.is_active && user.roles.includes('admin')) {
+    const users = await listUsers(db);
+    const otherAdmins = users.filter((u) => u.id !== id && u.is_active && u.roles.includes('admin'));
+    if (otherAdmins.length === 0) {
+      return { ok: false, status: 409, error: 'last_admin', message: 'Cannot remove the last active admin.' };
+    }
+  }
+  await db.withTransaction(async (client) => {
+    await client.query('UPDATE tickets SET assignee_id = NULL WHERE assignee_id = $1', [id]);
+    await client.query('UPDATE api_keys SET revoked_at = CURRENT_TIMESTAMP WHERE user_id = $1 AND revoked_at IS NULL', [id]);
+    await client.query('DELETE FROM sessions WHERE user_id = $1', [id]);
+    await client.query('DELETE FROM users WHERE id = $1', [id]);
+  });
+  return { ok: true, status: 200 };
+}
+
 // Admin sets a new password. All of the user's sessions are revoked, so
 // the reset also signs them out everywhere. Agent accounts have no
 // password, so resetting one is refused (the Users screen never
@@ -606,6 +644,7 @@ module.exports = {
   createAgentTx,
   createFirstAdmin,
   updateUser,
+  deleteUser,
   resetPassword,
   login,
   logout,
