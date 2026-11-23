@@ -1025,21 +1025,19 @@ button.link {
 .detail-main .card > h3.section:first-child,
 .detail-rail .card > h3.section:first-child { margin-top: 0; }
 .lead { font-size: 14px; line-height: 1.5; margin: 0; }
-/* The callout keeps its blue tint (#eff6ff background, #bfdbfe border,
-   #2563eb left edge, #5a6b7c who): there is no blue tint variable yet,
-   and swapping it for a neutral would erase the info semantics. The
-   text must also stay readable on the light blue background in both
-   themes. Pending a palette decision (same as the badge status tints,
-   ticket bc7cd7aa). */
-.callout { border: 1px solid #bfdbfe; border-left: 4px solid #2563eb; background: #eff6ff; border-radius: 6px; padding: 10px 12px; margin: 0 0 10px; font-size: 13px; }
+.callout { border: 1px solid var(--tint-blue-border); border-left: 4px solid var(--tint-blue-edge); background: var(--tint-blue-bg); border-radius: 6px; padding: 10px 12px; margin: 0 0 10px; font-size: 13px; }
 .callout p { margin: 6px 0 0; }
-.callout .who { font-size: 12px; color: #5a6b7c; }
+.callout .who { font-size: 12px; color: var(--tint-blue-muted); }
 .detail-rail .detail-grid { grid-template-columns: auto 1fr; margin-bottom: 0; }
 .detail-rail .detail-grid dd { text-align: right; }
 .target-btns { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
 .target-btns button { border: 1px solid var(--border-strong); background: var(--input-bg); border-radius: 6px; padding: 8px 14px; font-size: 13px; cursor: pointer; }
 .target-btns button.on { background: var(--sidebar-bg); color: var(--sidebar-text); border-color: var(--sidebar-bg); }
-.req { font-size: 11px; color: var(--warning); font-weight: 700; }
+/* Amber text (ticket bcfc2250, preemptive fix): var(--warning) drops
+   this 11px bold label to 2.39:1 in light theme, the same mapping
+   the Reviewer returned on 1e248c03 / 68d017d9 / e01284ca / 8b25e589 /
+   9719ee35; var(--tint-amber-text) passes both themes. */
+.req { font-size: 11px; color: var(--tint-amber-text); font-weight: 700; }
 .hist-row { cursor: pointer; }
 .hist-row:hover { background: var(--hover-bg); }
 .hist-detail td { background: var(--surface); font-size: 12px; color: var(--text); }
