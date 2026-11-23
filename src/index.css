@@ -1111,7 +1111,12 @@ button.amber-outline:disabled { opacity: 0.5; cursor: default; }
 .section-dot.ok { background: var(--success); }
 .validation-summary { background: var(--tint-red-bg-soft); border: 1px solid var(--tint-red-border); color: var(--tint-red-text-strong); border-radius: 6px; padding: 10px 14px; margin-bottom: 16px; }
 .validation-summary ul { margin: 4px 0 8px 20px; }
-.section-error { color: var(--error); font-size: 13px; margin: 4px 0 12px; }
+/* Red text (ticket afa29133, review return): var(--error) drops this
+   13px text to 4.13:1 / 3.83:1 in light theme; --error's light value
+   #e53e3e is itself too light for text. var(--tint-red-text) passes
+   both themes (7.01:1 / 6.52:1 light, 7.71:1 / 9.41:1 dark). Do NOT
+   restore #b91c1c — dark card bg would be only 2.26:1. */
+.section-error { color: var(--tint-red-text); font-size: 13px; margin: 4px 0 12px; }
 .replace-notice { background: var(--tint-amber-bg); border: 1px solid var(--tint-amber-border); color: var(--tint-amber-text); border-radius: 6px; padding: 10px 14px; margin-bottom: 12px; }
 .workflow-preview { margin-bottom: 12px; }
 
