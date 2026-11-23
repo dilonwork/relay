@@ -1,16 +1,22 @@
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import type { ReactElement } from 'react';
 import type { Project, PublicUser, QueueEntry, Workflow } from './api';
 import {
   QUEUE_TABS,
   ROLE_LABELS,
+  STATUS_GROUPS,
+  countTicketsByStatusGroup,
   countTicketsByTab,
+  filterTicketsByStatusGroup,
   filterTicketsByTitle,
   formatTime,
+  groupTicketsByStatus,
   isStalledTicket,
   resolveUserName,
   shortId,
+  shortStatusLabel,
   stateLabelFor,
+  statusColor,
   ticketsForTab,
 } from './helpers';
 
@@ -58,6 +64,38 @@ export default function TicketList(props: TicketListProps) {
 
   const [query, setQuery] = useState('');
   const [density, setDensity] = useState<Density>('comfortable');
+
+  // ALL-tab redesign (ticket 506116ea): group filter chips, group-by
+  // toggle (default on), per-group collapse, and the expanded mobile
+  // row. Chips + grouping only apply on the ALL tab; other tabs render
+  // exactly as today.
+  const [groupFilter, setGroupFilter] = useState('all');
+  const [groupBy, setGroupBy] = useState(true);
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+
+  // Switching tabs clears the ALL-only filter and any expanded row.
+  function changeTab(key: string) {
+    setGroupFilter('all');
+    setExpandedId(null);
+    onTabChange(key);
+  }
+
+  // Tapping a chip filters to that group and jumps to the top of the
+  // filtered list; "All" clears the filter.
+  function chooseGroup(key: string) {
+    setGroupFilter(key);
+    setExpandedId(null);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  function toggleGroup(key: string) {
+    setCollapsedGroups((prev) => ({ ...prev, [key]: !prev[key] }));
+  }
+
+  function toggleExpand(id: string) {
+    setExpandedId((prev) => (prev === id ? null : id));
+  }
 
   function labelFor(t: QueueEntry, code: string): string {
     return stateLabelFor(t.workflow_id ? workflowById.get(t.workflow_id) : undefined, code);
@@ -112,6 +150,128 @@ export default function TicketList(props: TicketListProps) {
   const counts = countTicketsByTab(tickets, queueTickets, query);
   const tabTickets = filterTicketsByTitle(ticketsForTab(tickets, tab, queueTickets), query);
 
+  // Group counts come from the same searched set, so a chip's count is
+  // exactly the rows it shows. The group filter and grouping only
+  // apply on the ALL tab; other tabs show the searched tab rows as-is.
+  const isAllTab = tab === 'all';
+  const groupCounts = countTicketsByStatusGroup(tabTickets);
+  const visibleTickets = isAllTab
+    ? filterTicketsByStatusGroup(tabTickets, groupFilter)
+    : tabTickets;
+  const groupedTickets = isAllTab && groupBy ? groupTicketsByStatus(visibleTickets) : [];
+
+  // One desktop row: the 6-column table row, unchanged.
+  function desktopRow(t: QueueEntry): ReactElement {
+    return (
+      <tr
+        key={t.id}
+        className={selectedId === t.id ? 'selected' : ''}
+        onClick={() => onSelectTicket(t.id)}
+      >
+        <td>
+          {t.title}
+          <div className="muted ticket-id">{shortId(t.id)}</div>
+          {taskProgress(t)}
+        </td>
+        <td>{projectName(t.project_id)}</td>
+        <td>
+          <span className={`badge ${t.status}`}>{labelFor(t, t.status)}</span>
+        </td>
+        <td title={t.assignee_id || ''}>{userName(t.assignee_id)}</td>
+        <td>{nextStep(t)}</td>
+        <td>
+          {formatTime(t.updated_at)}
+          {stalledDot(t)}
+        </td>
+      </tr>
+    );
+  }
+
+  // One group header: collapsible "Working — 5" in workflow order.
+  function groupHeader(group: { key: string; label: string; statuses: string[] }, count: number): ReactElement {
+    const closed = !!collapsedGroups[group.key];
+    return (
+      <button
+        type="button"
+        className={`ticket-group-head${closed ? ' closed' : ''}`}
+        aria-expanded={!closed}
+        onClick={() => toggleGroup(group.key)}
+      >
+        {group.label} <span className="ticket-group-count">{count}</span>
+        <span className="ticket-group-chev" aria-hidden="true">
+          {closed ? '▸' : '▾'}
+        </span>
+      </button>
+    );
+  }
+
+  // One mobile row (ticket 506116ea): collapsed 2 lines in Comfortable
+  // (dot + short label + title; project · assignee · updated), 1 line
+  // in Compact (dot + title only — the short label and second line
+  // hide via .ticket-compact). Tapping the row expands it in place to
+  // the full card; tapping the chevron collapses it again. Tapping the
+  // expanded card opens the ticket detail, exactly as today — the
+  // expand toggle stops propagation so it never opens the detail.
+  function mobileRow(t: QueueEntry): ReactElement {
+    const expanded = expandedId === t.id;
+    return (
+      <article
+        key={t.id}
+        className={`ticket-card${selectedId === t.id ? ' selected' : ''}${expanded ? ' expanded' : ''}`}
+        onClick={expanded ? () => onSelectTicket(t.id) : undefined}
+      >
+        <button
+          type="button"
+          className="ticket-row-main"
+          aria-expanded={expanded}
+          aria-label={`${expanded ? 'Collapse' : 'Expand'} ${t.title}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            toggleExpand(t.id);
+          }}
+        >
+          <span className="ticket-row-line1">
+            <span
+              className="tickets-status-dot"
+              style={{ background: statusColor(t.status) }}
+              aria-hidden="true"
+            />
+            <span className="ticket-row-status" title={labelFor(t, t.status)}>
+              {shortStatusLabel(t.status)}
+            </span>
+            <span className="ticket-row-title">{t.title}</span>
+            {stalledDot(t)}
+            <span className="ticket-row-chev" aria-hidden="true">
+              {expanded ? '▴' : '▾'}
+            </span>
+          </span>
+          <span className="ticket-row-line2 muted">
+            {projectName(t.project_id)} · {userName(t.assignee_id)} · {formatTime(t.updated_at)}
+          </span>
+        </button>
+        {expanded && (
+          <div className="ticket-card-detail">
+            <div className="ticket-card-title">
+              {t.title}
+              <div className="muted ticket-id">{shortId(t.id)}</div>
+              {taskProgress(t)}
+            </div>
+            <div className="ticket-card-meta">
+              <span className={`badge ${t.status}`}>{labelFor(t, t.status)}</span>
+              <span>{projectName(t.project_id)}</span>
+              <span className="muted">
+                {formatTime(t.updated_at)}
+                {stalledDot(t)}
+              </span>
+            </div>
+            <div className="ticket-card-assignee">{userName(t.assignee_id)}</div>
+            <div className="ticket-card-next">{nextStep(t)}</div>
+          </div>
+        )}
+      </article>
+    );
+  }
+
   return (
     <div className={`card${density === 'compact' ? ' ticket-compact' : ''}`}>
       {/* Toolbar: search + density + the one-line project chip (the
@@ -160,13 +320,63 @@ export default function TicketList(props: TicketListProps) {
             detail below.
           </span>
         )}
+        {/* Status group chips + group-by (ticket 506116ea): ALL tab only.
+            One horizontally scrollable chip row, one chip per group plus
+            All; each chip's count is the rows it shows. */}
+        {isAllTab && (
+          <>
+            <div className="tickets-chips" role="group" aria-label="Filter by status group">
+              <button
+                type="button"
+                className={groupFilter === 'all' ? 'chip active' : 'chip'}
+                aria-pressed={groupFilter === 'all'}
+                onClick={() => chooseGroup('all')}
+              >
+                All ({groupCounts.all})
+              </button>
+              {STATUS_GROUPS.map((g) => (
+                <button
+                  key={g.key}
+                  type="button"
+                  className={groupFilter === g.key ? 'chip active' : 'chip'}
+                  aria-pressed={groupFilter === g.key}
+                  onClick={() => chooseGroup(g.key)}
+                >
+                  <span className="tickets-chip-dots" aria-hidden="true">
+                    {g.statuses.map((s) => (
+                      <span
+                        key={s}
+                        className="tickets-status-dot"
+                        style={{ background: statusColor(s) }}
+                      />
+                    ))}
+                  </span>
+                  {g.label} ({groupCounts[g.key] ?? 0})
+                </button>
+              ))}
+            </div>
+            <div className="tickets-group-row">
+              <label className="tickets-group-toggle">
+                <input
+                  type="checkbox"
+                  checked={groupBy}
+                  onChange={(e) => setGroupBy(e.target.checked)}
+                />
+                Group by status
+              </label>
+              <span className="tickets-result-count">
+                {visibleTickets.length} ticket{visibleTickets.length === 1 ? '' : 's'}
+              </span>
+            </div>
+          </>
+        )}
       </div>
       <div className="tabs">
         {QUEUE_TABS.map((t) => (
           <button
             key={t.key}
             className={`${tab === t.key ? 'active' : ''}${t.key === 'claimable' && counts.claimable > 0 ? ' claimable' : ''}`}
-            onClick={() => onTabChange(t.key)}
+            onClick={() => changeTab(t.key)}
           >
             {t.label} <span className="count">{counts[t.key] ?? 0}</span>
           </button>
@@ -179,6 +389,10 @@ export default function TicketList(props: TicketListProps) {
             : tab === 'claimable'
               ? 'Nothing waiting for your roles right now.'
               : 'No tickets in this queue.'}
+        </p>
+      ) : visibleTickets.length === 0 ? (
+        <p className="muted">
+          No tickets in this group match. Try a different search, or clear the status filter.
         </p>
       ) : (
         <>
@@ -195,59 +409,35 @@ export default function TicketList(props: TicketListProps) {
                 </tr>
               </thead>
               <tbody>
-                {tabTickets.map((t) => (
-                  <tr
-                    key={t.id}
-                    className={selectedId === t.id ? 'selected' : ''}
-                    onClick={() => onSelectTicket(t.id)}
-                  >
-                    <td>
-                      {t.title}
-                      <div className="muted ticket-id">{shortId(t.id)}</div>
-                      {taskProgress(t)}
-                    </td>
-                    <td>{projectName(t.project_id)}</td>
-                    <td>
-                      <span className={`badge ${t.status}`}>{labelFor(t, t.status)}</span>
-                    </td>
-                    <td title={t.assignee_id || ''}>{userName(t.assignee_id)}</td>
-                    <td>{nextStep(t)}</td>
-                    <td>
-                      {formatTime(t.updated_at)}
-                      {stalledDot(t)}
-                    </td>
-                  </tr>
-                ))}
+                {isAllTab && groupBy
+                  ? groupedTickets.map(({ group, rows }) =>
+                      rows.length === 0 ? null : (
+                        <Fragment key={group.key}>
+                          <tr className="ticket-group-head-row">
+                            <td colSpan={6}>{groupHeader(group, rows.length)}</td>
+                          </tr>
+                          {!collapsedGroups[group.key] && rows.map((t) => desktopRow(t))}
+                        </Fragment>
+                      ),
+                    )
+                  : visibleTickets.map((t) => desktopRow(t))}
               </tbody>
             </table>
           </div>
-          {/* Mobile card view (≤720px): same tickets, same tap-to-open,
-              one card per ticket instead of the 6-column table — and the
-              same fields, so the two views stop disagreeing. */}
+          {/* Mobile card view (≤720px): collapsed 2-line rows (1 line in
+              Compact), tap to expand to the full card; tap the expanded
+              card to open the ticket detail, exactly as today. */}
           <div className="ticket-cards">
-            {tabTickets.map((t) => (
-              <article
-                key={t.id}
-                className={`ticket-card${selectedId === t.id ? ' selected' : ''}`}
-                onClick={() => onSelectTicket(t.id)}
-              >
-                <div className="ticket-card-title">
-                  {t.title}
-                  <div className="muted ticket-id">{shortId(t.id)}</div>
-                  {taskProgress(t)}
-                </div>
-                <div className="ticket-card-meta">
-                  <span className={`badge ${t.status}`}>{labelFor(t, t.status)}</span>
-                  <span>{projectName(t.project_id)}</span>
-                  <span className="muted">
-                    {formatTime(t.updated_at)}
-                    {stalledDot(t)}
-                  </span>
-                </div>
-                <div className="ticket-card-assignee">{userName(t.assignee_id)}</div>
-                <div className="ticket-card-next">{nextStep(t)}</div>
-              </article>
-            ))}
+            {isAllTab && groupBy
+              ? groupedTickets.map(({ group, rows }) =>
+                  rows.length === 0 ? null : (
+                    <Fragment key={group.key}>
+                      {groupHeader(group, rows.length)}
+                      {!collapsedGroups[group.key] && rows.map((t) => mobileRow(t))}
+                    </Fragment>
+                  ),
+                )
+              : visibleTickets.map((t) => mobileRow(t))}
           </div>
         </>
       )}
