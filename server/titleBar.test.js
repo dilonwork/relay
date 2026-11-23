@@ -80,6 +80,28 @@ async function main() {
     assert.match(src, /aria-label="Open navigation"/, 'the hamburger must be labelled for navigation');
   });
 
+  await ok('the theme toggle lives in the title bar next to the hamburger (ticket 265f984a)', async () => {
+    const src = readSrc('TitleBar.tsx');
+    assert.match(src, /theme\?: 'light' \| 'dark';/, 'TitleBar must accept the current theme');
+    assert.match(src, /onToggleTheme\?: \(\) => void;/, 'TitleBar must accept a theme toggle handler');
+    assert.match(src, /className="titlebar-theme"/, 'the toggle must render inside the title bar');
+    assert.match(src, /onClick={onToggleTheme}/, 'the toggle must call the toggle handler');
+    assert.match(src, /aria-label={theme === 'dark' \? 'Switch to light theme' : 'Switch to dark theme'}/, 'the toggle label must name the theme it switches to');
+    assert.match(src, /theme === 'dark' \? '☀' : '☾'/, 'the toggle must show a sun in dark mode and a moon in light mode');
+    assert.match(src, /className="titlebar-menu"[\s\S]*className="titlebar-theme"/, 'the toggle must sit after the hamburger');
+  });
+
+  await ok('App passes the theme state and toggle to the title bar (ticket 265f984a)', async () => {
+    const src = readSrc('App.tsx');
+    assert.match(src, /theme={theme}/, 'App must pass the current theme to the title bar');
+    assert.match(src, /onToggleTheme={toggleTheme}/, 'App must pass toggleTheme to the title bar');
+    assert.match(src, /const toggleTheme = \(\) => \{/, 'App must define the toggleTheme handler');
+    assert.match(src, /localStorage\.getItem\('relay_theme'\)/, 'the choice must persist in localStorage');
+    const css = fs.readFileSync(path.join(__dirname, '..', 'src', 'index.css'), 'utf8');
+    assert.match(css, /\.titlebar-theme \{/, 'the toggle button must have its own style rule');
+    assert.match(css, /\.titlebar-theme \{[^}]*display: inline-flex/, 'the toggle must be visible at all widths');
+  });
+
   console.log(`\n${passed} title bar tests passed.`);
 }
 

@@ -56,6 +56,7 @@ Tickets carry project development work through a pipeline: the PM creates a requ
 34. Build Plan Attached to Its Prototype: One Row per Delivery
 35. Page Error: Invalid import.meta.glob from an External Probe
 36. Admin Users: Edit Form Scrolls into View, Tables Scroll Horizontally
+37. Title Bar: Theme Toggle Button
 - Appendix A State Code Reference
 - Appendix B Ticket Lifecycle Example
 
@@ -1738,3 +1739,22 @@ Two parts, both in the existing Edit flow — no page redesign, no new form:
 
 - `server/adminUsers.test.js` (new, 3 items): source assertions — there is no frontend test harness in this repo, following the repo guard pattern. The edit form carries the stable id and a `useEffect` keyed on `editingId` scrolls it into view with `block: 'nearest'`; both user tables sit in a `table-scroll` wrapper and carry the `admin-users-table` class; the stylesheet has the wrapper overflow rule, the wrapper-table `display: table` rule, and the no-wrap cell rule.
 - Full suite 513 tests pass; `vite build` passes.
+
+## 37. Title Bar: Theme Toggle Button
+
+### The ticket
+
+Ticket 265f984a, "Add theme toggle button to title bar". `App.tsx` already held the theme state (light/dark, `localStorage` key `relay_theme`, `prefers-color-scheme` on first load, `data-theme` on the document element) and a `toggleTheme` function, but no UI element called it. The local-agent Engineer service claimed the ticket at 07:17, failed twice with "model gave no usable verdict", and stopped by its own two-consecutive-failure rule, waiting for Dylan; the ticket sat in `in_dev` for about 10 hours with no movement. On PM escalation, Engineer1 took it over (same engineer account, no claim transition needed) and implemented it directly.
+
+### The fix
+
+Three small changes, no rewrite of `index.css`:
+
+1. `src/TitleBar.tsx` takes optional `theme?: 'light' | 'dark'` and `onToggleTheme?: () => void` props and renders a `titlebar-theme` button immediately after the hamburger, before the breadcrumb nav. The label names the theme the click switches to ("Switch to dark theme" in light mode, "Switch to light theme" in dark mode); the glyph is a moon (☾) in light mode and a sun (☀) in dark mode. Unlike the hamburger, the toggle is visible at all widths.
+2. `src/App.tsx` passes `theme={theme}` and `onToggleTheme={toggleTheme}` to the single shared `<TitleBar>` render. Persistence (`relay_theme`) and `prefers-color-scheme` were already implemented and are untouched.
+3. `src/index.css` gains one `.titlebar-theme` rule (icon-only, 44px, theme-aware `var(--border)` / `var(--surface)` / `var(--text)` colors), mirroring the hamburger's mobile button.
+
+### Tests
+
+- `server/titleBar.test.js` (+2 tests, now 9): the toggle lives in the title bar next to the hamburger (props, `titlebar-theme` class, `onClick={onToggleTheme}`, switching aria-label, sun/moon glyphs, placement after the hamburger); App passes the theme state and `toggleTheme` to the title bar, persists the choice in `localStorage`, and the toggle has its own always-visible style rule.
+- Full suite 519 tests pass; `vite build` passes.

@@ -1091,6 +1091,8 @@ export default function App() {
         title={mainView === 'detail' && detail ? detail.title : undefined}
         badge={detailBadge}
         onMenuClick={() => setMobileNavOpen(true)}
+        theme={theme}
+        onToggleTheme={toggleTheme}
         actions={
           mainView === 'dashboard' ? (
             <button type="button" className="primary" onClick={() => setMainView('new')}>

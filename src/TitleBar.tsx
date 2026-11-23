@@ -28,18 +28,33 @@ interface TitleBarProps {
   // above 720 px by CSS, so the desktop bar is unchanged. The bar
   // otherwise keeps the 337e6a55 rule (path + page title + actions).
   onMenuClick?: () => void;
+  // Theme toggle (ticket 265f984a): the current theme and the handler
+  // that flips it. The button sits next to the hamburger and is
+  // visible at all widths, unlike the hamburger itself.
+  theme?: 'light' | 'dark';
+  onToggleTheme?: () => void;
 }
 
 // One slim title bar per page (ticket 337e6a55): it carries the path,
 // the page title (the last path segment) and the actions, and replaces
 // the old content header (H1 + tagline + Refresh) and the per-panel
 // H2s. The sidebar keeps the single "Relay" brand.
-export default function TitleBar({ segments, title, badge, actions, onRefresh, onMenuClick }: TitleBarProps) {
+export default function TitleBar({ segments, title, badge, actions, onRefresh, onMenuClick, theme, onToggleTheme }: TitleBarProps) {
   return (
     <div className="titlebar">
       {onMenuClick && (
         <button type="button" className="titlebar-menu" onClick={onMenuClick} aria-label="Open navigation">
           <span aria-hidden="true">☰</span>
+        </button>
+      )}
+      {onToggleTheme && (
+        <button
+          type="button"
+          className="titlebar-theme"
+          onClick={onToggleTheme}
+          aria-label={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+        >
+          <span aria-hidden="true">{theme === 'dark' ? '☀' : '☾'}</span>
         </button>
       )}
       <nav className="crumbs" aria-label="Breadcrumb">

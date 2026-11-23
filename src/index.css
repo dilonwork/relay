@@ -168,6 +168,25 @@ body {
    shown below 720px (see the media query below). */
 .titlebar-menu { display: none; }
 
+/* Theme toggle in the title bar (ticket 265f984a): icon-only button
+   next to the hamburger, visible at all widths. Theme-aware colors
+   so it reads on both the light and the dark bar. */
+.titlebar-theme {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 18px;
+}
+
 .actor-bar {
   display: flex;
   flex-wrap: wrap;
