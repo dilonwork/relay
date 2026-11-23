@@ -728,6 +728,21 @@ app.patch('/api/admin/users/:id', async (req, res) => {
   }
 });
 
+// Remove an account entirely (ticket c1ff08e3). Admin only (the
+// /api/admin router enforces it); the service refuses self-removal
+// and removing the last active admin. In-progress tickets are
+// unassigned and return to the claimable queue; the audit trail is
+// kept (see auth.deleteUser).
+app.delete('/api/admin/users/:id', async (req, res) => {
+  try {
+    const result = await auth.deleteUser(db, req.params.id, req.user ? req.user.id : undefined);
+    if (!result.ok) return res.status(result.status).json({ error: result.error, message: result.message });
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post('/api/admin/users/:id/reset-password', async (req, res) => {
   try {
     const result = await auth.resetPassword(db, req.params.id, req.body ? req.body.password : undefined);

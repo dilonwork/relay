@@ -481,6 +481,13 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify(payload),
     }),
+  // Remove an account entirely (ticket c1ff08e3): the account row is
+  // deleted, its API keys are revoked, its sessions are ended, and
+  // its in-progress tickets return to the claimable queue.
+  adminDeleteUser: (id: string) =>
+    request<{ ok: boolean }>(`/api/admin/users/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    }),
   adminResetPassword: (id: string, password: string) =>
     request<{ ok: boolean }>(`/api/admin/users/${encodeURIComponent(id)}/reset-password`, {
       method: 'POST',
