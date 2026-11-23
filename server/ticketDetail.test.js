@@ -240,6 +240,58 @@ async function main() {
     assert.match(css, /@media \(max-width: 720px\) \{\s*\.detail-columns \{[^}]*grid-template-columns: 1fr/, 'the rail must stack below on mobile');
   });
 
+  await ok('Tasks section (ticket 0ae37c3b): progress, rows, add-task, empty state, after About', async () => {
+    const detail = readSrc('TicketDetail.tsx');
+    assert.match(detail, /<h3 className="section">Tasks<\/h3>/, 'the rail must have a Tasks card');
+    // The Tasks card sits after About this ticket in the rail.
+    assert.ok(
+      detail.indexOf('<h3 className="section">Tasks</h3>') > detail.indexOf('<h3 className="section">About this ticket</h3>'),
+      'Tasks must come after About this ticket'
+    );
+    assert.match(detail, /\{completedTasks\}\/\{tasks\.length\} tasks completed/, 'the header must show x/y tasks completed');
+    assert.match(detail, /className="tasks-progress"/, 'the progress bar must be present');
+    assert.match(detail, /role="progressbar"/, 'the progress bar must be labelled for screen readers');
+    assert.match(detail, /No tasks yet\./, 'the empty state must say No tasks yet.');
+    assert.match(detail, /listTasks\(detail\.id\)/, 'the section must load its Tasks from the API');
+    assert.match(detail, /api\.createTask\(detail\.id, newTaskTitle\.trim\(\)\)/, 'adding a Task must call the API and append the returned Task');
+    assert.match(detail, /Add task/, 'the add-task row must have an Add task button');
+    assert.match(detail, /<option value="Pending">Pending<\/option>/, 'the status control must offer Pending');
+    assert.match(detail, /<option value="In Progress">In Progress<\/option>/, 'the status control must offer In Progress');
+    assert.match(detail, /<option value="Completed">Completed<\/option>/, 'the status control must offer Completed');
+    assert.match(detail, /api\.updateTask\(task\.id, \{ status \}\)/, 'changing the status must call the API');
+    assert.match(detail, /api\.updateTask\(task\.id, \{ title: editingTitle\.trim\(\) \}\)/, 'saving a rename must call the API');
+    assert.match(detail, /api\.deleteTask\(task\.id\)/, 'deleting a Task must call the API');
+  });
+
+  await ok('Tasks gating (ticket 0ae37c3b): leader controls hidden for others, status for leader/engineer', async () => {
+    const detail = readSrc('TicketDetail.tsx');
+    assert.match(detail, /const isLeader = user\.roles\.includes\('leader'\)/, 'leader gating must read user.roles');
+    assert.match(detail, /const canChangeTaskStatus = isLeader \|\| user\.roles\.includes\('engineer'\)/, 'the status control must be leader or engineer');
+    assert.match(detail, /\{isLeader && \(\s*<form className="task-add"/, 'the add-task row must be leader-only');
+    assert.match(detail, /\{isLeader && \([\s\S]*?Edit\s*<\/button>/, 'the edit control must be leader-only');
+    // Read-only status text for roles that cannot change it.
+    assert.match(detail, /<span className="muted">\{task\.status\}<\/span>/, 'other roles must see the status as read-only text');
+  });
+
+  await ok('Tasks client (ticket 0ae37c3b): api functions, Task type, Ticket counts', async () => {
+    const apiSrc = readSrc('api.ts');
+    assert.match(apiSrc, /export interface Task \{/, 'the Task type must exist');
+    assert.match(apiSrc, /listTasks: \(ticketId: string\) =>\s*request<Task\[\]>\(`\/api\/tickets\/\$\{encodeURIComponent\(ticketId\)\}\/tasks`\)/, 'api.listTasks must call GET /api/tickets/:id/tasks');
+    assert.match(apiSrc, /createTask: \(ticketId: string, title: string\)/, 'api.createTask must exist');
+    assert.match(apiSrc, /updateTask: \(taskId: string, payload: \{ title\?: string; status\?: string \}\)/, 'api.updateTask must exist');
+    assert.match(apiSrc, /deleteTask: \(taskId: string\)/, 'api.deleteTask must exist');
+    assert.match(apiSrc, /task_completed\?: number;\s*task_total\?: number;/, 'the Ticket type must carry the optional task counts');
+  });
+
+  await ok('Tasks CSS (ticket 0ae37c3b): progress bar and rows use theme variables', async () => {
+    const css = readSrc('index.css');
+    assert.match(css, /\.tasks-progress \{[^}]*background: var\(--surface-alt\)/, 'the progress track must use a theme variable');
+    assert.match(css, /\.tasks-progress-fill \{[^}]*background: var\(--accent\)/, 'the progress fill must use the accent variable');
+    assert.match(css, /\.task-list \{/, 'the task list must have a style rule');
+    assert.match(css, /\.task-row \{[^}]*border-top: 1px solid var\(--border\)/, 'task rows must separate with a theme border');
+    assert.match(css, /\.task-add \{/, 'the add-task row must have a style rule');
+  });
+
   console.log(`\n${passed} ticket detail redesign tests passed.`);
 }
 

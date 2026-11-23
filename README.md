@@ -158,7 +158,7 @@ relay/
 │   ├── viewHash.test.js
 │   └── migrations.test.js
 ├── db/
-│   └── migrations/       # schema as SQL migrations (001-024)
+│   └── migrations/       # schema as SQL migrations (001-025)
 ├── doc/
 │   └── design.md         # design document (Traditional Chinese)
 ├── screenshots/          # README screenshots (see screenshots/README.md)
@@ -185,8 +185,11 @@ The backend needs a PostgreSQL database (default name `relay`, see
 `.env.example`). Creating that database is a separate deployment step and is
 not done by the code in this repo; the server creates the `tickets`,
 `ticket_transitions`, `users`, `sessions`, `api_keys`, `projects`,
-`monitor_reminders` and `workflows` tables itself on startup (migrations
-`db/migrations/001-024`).
+`monitor_reminders`, `workflows` and `tasks` tables itself on startup (migrations
+`db/migrations/001-025`). The `tasks` table holds the Task sub-dimension
+under Tickets: leaders decompose a ticket into Tasks (Pending / In
+Progress / Completed), engineers update Task statuses, and the ticket
+detail and list payloads carry `task_completed` / `task_total`.
 
 On first run the users table is empty, so the app shows a setup screen:
 create the first admin account there (username, display name, password).
@@ -267,7 +270,7 @@ way, including the three-layer role-map fallback and the delete rules.
 Custom workflow definitions are covered too: the three example flows
 are walked end to end (including the backward move), the definition
 validator's rules are tested case by case, and the migration files are
-tested for the 001→024 sequence. The document service is tested the
+tested for the 001→025 sequence. The document service is tested the
 same way, including the filename slug, the project scope rules, the
 project ownership (project_id stored and returned, the list filters by
 project, unassigned documents show as Unassigned, the agent upload
@@ -287,8 +290,8 @@ onboarding document regenerating from a live workflow edit, and the
 project prompt bundle (whole project context, base-URL resolution,
 no token in the bundle).
 
-520 tests in total: state machine 21, tickets 49, projects 16, onboarding 12, agent-readable operating rules 10, public base URL 5, auth 22,
-admin 7, API keys 8, monitor 18, workflows 31, quick-create builder 11, documents 36, document tickets 16, document render 18, gantt helpers 27, admin nav 5, view hash 8, migrations 37, role lists 4, title bar 9, dashboard redesign 17, ticket detail redesign 16, projects redesign 15, admin API keys redesign 12, workflows redesign 15, workflow editor mobile redesign 17, documents redesign 23, tickets list redesign 8, workflow duplicate 12, repo guard 3, nginx allowlist 4, admin users 3, theme tints 5.
+543 tests in total: state machine 21, tickets 54, tasks 12, projects 16, onboarding 12, agent-readable operating rules 10, public base URL 5, auth 22,
+admin 7, API keys 8, monitor 18, workflows 31, quick-create builder 11, documents 36, document tickets 16, document render 18, gantt helpers 27, admin nav 5, view hash 8, migrations 38, role lists 4, title bar 9, dashboard redesign 17, ticket detail redesign 20, projects redesign 15, admin API keys redesign 12, workflows redesign 15, workflow editor mobile redesign 17, documents redesign 23, tickets list redesign 9, workflow duplicate 12, repo guard 3, nginx allowlist 4, admin users 3, theme tints 5.
 
 ## Accounts & authentication
 
@@ -799,7 +802,11 @@ log records the role actually exercised.
 | `GET` | `/api/tickets?status=<state>&project_id=<id\|none>` | List tickets, optionally filtered by state and project; an assigned caller only sees their project's tickets |
 | `GET` | `/api/tickets/:id` | One ticket with its full transition history; reading another project's ticket is rejected 403 `out_of_scope` for an assigned caller |
 | `GET` | `/api/tickets/:id/transitions` | Transition history of one ticket; same scope check as the detail |
-| `POST` | `/api/tickets/:id/transitions` | Transition a ticket (`to_status`, `reason`, `handoff`, `artifacts`); a transition on another project's ticket is rejected 403 `out_of_scope` for an assigned caller |
+| `POST` | `/api/tickets/:id/transitions` | Transition a ticket (`to_status`, `reason`, `handoff`, `artifacts`); a transition on another project's ticket is rejected 403 `out_of_scope` for an assigned caller; a move into a terminal state is rejected 409 `tasks_incomplete` while any Task of the ticket is still open (the message names the open Tasks; moving to `cancelled` stays allowed) |
+| `GET` | `/api/tickets/:id/tasks` | List the Tasks of a ticket, in list order; anyone who can read the ticket may read them |
+| `POST` | `/api/tickets/:id/tasks` | Create a Task on a ticket (leader only; `title`, non-empty; status starts Pending, `sort_order` is server-assigned) |
+| `PATCH` | `/api/tasks/:taskId` | Update a Task (`title` and/or `status`); title is leader-only, status is leader or engineer; invalid status or empty title answers 400 |
+| `DELETE` | `/api/tasks/:taskId` | Delete a Task (leader only) |
 | `PATCH` | `/api/tickets/:id/project` | Assign a ticket to a project, or back to uncategorized (`project_id` null; PM only) |
 | `GET` | `/api/queue?project_id=<id\|none>` | Tickets the caller can claim in the trial stages, with the next transition; optionally filtered by project; an assigned caller only sees their project's queue |
 | `GET` | `/api/monitor/stalled` | Stalled tickets in the caller's project scope, with reminder state and flags (PM only) |

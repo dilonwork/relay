@@ -24,6 +24,7 @@ class FakeDb {
     this.transitions = [];
     this.workflows = [];
     this.documents = [];
+    this.tasks = [];
     this.categories = [
       { id: 'cat-proto', name: 'Prototype', created_by: 'system', created_at: '2026-11-12T00:00:00.000Z' },
       { id: 'cat-undef', name: 'Undefined', created_by: 'system', created_at: '2026-11-12T00:00:01.000Z' },
@@ -75,6 +76,24 @@ class FakeDb {
       updated_at: new Date().toISOString(),
     };
     this.tickets.push(row);
+    return row;
+  }
+
+  // Seed a Task for the closure-guard and count tests (ticket
+  // 0ae37c3b): only id, ticket, title, status and order matter to the
+  // guard query and the counts aggregate.
+  seedTask({ id, ticket_id, title = 'Seed task', status = 'Pending', sort_order = 0 }) {
+    const row = {
+      id: id || `task-${++this.seq}`,
+      ticket_id,
+      title,
+      status,
+      sort_order,
+      created_by: 'leader-1',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    this.tasks.push(row);
     return row;
   }
 
@@ -142,6 +161,29 @@ class FakeDb {
       d.implementation_ticket_id = params[0];
       d.updated_at = new Date().toISOString();
       return { rows: [{ ...d }] };
+    }
+    if (sql.startsWith('SELECT ticket_id, COUNT(*)')) {
+      // Task counts aggregate (ticket 0ae37c3b): one query for every
+      // ticket, grouped by ticket — the list never fires one query
+      // per ticket.
+      const byTicket = new Map();
+      for (const t of this.tasks) {
+        const c = byTicket.get(t.ticket_id) || { ticket_id: t.ticket_id, task_total: 0, task_completed: 0 };
+        c.task_total += 1;
+        if (t.status === 'Completed') c.task_completed += 1;
+        byTicket.set(t.ticket_id, c);
+      }
+      return { rows: [...byTicket.values()] };
+    }
+    if (sql.startsWith('SELECT id, title FROM tasks')) {
+      // Closure guard (ticket 0ae37c3b): the open Tasks of one
+      // ticket, in list order.
+      const rows = this.tasks
+        .filter((t) => t.ticket_id === params[0] && t.status !== params[1])
+        .sort((a, b) => a.sort_order - b.sort_order
+          || (a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : 0)
+          || (a.id < b.id ? -1 : 1));
+      return { rows: rows.map((t) => ({ id: t.id, title: t.title })) };
     }
     if (/^SELECT \* FROM tickets WHERE id = \$1/.test(sql)) {
       const t = this.tickets.find((x) => x.id === params[0]);
@@ -234,7 +276,7 @@ class FakeDb {
   }
 
   async withTransaction(fn) {
-    const snap = JSON.stringify({ tickets: this.tickets, transitions: this.transitions, documents: this.documents });
+    const snap = JSON.stringify({ tickets: this.tickets, transitions: this.transitions, documents: this.documents, tasks: this.tasks });
     try {
       return await fn(this);
     } catch (err) {
@@ -242,6 +284,7 @@ class FakeDb {
       this.tickets = restored.tickets;
       this.transitions = restored.transitions;
       this.documents = restored.documents;
+      this.tasks = restored.tasks;
       throw err;
     }
   }
@@ -1665,6 +1708,111 @@ async function main() {
         assert.deepEqual(step(attached, q.id), q.next_transition, `claimable row ${q.id} for ${roles}`);
       }
     }
+  });
+
+  await ok('closure guard (ticket 0ae37c3b): move to delivered with open Tasks is 409 tasks_incomplete, names them, and is audited', async () => {
+    const db = new FakeDb();
+    const ticket = db.seedTicket({ status: 'deploying' });
+    db.seedTask({ ticket_id: ticket.id, title: 'Draft spec', sort_order: 0 });
+    db.seedTask({ ticket_id: ticket.id, title: 'Wireframes', sort_order: 1 });
+    const res = await tickets.transitionTicket(db, ticket.id, {
+      actorId: 'ops-1', actorRoles: ['deployer'], toStatus: 'delivered',
+      reason: 'v1.2.0 verified in prod', handoff: '',
+    });
+    assert.equal(res.ok, false);
+    assert.equal(res.status, 409);
+    assert.equal(res.error, 'tasks_incomplete');
+    assert.ok(res.message.includes('2 task(s) still open'), res.message);
+    assert.ok(res.message.includes('Draft spec'), res.message);
+    assert.ok(res.message.includes('Wireframes'), res.message);
+    // The ticket does not move, and the blocked attempt is audited as
+    // a rejected transition.
+    const stored = db.tickets.find((t) => t.id === ticket.id);
+    assert.equal(stored.status, 'deploying');
+    const rejected = db.transitions.filter((tr) => tr.result === 'rejected' && tr.to_status === 'delivered');
+    assert.equal(rejected.length, 1);
+    assert.equal(rejected[0].reason, res.message);
+  });
+
+  await ok('closure guard (ticket 0ae37c3b): the message names up to 5 open Tasks, then "and N more"', async () => {
+    const db = new FakeDb();
+    const ticket = db.seedTicket({ status: 'deploying' });
+    for (let i = 1; i <= 7; i++) {
+      db.seedTask({ ticket_id: ticket.id, title: `Task ${i}`, sort_order: i - 1 });
+    }
+    const res = await tickets.transitionTicket(db, ticket.id, {
+      actorId: 'ops-1', actorRoles: ['deployer'], toStatus: 'delivered',
+      reason: 'v1.2.0 verified in prod', handoff: '',
+    });
+    assert.equal(res.ok, false);
+    assert.equal(res.status, 409);
+    assert.ok(res.message.includes('7 task(s) still open'), res.message);
+    for (let i = 1; i <= 5; i++) assert.ok(res.message.includes(`Task ${i}`), res.message);
+    assert.ok(res.message.includes('and 2 more'), res.message);
+    assert.ok(!res.message.includes('Task 6'), res.message);
+    assert.ok(!res.message.includes('Task 7'), res.message);
+  });
+
+  await ok('closure guard (ticket 0ae37c3b): delivered is allowed once all Tasks are Completed', async () => {
+    const db = new FakeDb();
+    const ticket = db.seedTicket({ status: 'deploying' });
+    db.seedTask({ ticket_id: ticket.id, title: 'Draft spec', status: 'Completed' });
+    db.seedTask({ ticket_id: ticket.id, title: 'Wireframes', status: 'Completed' });
+    const res = await tickets.transitionTicket(db, ticket.id, {
+      actorId: 'ops-1', actorRoles: ['deployer'], toStatus: 'delivered',
+      reason: 'v1.2.0 verified in prod', handoff: '',
+    });
+    assert.equal(res.ok, true);
+    assert.equal(res.ticket.status, 'delivered');
+  });
+
+  await ok('closure guard (ticket 0ae37c3b): non-terminal moves and cancel are not blocked by open Tasks', async () => {
+    const db = new FakeDb();
+    // Non-terminal: pending_review -> in_review (reviewer pickup)
+    // with an open Task stays allowed.
+    const moving = db.seedTicket({ status: 'pending_review' });
+    db.seedTask({ ticket_id: moving.id, title: 'Draft spec' });
+    const moved = await tickets.transitionTicket(db, moving.id, {
+      actorId: 'rev-2', actorRoles: ['reviewer'], toStatus: 'in_review',
+      reason: '', handoff: '',
+    });
+    assert.equal(moved.ok, true);
+    assert.equal(moved.ticket.status, 'in_review');
+    // Cancel: abandoning the ticket stays possible with open Tasks.
+    const cancelling = db.seedTicket({ status: 'requirement' });
+    db.seedTask({ ticket_id: cancelling.id, title: 'Draft spec' });
+    const cancelled = await tickets.transitionTicket(db, cancelling.id, {
+      actorId: 'pm-1', actorRoles: ['pm'], toStatus: 'cancelled',
+      reason: 'No longer needed', handoff: '',
+    });
+    assert.equal(cancelled.ok, true);
+    assert.equal(cancelled.ticket.status, 'cancelled');
+  });
+
+  await ok('task counts (ticket 0ae37c3b): list and detail carry task_completed / task_total; 0/0 with no Tasks; completing a Task moves the count', async () => {
+    const db = new FakeDb();
+    const withTasks = db.seedTicket({ status: 'in_dev' });
+    const withoutTasks = db.seedTicket({ status: 'requirement' });
+    const done = db.seedTask({ ticket_id: withTasks.id, title: 'Draft spec', status: 'Completed' });
+    const open = db.seedTask({ ticket_id: withTasks.id, title: 'Wireframes', status: 'Pending' });
+    const rows = await tickets.listTickets(db, null);
+    const rowWith = rows.find((t) => t.id === withTasks.id);
+    const rowWithout = rows.find((t) => t.id === withoutTasks.id);
+    assert.equal(rowWith.task_completed, 1);
+    assert.equal(rowWith.task_total, 2);
+    assert.equal(rowWithout.task_completed, 0);
+    assert.equal(rowWithout.task_total, 0);
+    const detail = await tickets.getTicketDetail(db, withTasks.id, { actorId: 'pm-1', actorRoles: ['pm'] });
+    assert.equal(detail.ok, true);
+    assert.equal(detail.ticket.task_completed, 1);
+    assert.equal(detail.ticket.task_total, 2);
+    // Completing the open Task moves the count (the update itself is
+    // covered by server/tasks.test.js; the count query reads it).
+    open.status = 'Completed';
+    const detailAfter = await tickets.getTicketDetail(db, withTasks.id, { actorId: 'pm-1', actorRoles: ['pm'] });
+    assert.equal(detailAfter.ticket.task_completed, 2);
+    assert.equal(detailAfter.ticket.task_total, 2);
+    assert.equal(done.status, 'Completed');
   });
 
   console.log(`\n${passed} ticket service tests passed.`);

@@ -1,5 +1,6 @@
-import { Fragment, useState } from 'react';
-import type { LegalTransition, Project, PublicUser, TicketWithHistory, Transition, User, Workflow } from './api';
+import { Fragment, useEffect, useState } from 'react';
+import { api } from './api';
+import type { LegalTransition, Project, PublicUser, Task, TicketWithHistory, Transition, User, Workflow } from './api';
 import {
   buildJourneyLine,
   formatTime,
@@ -85,6 +86,99 @@ export default function TicketDetail(props: TicketDetailProps) {
   // Client-side empty-required message; the server stays the authority
   // and reports the same message if this is ever bypassed.
   const [formError, setFormError] = useState<string | null>(null);
+
+  // Tasks (ticket 0ae37c3b, design doc ch. 38): the ticket's
+  // sub-dimension, fetched here so the section owns its own list and
+  // refreshes without a page reload. Leaders see the create / edit /
+  // delete controls; leaders and engineers see the status control;
+  // everyone else reads the titles, statuses and progress.
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [tasksError, setTasksError] = useState<string | null>(null);
+  const [newTaskTitle, setNewTaskTitle] = useState('');
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingTitle, setEditingTitle] = useState('');
+  const [taskBusy, setTaskBusy] = useState(false);
+  const isLeader = user.roles.includes('leader');
+  const canChangeTaskStatus = isLeader || user.roles.includes('engineer');
+
+  useEffect(() => {
+    if (!detail) return;
+    let cancelled = false;
+    setTasksError(null);
+    api
+      .listTasks(detail.id)
+      .then((list) => {
+        if (!cancelled) setTasks(list);
+      })
+      .catch((err) => {
+        if (!cancelled) setTasksError(err instanceof Error ? err.message : 'Could not load tasks.');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [detail]);
+
+  const completedTasks = tasks.filter((t) => t.status === 'Completed').length;
+  const tasksProgress = tasks.length === 0 ? 0 : Math.round((completedTasks / tasks.length) * 100);
+
+  async function handleAddTask(e: React.FormEvent) {
+    e.preventDefault();
+    if (!detail || !newTaskTitle.trim() || taskBusy) return;
+    setTaskBusy(true);
+    setTasksError(null);
+    try {
+      const created = await api.createTask(detail.id, newTaskTitle.trim());
+      setTasks((prev) => [...prev, created]);
+      setNewTaskTitle('');
+    } catch (err) {
+      setTasksError(err instanceof Error ? err.message : 'Could not add the task.');
+    } finally {
+      setTaskBusy(false);
+    }
+  }
+
+  async function handleTaskStatus(task: Task, status: string) {
+    if (task.status === status || taskBusy) return;
+    setTaskBusy(true);
+    setTasksError(null);
+    try {
+      const updated = await api.updateTask(task.id, { status });
+      setTasks((prev) => prev.map((t) => (t.id === task.id ? updated : t)));
+    } catch (err) {
+      setTasksError(err instanceof Error ? err.message : 'Could not update the task.');
+    } finally {
+      setTaskBusy(false);
+    }
+  }
+
+  async function handleSaveTaskTitle(task: Task) {
+    if (!editingTitle.trim() || taskBusy) return;
+    setTaskBusy(true);
+    setTasksError(null);
+    try {
+      const updated = await api.updateTask(task.id, { title: editingTitle.trim() });
+      setTasks((prev) => prev.map((t) => (t.id === task.id ? updated : t)));
+      setEditingId(null);
+    } catch (err) {
+      setTasksError(err instanceof Error ? err.message : 'Could not update the task.');
+    } finally {
+      setTaskBusy(false);
+    }
+  }
+
+  async function handleDeleteTask(task: Task) {
+    if (!window.confirm(`Delete task "${task.title}"?`)) return;
+    setTaskBusy(true);
+    setTasksError(null);
+    try {
+      await api.deleteTask(task.id);
+      setTasks((prev) => prev.filter((t) => t.id !== task.id));
+    } catch (err) {
+      setTasksError(err instanceof Error ? err.message : 'Could not delete the task.');
+    } finally {
+      setTaskBusy(false);
+    }
+  }
 
   if (!detail) {
     return (
@@ -306,6 +400,114 @@ export default function TicketDetail(props: TicketDetailProps) {
               <dt>Ticket</dt>
               <dd title={detail.id}>{shortId(detail.id)}</dd>
             </dl>
+          </div>
+
+          <div className="card">
+            <h3 className="section">Tasks</h3>
+            <p className="muted">
+              {completedTasks}/{tasks.length} tasks completed
+            </p>
+            <div
+              className="tasks-progress"
+              role="progressbar"
+              aria-valuenow={completedTasks}
+              aria-valuemin={0}
+              aria-valuemax={tasks.length}
+              aria-label={`${completedTasks} of ${tasks.length} tasks completed`}
+            >
+              <div className="tasks-progress-fill" style={{ width: `${tasksProgress}%` }} />
+            </div>
+            {tasksError && <p className="banner error">{tasksError}</p>}
+            {tasks.length === 0 ? (
+              <p className="muted">No tasks yet.</p>
+            ) : (
+              <ul className="task-list">
+                {tasks.map((task) => (
+                  <li key={task.id} className="task-row">
+                    {editingId === task.id ? (
+                      <>
+                        <input
+                          value={editingTitle}
+                          onChange={(e) => setEditingTitle(e.target.value)}
+                          aria-label="Task title"
+                        />
+                        <button
+                          type="button"
+                          className="link"
+                          onClick={() => handleSaveTaskTitle(task)}
+                          disabled={taskBusy || !editingTitle.trim()}
+                        >
+                          Save
+                        </button>
+                        <button
+                          type="button"
+                          className="link"
+                          onClick={() => setEditingId(null)}
+                        >
+                          Cancel
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <span className="task-title">{task.title}</span>
+                        {canChangeTaskStatus ? (
+                          <select
+                            value={task.status}
+                            onChange={(e) => handleTaskStatus(task, e.target.value)}
+                            aria-label={`Status of task ${task.title}`}
+                            disabled={taskBusy}
+                          >
+                            <option value="Pending">Pending</option>
+                            <option value="In Progress">In Progress</option>
+                            <option value="Completed">Completed</option>
+                          </select>
+                        ) : (
+                          <span className="muted">{task.status}</span>
+                        )}
+                        {isLeader && (
+                          <>
+                            <button
+                              type="button"
+                              className="link"
+                              onClick={() => {
+                                setEditingId(task.id);
+                                setEditingTitle(task.title);
+                              }}
+                            >
+                              Edit
+                            </button>
+                            <button
+                              type="button"
+                              className="link"
+                              onClick={() => handleDeleteTask(task)}
+                            >
+                              Delete
+                            </button>
+                          </>
+                        )}
+                      </>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+            {isLeader && (
+              <form className="task-add" onSubmit={handleAddTask}>
+                <input
+                  value={newTaskTitle}
+                  onChange={(e) => setNewTaskTitle(e.target.value)}
+                  placeholder="New task title"
+                  aria-label="New task title"
+                />
+                <button
+                  className="primary"
+                  type="submit"
+                  disabled={taskBusy || !newTaskTitle.trim()}
+                >
+                  Add task
+                </button>
+              </form>
+            )}
           </div>
 
           {isPm && (

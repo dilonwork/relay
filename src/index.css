@@ -1042,6 +1042,19 @@ button.link {
 .hist-row:hover { background: #f6f9fb; }
 .hist-detail td { background: #fbfcfd; font-size: 12px; color: #33475a; }
 
+/* Tasks section on the ticket detail (ticket 0ae37c3b): progress bar
+   plus one row per Task. Theme variables only, so the bar and rows
+   read in both themes. */
+.tasks-progress { height: 8px; border-radius: 4px; background: var(--surface-alt); overflow: hidden; margin: 8px 0 12px; }
+.tasks-progress-fill { height: 100%; background: var(--accent); border-radius: 4px; }
+.task-list { list-style: none; margin: 0 0 12px; padding: 0; }
+.task-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px 0; border-top: 1px solid var(--border); }
+.task-row:first-child { border-top: none; padding-top: 0; }
+.task-title { flex: 1 1 100%; word-break: break-word; }
+.task-row select { max-width: 140px; }
+.task-add { display: flex; flex-wrap: wrap; gap: 8px; }
+.task-add input { flex: 1 1 140px; min-width: 0; }
+
 /* Ticket detail at ≤720px: the rail stacks below the main column. */
 @media (max-width: 720px) {
   .detail-columns { grid-template-columns: 1fr; }
