@@ -233,7 +233,7 @@ async function main() {
   await ok('CSS carries the layout, callout, buttons, history rows, mobile stack', async () => {
     const css = readSrc('index.css');
     assert.match(css, /\.detail-columns \{[^}]*grid-template-columns: 1fr 250px/, 'desktop must be two columns with a 250px rail');
-    assert.match(css, /\.callout \{[^}]*border-left: 4px solid #2563eb/, 'the callout must have a blue left edge');
+    assert.match(css, /\.callout \{[^}]*border-left: 4px solid var\(--tint-blue-edge\)/, 'the callout must have a blue left edge');
     assert.match(css, /\.target-btns button\.on \{[^}]*background: var\(--sidebar-bg\)/, 'the selected target button must be marked');
     assert.match(css, /\.hist-row \{[^}]*cursor: pointer/, 'history rows must look clickable');
     assert.match(css, /\.hist-detail td \{[^}]*background: var\(--surface\)/, 'expanded history rows must be visually distinct');
