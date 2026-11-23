@@ -578,16 +578,19 @@ tbody tr.selected { background: #eef6f6; }
   white-space: nowrap;
 }
 
-.badge.applied { background: #e2f2e9; color: #1d6b3c; }
-.badge.rejected { background: #fbe9e7; color: #a03325; }
-.badge.delivered { background: #e2f2e9; color: #1d6b3c; }
+.badge.applied { background: var(--tint-green-bg); color: var(--tint-green-text); }
+.badge.rejected { background: var(--tint-red-bg); color: var(--tint-red-text); }
+.badge.delivered { background: var(--tint-green-bg); color: var(--tint-green-text); }
+/* .badge.cancelled text stays #5a6b7c: mapping it to --text-muted would drop
+   contrast to 2.56:1 on white (see the 68d017d9 review return); no tint
+   variable fits a muted grey text. */
 .badge.cancelled { background: var(--bg); color: #5a6b7c; }
 /* Implementation badge (ticket b14207c5): amber, like the stalled
    signal — the work is under way, not done. A button wearing a
    badge keeps the badge look; the pointer cursor says it opens the
    implementation ticket. */
 button.badge { border: none; cursor: pointer; font: inherit; }
-.badge.in-progress { background: #fef3c7; color: #92400e; }
+.badge.in-progress { background: var(--tint-amber-bg); color: var(--tint-amber-text); }
 
 label.field { display: block; font-weight: 600; margin: 10px 0 4px 0; color: var(--text); }
 
@@ -1010,7 +1013,7 @@ button.link {
    the WCAG non-text 3:1 floor. Awaits a darker warning value
    (variable-definition fix, separate ticket). */
 .gantt-bar.stalled { border: 2px solid #d97706; }
-.badge.stalled { background: #fef3c7; color: #92400e; margin-left: 4px; }
+.badge.stalled { background: var(--tint-amber-bg); color: var(--tint-amber-text); margin-left: 4px; }
 
 /* Today line (ticket 78462e97): a dashed amber rule across the whole
    chart, positioned by the component against the visible window. It
