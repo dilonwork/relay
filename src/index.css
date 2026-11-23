@@ -1082,7 +1082,7 @@ button.link {
 .document-markdown pre { background: #f2f5f7; border: 1px solid #e2e8ee; border-radius: 6px; padding: 10px; overflow-x: auto; }
 .document-markdown code { font-size: 13px; }
 .document-markdown table { display: block; max-width: 100%; overflow-x: auto; }
-.document-markdown blockquote { border-left: 3px solid #cfdbe4; margin: 0 0 10px 0; padding: 4px 12px; color: #5a6b7c; }
+.document-markdown blockquote { border-left: 3px solid #cfdbe4; margin: 0 0 10px 0; padding: 4px 12px; color: var(--text-muted-strong); }
 
 /* Admin - Workflows redesign (ticket b56b1145, UI&UX prototype
    "Admin - Workflows redesign — recommendations"): the list shows each
