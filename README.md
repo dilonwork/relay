@@ -17,11 +17,11 @@ audit rules and the data model.
 
 ## Screenshots
 
-The screenshots below are placeholders for now — they must be real
-screenshots of the running app, not mockups. Capture them from the deployed
-app after this branch is released (the live site still runs an older build,
-so screenshots taken now would not match the current UI). See
-[screenshots/README.md](screenshots/README.md) for the capture list.
+The screenshots below are light-theme captures from 2026-11-15, before the
+Dark Theme launch (see [Theme](#theme)) — the pages have since changed
+and the live build now matches main. Recapturing them in both themes is
+deferred; see [screenshots/README.md](screenshots/README.md) for the
+capture list.
 
 ![Dashboard — project overview](screenshots/dashboard.png)
 
@@ -208,10 +208,13 @@ account or password anywhere in the code.
   `DB_HOST`, `DB_ACCOUNT`, `DB_PASSWORD` and `DB_NAME` from `.env`
   (`.env` is git-ignored and never committed).
 - **Timezone:** the server defaults to `America/Phoenix` (`TZ` in `.env`).
+- **Public access:** the public Vite dev server sits behind an nginx path
+  allowlist — only public files are served, everything else is denied
+  (ticket d2282133; see the design doc, ch. 35).
 
 ## Layout
 
-- **Left sidebar:** a dark sidebar holds the module navigation —
+- **Left sidebar:** a sidebar holds the module navigation —
   Dashboard, Tickets, New ticket, Documents, Projects (PM or Admin only)
   and Admin (admin only) — plus a project filter, the
   signed-in user's name, username and role badges, and Log out. Tickets is an expandable group
@@ -253,6 +256,24 @@ account or password anywhere in the code.
   through views. The hash is not a permission — a non-admin opening an
   Admin hash is gated back to Dashboard. The queue tab and the project
   filter are not in the hash: refresh resets them to their defaults.
+
+## Theme
+
+The UI has two themes, light and dark. A toggle button in the title
+bar (beside the hamburger) switches the whole UI between them; the
+choice persists across reloads in localStorage (`relay_theme`) and
+follows the system `prefers-color-scheme` on first visit. All pages
+render through theme CSS variables in `src/index.css` (`:root` for
+light, `[data-theme='dark']` for dark), including state tint variables
+for status colours (amber, green, red, blue) so text stays readable on
+tinted backgrounds in both themes. The sidebar stays dark in both
+themes (light `#0f2a3d`, dark `#0b1a26`). Theme work: toggle button
+(ticket 265f984a), tint variables (ticket 5ac8689c), and the colour
+conversion of Admin, Dashboard, Tickets list, Ticket detail, Gantt,
+Projects, Documents and the title bar (tickets bcfc2250, afa29133,
+b73fac07, 7a9f8898, cd4d406c, 68d017d9, 9719ee35, 8b25e589, e01284ca,
+4fb116a5, 1e248c03, 0648c61d, 5d67f208, 2a55707b, a1efa937, bc7cd7aa).
+See the design doc, ch. 37.
 
 ## Tests
 
@@ -775,7 +796,8 @@ each sub-page owns its own form state and handlers.
   most waiting / in progress / done first or A–Z (default: most
   waiting first); an empty search shows a clear-search empty state.
 - **Quick action:** a "+ New ticket" button sits in the title bar's
-  action slot, beside Refresh. The title bar itself is unchanged.
+  action slot, beside Refresh; the title bar also holds the theme toggle
+  (see [Theme](#theme)).
 - The Dashboard is a sidebar item alongside Tickets, New ticket,
   Projects and Admin.
 
