@@ -1062,9 +1062,12 @@ button.link {
    map, grouped validation, and an inline replace warning. */
 .flow-strip { display: inline-flex; flex-wrap: wrap; gap: 2px 0; align-items: center; }
 .flow-chip { display: inline-block; padding: 1px 8px; border: 1px solid var(--border-strong); border-radius: 999px; font-size: 12px; white-space: nowrap; }
-.flow-chip.terminal { background: #e2f2e9; border-color: #9fd0ae; color: #1d6b3c; }
-.flow-arrow { color: var(--text-muted); }
-.flow-more { color: var(--text-muted); font-size: 12px; margin-left: 4px; }
+.flow-chip.terminal { background: var(--tint-green-bg); border-color: var(--tint-green-mid); color: var(--tint-green-text); }
+/* .flow-arrow and .flow-more stay #5a6b7c: mapping them to --text-muted
+   would drop contrast to 2.56:1 on white (see the 68d017d9 review return);
+   the variable-block fix is a separate ticket. */
+.flow-arrow { color: #5a6b7c; }
+.flow-more { color: #5a6b7c; font-size: 12px; margin-left: 4px; }
 .chip { display: inline-block; padding: 1px 8px; border: 1px solid var(--border-strong); border-radius: 999px; font-size: 12px; color: var(--text); background: var(--bg); white-space: nowrap; }
 button.link.danger { color: #b91c1c; }
 button.link.amber { color: #b45309; }
