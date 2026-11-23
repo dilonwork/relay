@@ -1102,10 +1102,10 @@ button.amber-outline:disabled { opacity: 0.5; cursor: default; }
 .section-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-left: 4px; vertical-align: middle; }
 .section-dot.bad { background: var(--error); }
 .section-dot.ok { background: var(--success); }
-.validation-summary { background: #fef2f2; border: 1px solid #fecaca; color: #7f1d1d; border-radius: 6px; padding: 10px 14px; margin-bottom: 16px; }
+.validation-summary { background: var(--tint-red-bg-soft); border: 1px solid var(--tint-red-border); color: var(--tint-red-text-strong); border-radius: 6px; padding: 10px 14px; margin-bottom: 16px; }
 .validation-summary ul { margin: 4px 0 8px 20px; }
 .section-error { color: var(--error); font-size: 13px; margin: 4px 0 12px; }
-.replace-notice { background: #fef3c7; border: 1px solid #fcd34d; color: #92400e; border-radius: 6px; padding: 10px 14px; margin-bottom: 12px; }
+.replace-notice { background: var(--tint-amber-bg); border: 1px solid var(--tint-amber-border); color: var(--tint-amber-text); border-radius: 6px; padding: 10px 14px; margin-bottom: 12px; }
 .workflow-preview { margin-bottom: 12px; }
 
 /* Workflow editor on mobile (ticket 1ddcd4ed, UI&UX prototype
