@@ -4,6 +4,11 @@
   --surface-alt: #f8fafb;
   --text: #1a2332;
   --text-muted: #94a3b8;
+  /* --text-muted-strong (ticket b73fac07): muted text readable in both
+     themes — light #5a6b7c on white, dark #94a3b8 on dark surfaces.
+     --text-muted alone is 2.56:1 in light theme, so it cannot be used
+     for light-theme muted text. */
+  --text-muted-strong: #5a6b7c;
   --border: #e2e8ee;
   --border-strong: #cfdbe4;
   --accent: #0e7c7b;
@@ -61,6 +66,7 @@
   --surface-alt: #243447;
   --text: #e2e8f0;
   --text-muted: #94a3b8;
+  --text-muted-strong: #94a3b8;
   --border: #334155;
   --border-strong: #475569;
   --accent: #2dd4bf;
@@ -543,7 +549,7 @@ h3.section { margin: 14px 0 6px; font-size: 13px; color: #0f2a3d; }
 .ticket-card-assignee { margin-top: 4px; font-size: 13px; color: #5a6b7c; }
 
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
-th { text-align: left; color: #5a6b7c; border-bottom: 2px solid #d9e1e8; padding: 6px 8px; }
+th { text-align: left; color: var(--text-muted-strong); border-bottom: 2px solid #d9e1e8; padding: 6px 8px; }
 td { border-bottom: 1px solid #e2e8ee; padding: 7px 8px; vertical-align: top; }
 tbody tr { cursor: pointer; }
 tbody tr:hover { background: #eef6f6; }
@@ -632,11 +638,12 @@ button.link {
 .banner.error { background: #fbe9e7; border: 1px solid #e0a49c; color: #7a2318; }
 .banner.notice { background: #e2f2e9; border: 1px solid #9fd0ae; color: #1d6b3c; }
 
-/* Kept at the original #5a6b7c (ticket 9719ee35, review return):
-   var(--text-muted) drops light contrast to 2.38:1, below the WCAG
-   text 4.5:1 floor. Awaits a muted-text variable dark enough in
-   light theme (variable-definition fix, separate ticket). */
-.muted { color: #5a6b7c; font-size: 13px; }
+/* Kept at the original #5a6b7c in light theme (ticket 9719ee35, review
+   return): var(--text-muted) drops light contrast to 2.38:1, below the
+   WCAG text 4.5:1 floor. It now uses --text-muted-strong (ticket
+   b73fac07), which is #5a6b7c in light theme and #94a3b8 in dark theme,
+   so it stays readable in both. */
+.muted { color: var(--text-muted-strong); font-size: 13px; }
 
 /* Dashboard: attention-first overview (ticket 4c7601fb, UI&UX prototype
    "Dashboard redesign — recommendations"). The summary strip answers

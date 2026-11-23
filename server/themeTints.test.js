@@ -106,6 +106,34 @@ function checkContrast(vars, theme) {
   }
 }
 
+// Ticket b73fac07: --text-muted-strong is the muted text that works in
+// both themes — light #5a6b7c on white, dark #94a3b8 on dark surfaces.
+// --text-muted alone (#94a3b8 in both themes) is 2.56:1 in light theme,
+// which is why the review returns kept #5a6b7c hard-coded instead.
+const MUTED_STRONG_VALUES = { light: '#5a6b7c', dark: '#94a3b8' };
+
+function checkMutedStrong(lightVars, darkVars) {
+  assert.strictEqual(
+    lightVars['text-muted-strong'],
+    MUTED_STRONG_VALUES.light,
+    `--text-muted-strong in :root is ${lightVars['text-muted-strong']}, ticket b73fac07 lists ${MUTED_STRONG_VALUES.light}`,
+  );
+  assert.strictEqual(
+    darkVars['text-muted-strong'],
+    MUTED_STRONG_VALUES.dark,
+    `--text-muted-strong in [data-theme='dark'] is ${darkVars['text-muted-strong']}, ticket b73fac07 lists ${MUTED_STRONG_VALUES.dark}`,
+  );
+  for (const [theme, vars] of [['light', lightVars], ['dark', darkVars]]) {
+    for (const bgVar of ['bg', 'card-bg']) {
+      const ratio = contrast(vars['text-muted-strong'], vars[bgVar]);
+      assert.ok(
+        ratio >= 4.5,
+        `${theme}: --text-muted-strong (${vars['text-muted-strong']}) on --${bgVar} (${vars[bgVar]}) is ${ratio.toFixed(2)}:1, below 4.5:1`,
+      );
+    }
+  }
+}
+
 (async () => {
   const css = fs.readFileSync(CSS_PATH, 'utf8');
   const light = parseVars(readBlock(css, ':root'));
@@ -130,6 +158,10 @@ function checkContrast(vars, theme) {
 
   await ok('dark-theme tint text contrast is at least 4.5:1', () => {
     checkContrast(dark, 'dark');
+  });
+
+  await ok('muted-strong text is readable in both themes (ticket b73fac07)', () => {
+    checkMutedStrong(light, dark);
   });
 
   console.log(`\n${passed} theme tint tests passed.`);
