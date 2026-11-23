@@ -627,10 +627,14 @@ button.primary {
 
 button.primary:disabled { opacity: 0.5; cursor: default; }
 
+/* Admin link buttons (ticket 5d67f208): --accent is #0e7c7b in light
+   (same as the old hard-coded value) and #2dd4bf in dark, so the
+   buttons stay readable in both themes (light 5.01:1, dark 7.86:1
+   on card surfaces). The old hard-coded #0e7c7b was 2.92:1 in dark. */
 button.link {
   background: none;
   border: none;
-  color: #0e7c7b;
+  color: var(--accent);
   cursor: pointer;
   padding: 0;
   font-size: 13px;
@@ -1101,8 +1105,13 @@ button.link {
 .flow-arrow { color: #5a6b7c; }
 .flow-more { color: #5a6b7c; font-size: 12px; margin-left: 4px; }
 .chip { display: inline-block; padding: 1px 8px; border: 1px solid var(--border-strong); border-radius: 999px; font-size: 12px; color: var(--text); background: var(--bg); white-space: nowrap; }
-button.link.danger { color: #b91c1c; }
-button.link.amber { color: #b45309; }
+/* Admin link buttons, danger and amber variants (ticket 5d67f208):
+   --tint-red-text / --tint-amber-text pass in both themes
+   (danger light 7.01:1, dark 7.71:1; amber light 7.09:1, dark 10.15:1
+   on card surfaces). Do NOT use var(--error) for .danger: the afa29133
+   review return showed it drops light-theme text to 4.13:1. */
+button.link.danger { color: var(--tint-red-text); }
+button.link.amber { color: var(--tint-amber-text); }
 button.primary.small { min-height: 0; padding: 4px 10px; font-size: 13px; }
 
 /* Documents redesign (ticket b2d67623): amber-outlined button for
