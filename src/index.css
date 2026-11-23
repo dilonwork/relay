@@ -479,7 +479,7 @@ body {
 /* Section headings inside a page sit one level below the title bar
    (ticket 337e6a55): the demoted panel H2s render as H3s with this
    style. No H2 remains in the app shell. */
-h3.section { margin: 14px 0 6px; font-size: 13px; color: #0f2a3d; }
+h3.section { margin: 14px 0 6px; font-size: 13px; color: var(--text); }
 
 .tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
 
@@ -589,7 +589,7 @@ tbody tr.selected { background: #eef6f6; }
 button.badge { border: none; cursor: pointer; font: inherit; }
 .badge.in-progress { background: #fef3c7; color: #92400e; }
 
-label.field { display: block; font-weight: 600; margin: 10px 0 4px 0; color: #0f2a3d; }
+label.field { display: block; font-weight: 600; margin: 10px 0 4px 0; color: var(--text); }
 
 input[type="text"], select, textarea {
   width: 100%;
@@ -1070,9 +1070,9 @@ button.link {
    marked output is plain HTML, so it needs the same calm sizing as
    the rest of the app — the browser default h1 is far too big next
    to the panel's 17px h2. Tables scroll like the app's other tables. */
-.document-markdown h1 { font-size: 20px; margin: 0 0 10px 0; color: #0f2a3d; }
-.document-markdown h2 { font-size: 17px; margin: 16px 0 8px 0; color: #0f2a3d; }
-.document-markdown h3 { font-size: 15px; margin: 14px 0 6px 0; color: #0f2a3d; }
+.document-markdown h1 { font-size: 20px; margin: 0 0 10px 0; color: var(--text); }
+.document-markdown h2 { font-size: 17px; margin: 16px 0 8px 0; color: var(--text); }
+.document-markdown h3 { font-size: 15px; margin: 14px 0 6px 0; color: var(--text); }
 .document-markdown p { margin: 0 0 10px 0; }
 .document-markdown ul, .document-markdown ol { margin: 0 0 10px 0; padding-left: 22px; }
 .document-markdown pre { background: #f2f5f7; border: 1px solid #e2e8ee; border-radius: 6px; padding: 10px; overflow-x: auto; }
