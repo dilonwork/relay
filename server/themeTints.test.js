@@ -170,6 +170,50 @@ function checkLinkButtons(css, lightVars, darkVars) {
   }
 }
 
+// Ticket a1efa937: Admin banners use state tint variables; every child
+// (.muted, code, .link, strong) must read >= 4.5:1 in both themes.
+// code and strong inherit the banner text color; .muted is
+// --text-muted-strong; .link inside a banner uses the banner text color
+// (the global --accent is 4.32:1 / 4.28:1 on the light banner backgrounds).
+const BANNER_RULES = [
+  ['.banner.notice', { background: '--tint-green-bg', border: '--tint-green-mid', color: '--tint-green-text' }],
+  ['.banner.error', { background: '--tint-red-bg', border: '--tint-red-border', color: '--tint-red-text-strong' }],
+  ['.banner.notice button.link', { color: '--tint-green-text' }],
+  ['.banner.error button.link', { color: '--tint-red-text-strong' }],
+];
+const BANNER_TEXT_BG_PAIRS = [
+  ['tint-green-text', 'tint-green-bg'],
+  ['tint-red-text-strong', 'tint-red-bg'],
+  ['text-muted-strong', 'tint-green-bg'],
+  ['text-muted-strong', 'tint-red-bg'],
+];
+
+function ruleBody(css, selector) {
+  const re = new RegExp(selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*\\{([^}]*)\\}');
+  const m = css.match(re);
+  assert.ok(m, `${selector} rule not found in src/index.css`);
+  return m[1];
+}
+
+function checkBanners(css, lightVars, darkVars) {
+  for (const [selector, props] of BANNER_RULES) {
+    const body = ruleBody(css, selector);
+    for (const [prop, variable] of Object.entries(props)) {
+      const re = new RegExp(prop + ':[^;]*var\\(' + variable.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\)');
+      assert.ok(re.test(body), `${selector} ${prop} must use var(${variable}) (ticket a1efa937)`);
+    }
+  }
+  for (const [theme, vars] of [['light', lightVars], ['dark', darkVars]]) {
+    for (const [textVar, bgVar] of BANNER_TEXT_BG_PAIRS) {
+      const ratio = contrast(vars[textVar], vars[bgVar]);
+      assert.ok(
+        ratio >= 4.5,
+        `${theme}: --${textVar} (${vars[textVar]}) on --${bgVar} (${vars[bgVar]}) is ${ratio.toFixed(2)}:1, below 4.5:1`,
+      );
+    }
+  }
+}
+
 (async () => {
   const css = fs.readFileSync(CSS_PATH, 'utf8');
   const light = parseVars(readBlock(css, ':root'));
@@ -202,6 +246,10 @@ function checkLinkButtons(css, lightVars, darkVars) {
 
   await ok('Admin link buttons use theme variables and stay readable (ticket 5d67f208)', () => {
     checkLinkButtons(css, light, dark);
+  });
+
+  await ok('Admin banners use tint variables and all children stay readable (ticket a1efa937)', () => {
+    checkBanners(css, light, dark);
   });
 
   console.log(`\n${passed} theme tint tests passed.`);
