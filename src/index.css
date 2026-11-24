@@ -611,10 +611,14 @@ h3.section { margin: 14px 0 6px; font-size: 13px; color: var(--text); }
    queues; Comfortable is today's row height, the default. */
 .card.ticket-compact .ticket-table td { padding: 3px 8px; }
 .card.ticket-compact .ticket-card { padding: 8px 12px; }
-/* Assignee line under a ticket card (ticket 1e248c03, review return):
-   kept at the original #5a6b7c — var(--text-muted) drops light-theme
-   contrast to 2.56:1 for 13px text, below the WCAG text 4.5:1 floor.
-   Awaits a suitable muted-text variable. */
+/* Assignee line under a ticket card (ticket b6e3bd01): uses
+   var(--text-muted-strong) — the muted-text variable that arrived in
+   ticket b73fac07 (light #5a6b7c, dark #94a3b8; 5.48:1 on white,
+   5.71:1 on the dark card). The 1e248c03 return had kept it at
+   hard-coded #5a6b7c because var(--text-muted) was only 2.56:1 in
+   light theme; that variable is no longer used here. On a selected
+   card in Dark theme the muted text is 3.70:1 on the teal background,
+   so selected rows use var(--text) there instead. */
 .ticket-card-assignee { margin-top: 4px; font-size: 13px; color: var(--text-muted-strong); }
 
 /* Tickets list redesign (ticket 506116ea): status group chips, group
