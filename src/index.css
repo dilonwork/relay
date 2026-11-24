@@ -495,7 +495,7 @@ body {
   /* Axis labels are ~110px wide but ticks sit 150px apart on the
      600px grid, so neighbours overlap; show every other day tick. */
   .gantt-axis span:nth-child(even) { display: none; }
-  .gantt-label { position: sticky; left: 0; background: #fff; z-index: 1; }
+  .gantt-label { position: sticky; left: 0; background: var(--card-bg); z-index: 1; }
 
   /* Login / setup: less top margin on small screens. */
   .auth-wrap { margin-top: 24px; }
