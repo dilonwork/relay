@@ -407,13 +407,22 @@ body {
   .ticket-card {
     min-height: 44px;
     padding: 12px;
-    border: 1px solid #e2e8ee;
+    border: 1px solid var(--card-border);
     border-radius: 8px;
-    background: #f8fafb;
+    background: var(--card-bg);
     cursor: pointer;
   }
-  .ticket-card.selected { background: #eef6f6; }
-  .ticket-card-title { font-weight: 600; color: #0f2a3d; overflow-wrap: anywhere; }
+  .ticket-card.selected { background: var(--card-selected); }
+  /* Selected card in Dark theme (ticket b6e3bd01): the muted row text
+     (#94a3b8) on the teal selected background (#134e4a) is only 3.70:1,
+     so selected rows use the full text colour there (7.69:1). Light
+     theme is untouched — the override is dark-only. */
+  [data-theme='dark'] .ticket-card.selected .ticket-row-status,
+  [data-theme='dark'] .ticket-card.selected .ticket-row-line2,
+  [data-theme='dark'] .ticket-card.selected .ticket-row-chev,
+  [data-theme='dark'] .ticket-card.selected .ticket-card-next,
+  [data-theme='dark'] .ticket-card.selected .ticket-card-assignee { color: var(--text); }
+  .ticket-card-title { font-weight: 600; color: var(--text); overflow-wrap: anywhere; }
   .ticket-card-meta {
     display: flex;
     flex-wrap: wrap;
@@ -422,15 +431,13 @@ body {
     margin-top: 6px;
     font-size: 13px;
   }
-  .ticket-card-next { margin-top: 4px; font-size: 13px; color: #5a6b7c; }
+  .ticket-card-next { margin-top: 4px; font-size: 13px; color: var(--text-muted-strong); }
 
   /* Mobile rows (ticket 506116ea): collapsed 2-line rows in
      Comfortable, 1 line in Compact; tap to expand to the full card.
-     The card background is hard-coded light in both themes (not yet
-     converted), so the row text keeps the card's own dark colours —
-     #0f2a3d / #5a6b7c, as .ticket-card-title / .ticket-card-assignee
-     already do — instead of theme variables that would wash out on
-     the light card in dark theme. */
+     The card and row text now use theme variables (ticket b6e3bd01):
+     dark rows match the prototype (dark card, white title, muted
+     status/meta); light rows are unchanged. */
   .ticket-row-main {
     display: block;
     width: 100%;
@@ -440,14 +447,14 @@ body {
     cursor: pointer;
     padding: 0;
     font: inherit;
-    color: #0f2a3d;
+    color: var(--text);
     min-height: 44px;
   }
   .ticket-row-line1 { display: flex; align-items: center; gap: 7px; min-width: 0; }
-  .ticket-row-status { font-size: 12px; font-weight: 700; color: #5a6b7c; flex: none; }
-  .ticket-row-title { font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 1; color: #0f2a3d; }
-  .ticket-row-chev { flex: none; color: #5a6b7c; font-size: 12px; }
-  .ticket-row-line2 { display: block; margin-top: 2px; font-size: 12px; color: #5a6b7c; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ticket-row-status { font-size: 12px; font-weight: 700; color: var(--text-muted-strong); flex: none; }
+  .ticket-row-title { font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 1; color: var(--text); }
+  .ticket-row-chev { flex: none; color: var(--text-muted-strong); font-size: 12px; }
+  .ticket-row-line2 { display: block; margin-top: 2px; font-size: 12px; color: var(--text-muted-strong); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   /* Compact density: 1 line — dot + title only. */
   .card.ticket-compact .ticket-row-line2,
   .card.ticket-compact .ticket-row-status { display: none; }
@@ -608,7 +615,7 @@ h3.section { margin: 14px 0 6px; font-size: 13px; color: var(--text); }
    kept at the original #5a6b7c — var(--text-muted) drops light-theme
    contrast to 2.56:1 for 13px text, below the WCAG text 4.5:1 floor.
    Awaits a suitable muted-text variable. */
-.ticket-card-assignee { margin-top: 4px; font-size: 13px; color: #5a6b7c; }
+.ticket-card-assignee { margin-top: 4px; font-size: 13px; color: var(--text-muted-strong); }
 
 /* Tickets list redesign (ticket 506116ea): status group chips, group
    headers and the group-by row. The toolbar itself is sticky — see the

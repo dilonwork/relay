@@ -238,6 +238,70 @@ function checkBodyRule(css, lightVars, darkVars) {
   }
 }
 
+// Ticket b6e3bd01: mobile ticket rows (<=720px) use theme variables so
+// Dark theme matches the prototype (dark cards, white titles, muted
+// status/meta). The pairs below are checked in both themes; the
+// muted-on-selected pair is deliberately NOT in the list —
+// --text-muted-strong on --card-selected is 3.70:1 in Dark theme, so
+// selected rows use the full text colour there instead (the dark-only
+// override below, 7.69:1). Light theme is untouched by the override.
+const MOBILE_ROW_RULES = [
+  ['.ticket-card', { background: '--card-bg', border: '--card-border' }],
+  ['.ticket-card.selected', { background: '--card-selected' }],
+  ['.ticket-card-title', { color: '--text' }],
+  ['.ticket-row-main', { color: '--text' }],
+  ['.ticket-row-title', { color: '--text' }],
+  ['.ticket-card-next', { color: '--text-muted-strong' }],
+  ['.ticket-row-status', { color: '--text-muted-strong' }],
+  ['.ticket-row-chev', { color: '--text-muted-strong' }],
+  ['.ticket-row-line2', { color: '--text-muted-strong' }],
+  ['.ticket-card-assignee', { color: '--text-muted-strong' }],
+];
+const MOBILE_ROW_PAIRS = [
+  ['text', 'card-bg'],
+  ['text-muted-strong', 'card-bg'],
+  ['text', 'card-selected'],
+];
+
+function checkMobileTicketRows(css, lightVars, darkVars) {
+  // A selector may appear in more than one rule (the dark selected-row
+  // override below reuses .ticket-card-assignee); the mapping holds when
+  // any of its rules uses the variable.
+  function ruleBodies(selector) {
+    const re = new RegExp(selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*\\{([^}]*)\\}', 'g');
+    const bodies = [...css.matchAll(re)].map((m) => m[1]);
+    assert.ok(bodies.length > 0, `${selector} rule not found in src/index.css`);
+    return bodies;
+  }
+  for (const [selector, props] of MOBILE_ROW_RULES) {
+    const bodies = ruleBodies(selector);
+    for (const [prop, variable] of Object.entries(props)) {
+      const re = new RegExp(prop + ':[^;]*var\\(' + variable.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\)');
+      assert.ok(
+        bodies.some((body) => re.test(body)),
+        `${selector} ${prop} must use var(${variable}) (ticket b6e3bd01)`,
+      );
+    }
+  }
+  for (const [theme, vars] of [['light', lightVars], ['dark', darkVars]]) {
+    for (const [textVar, bgVar] of MOBILE_ROW_PAIRS) {
+      const ratio = contrast(vars[textVar], vars[bgVar]);
+      assert.ok(
+        ratio >= 4.5,
+        `${theme}: --${textVar} (${vars[textVar]}) on --${bgVar} (${vars[bgVar]}) is ${ratio.toFixed(2)}:1, below 4.5:1`,
+      );
+    }
+  }
+  // Selected rows in Dark theme: the muted selectors must switch to the
+  // full text colour — --text-muted-strong on --card-selected is 3.70:1.
+  const at = css.indexOf("[data-theme='dark'] .ticket-card.selected .ticket-row-status");
+  assert.ok(at !== -1, 'dark selected-row override not found in src/index.css (ticket b6e3bd01)');
+  assert.ok(
+    /color:\s*var\(--text\)/.test(css.slice(at, at + 500)),
+    `dark selected rows must use color: var(--text) (ticket b6e3bd01)`,
+  );
+}
+
 (async () => {
   const css = fs.readFileSync(CSS_PATH, 'utf8');
   const light = parseVars(readBlock(css, ':root'));
@@ -278,6 +342,10 @@ function checkBodyRule(css, lightVars, darkVars) {
 
   await ok('body rule uses theme variables and inherited text stays readable (ticket 166fe578)', () => {
     checkBodyRule(css, light, dark);
+  });
+
+  await ok('mobile ticket rows use theme variables and stay readable (ticket b6e3bd01)', () => {
+    checkMobileTicketRows(css, light, dark);
   });
 
   console.log(`\n${passed} theme tint tests passed.`);
