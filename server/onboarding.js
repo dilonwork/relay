@@ -246,6 +246,7 @@ async function buildProjectPromptBundle(db, { projectId, baseUrl, origin }) {
     `- \`GET ${base}/api/tickets?status=<status>\` — tickets in one state (for example \`pending_dev\` or \`in_dev\`).`,
     `- \`GET ${base}/api/tickets/:id\` — one ticket with its full history.`,
     `- \`POST ${base}/api/tickets/:id/transitions\` — claim a ticket, hand it over, or send it back: \`{"to_status": "...", "reason": "...", "handoff": "..."}\`. A reason is required when sending a ticket back for clarification; a handoff note is required when handing work over for review.`,
+    `- \`POST ${base}/api/tickets/:id/claim\` — take over an unassigned ticket in place, without moving it: use it when the queue shows a next step of kind \`pickup\` whose \`to\` is the ticket's current state (for example an in-progress ticket whose owner was removed).`,
     `- \`GET ${base}/api/meta/transitions\` — the transitions your role may take.`,
     `- \`GET ${base}/api/projects\` — the project list.`,
     `- \`GET ${base}/api/health\` — health check.`,

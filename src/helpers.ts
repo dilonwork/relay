@@ -964,6 +964,32 @@ export function transitionTargets(
   return out;
 }
 
+// Role responsible for a state, from the workflow's transition
+// table: the role of the first outgoing transition, the same
+// derivation the server uses for the roles map
+// (stateMachine.builtinRolesFor). The detail view uses it for the
+// Claim button, which the transition table itself cannot offer — a
+// claim is an assignment, not a transition (ticket c1ff08e3).
+export function roleForState(meta: LegalTransition[], status: string): string | null {
+  const rule = meta.find((t) => t.from === status);
+  return rule ? rule.role : null;
+}
+
+// Whether a state waits on an answer rather than on someone picking
+// work up: it is a target of clarify transitions and of no other
+// kind. The server computes the same rule from the definition
+// (ticket c1ff08e3); clarification tickets are never claimable.
+export function isClarificationState(meta: LegalTransition[], status: string): boolean {
+  let clarifiesIn = false;
+  let otherIn = false;
+  for (const t of meta) {
+    if (t.to !== status) continue;
+    if (t.kind === 'clarify') clarifiesIn = true;
+    else otherIn = true;
+  }
+  return clarifiesIn && !otherIn;
+}
+
 // Union of legal targets across all roles the user holds.
 export function targetsForUser(
   meta: LegalTransition[],

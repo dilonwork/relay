@@ -319,15 +319,17 @@ async function updateUser(db, id, { displayName, roles, isActive, kind }) {
 // Remove an account entirely (ticket c1ff08e3). Admin-only at the
 // route level (the /api/admin router enforces it); the caller is
 // identified by requesterId for the self-delete check below. In one
-// transaction: in-progress tickets assigned to the user are
-// unassigned (assignee_id NULL, so they return to the claimable
-// queue — the deletion is NOT blocked by in-progress tickets),
-// all of the user's API keys are revoked, all of their sessions are
-// ended, and the users row is deleted. The keys are revoked
-// explicitly rather than left to the ON DELETE CASCADE, so the
-// operation is correct on its own. Audit rows are never touched:
-// ticket_transitions.actor_id is plain text with no foreign key, so
-// the removed user's id stays in the history.
+// transaction: tickets in non-terminal states assigned to the user
+// are unassigned (assignee_id NULL, so they return to the claimable
+// queue — the deletion is NOT blocked by in-progress tickets), while
+// delivered and cancelled tickets keep their owner, so the ticket
+// still shows who delivered it (ticket c1ff08e3); all of the user's
+// API keys are revoked, all of their sessions are ended, and the
+// users row is deleted. The keys are revoked explicitly rather than
+// left to the ON DELETE CASCADE, so the operation is correct on its
+// own. Audit rows are never touched: ticket_transitions.actor_id is
+// plain text with no foreign key, so the removed user's id stays in
+// the history.
 async function deleteUser(db, id, requesterId) {
   const user = await findUserById(db, id);
   if (!user) {
@@ -346,7 +348,7 @@ async function deleteUser(db, id, requesterId) {
     }
   }
   await db.withTransaction(async (client) => {
-    await client.query('UPDATE tickets SET assignee_id = NULL WHERE assignee_id = $1', [id]);
+    await client.query("UPDATE tickets SET assignee_id = NULL WHERE assignee_id = $1 AND status NOT IN ('delivered', 'cancelled')", [id]);
     await client.query('UPDATE api_keys SET revoked_at = CURRENT_TIMESTAMP WHERE user_id = $1 AND revoked_at IS NULL', [id]);
     await client.query('DELETE FROM sessions WHERE user_id = $1', [id]);
     await client.query('DELETE FROM users WHERE id = $1', [id]);

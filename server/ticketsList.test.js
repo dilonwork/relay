@@ -15,6 +15,8 @@ const {
   filterTicketsByStatusGroup,
   filterTicketsByTitle,
   groupTicketsByStatus,
+  isClarificationState,
+  roleForState,
   shortStatusLabel,
   ticketsForTab,
 } = require('../src/helpers.ts');
@@ -323,6 +325,41 @@ const queue = [
     assert.ok(tabs[1].includes('overflow-x: auto'), 'mobile tab row must scroll horizontally');
     assert.ok(css.includes('.ticket-card:not(.expanded)'),
       'collapsed rows use tighter padding so more fit on the first screen');
+  });
+
+  await ok('roleForState returns the role of the first outgoing transition from a state (ticket c1ff08e3)', async () => {
+    const meta = [
+      { from: 'requirement', to: 'decomposing', role: 'leader', requires_reason: false, requires_handoff: false, kind: 'forward', self_check: false },
+      { from: 'pending_dev', to: 'in_dev', role: 'engineer', requires_reason: false, requires_handoff: false, kind: 'pickup', self_check: false },
+      { from: 'in_dev', to: 'pending_review', role: 'engineer', requires_reason: false, requires_handoff: true, kind: 'forward', self_check: false },
+      { from: 'in_review', to: 'pending_test', role: 'reviewer', requires_reason: false, requires_handoff: false, kind: 'forward', self_check: true },
+    ];
+    assert.equal(roleForState(meta, 'requirement'), 'leader');
+    assert.equal(roleForState(meta, 'pending_dev'), 'engineer');
+    assert.equal(roleForState(meta, 'in_review'), 'reviewer');
+    assert.equal(roleForState(meta, 'delivered'), null);
+    assert.equal(roleForState([], 'in_dev'), null);
+  });
+
+  await ok('isClarificationState is true only for states reached by clarify alone (ticket c1ff08e3)', async () => {
+    const meta = [
+      { from: 'decomposing', to: 'needs_clarification', role: 'leader', requires_reason: true, requires_handoff: false, kind: 'clarify', self_check: false },
+      { from: 'needs_clarification', to: 'decomposing', role: 'pm', requires_reason: true, requires_handoff: false, kind: 'clarify', self_check: false },
+      { from: 'in_test', to: 'needs_acceptance_clarification', role: 'tester', requires_reason: true, requires_handoff: false, kind: 'clarify', self_check: false },
+      { from: 'needs_acceptance_clarification', to: 'in_test', role: 'pm', requires_reason: true, requires_handoff: false, kind: 'clarify', self_check: false },
+      { from: 'requirement', to: 'decomposing', role: 'leader', requires_reason: false, requires_handoff: false, kind: 'forward', self_check: false },
+    ];
+    assert.equal(isClarificationState(meta, 'needs_clarification'), true);
+    assert.equal(isClarificationState(meta, 'needs_acceptance_clarification'), true);
+    assert.equal(isClarificationState(meta, 'decomposing'), false);
+    assert.equal(isClarificationState(meta, 'requirement'), false);
+    // A state reached by a clarify and by another kind is not a
+    // clarification state: it can still move on its own.
+    const mixed = [
+      ...meta,
+      { from: 'in_test', to: 'needs_clarification', role: 'tester', requires_reason: false, requires_handoff: false, kind: 'forward', self_check: false },
+    ];
+    assert.equal(isClarificationState(mixed, 'needs_clarification'), false);
   });
 
   console.log(`\n${passed} tickets list redesign tests passed.`);

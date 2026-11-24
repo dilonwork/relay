@@ -157,10 +157,11 @@ class FakeDb {
       this.sessions = this.sessions.filter((x) => new Date(x.expires_at).getTime() >= now);
       return { rows: [] };
     }
-    // deleteUser: unassign the user's in-progress tickets (they
-    // return to the claimable queue).
+    // deleteUser: unassign the user's non-terminal tickets (they
+    // return to the claimable queue, ticket c1ff08e3). Terminal
+    // tickets keep their owner, so who delivered them stays visible.
     if (sql.startsWith('UPDATE tickets SET assignee_id = NULL WHERE assignee_id = $1')) {
-      const changed = this.tickets.filter((t) => t.assignee_id === params[0]);
+      const changed = this.tickets.filter((t) => t.assignee_id === params[0] && t.status !== 'delivered' && t.status !== 'cancelled');
       for (const t of changed) t.assignee_id = null;
       return { rows: changed.map((t) => ({ ...t })) };
     }
@@ -434,6 +435,26 @@ async function main() {
     assert.equal(db.tickets[0].assignee_id, null);
     assert.equal(db.transitions.length, 1);
     assert.equal(db.transitions[0].actor_id, dev.user.id);
+  });
+
+  await ok('deleteUser keeps the owner on delivered and cancelled tickets (ticket c1ff08e3)', async () => {
+    const db = new FakeDb();
+    const admin = await auth.createFirstAdmin(db, { username: 'dylan', password: 'correct horse battery staple', displayName: 'Dylan' });
+    const dev = await auth.createUser(db, {
+      username: 'dev', password: 'correct horse battery staple', displayName: 'Dev', roles: ['engineer'],
+    });
+    // One ticket in progress, one delivered and one cancelled.
+    db.tickets.push({ id: 'ticket-1', assignee_id: dev.user.id, status: 'in_dev' });
+    db.tickets.push({ id: 'ticket-2', assignee_id: dev.user.id, status: 'delivered' });
+    db.tickets.push({ id: 'ticket-3', assignee_id: dev.user.id, status: 'cancelled' });
+    const removed = await auth.deleteUser(db, dev.user.id, admin.user.id);
+    assert.equal(removed.ok, true);
+    // Only the in-progress ticket returns to the claimable queue; the
+    // terminal tickets keep their owner, so who delivered them stays
+    // visible.
+    assert.equal(db.tickets[0].assignee_id, null);
+    assert.equal(db.tickets[1].assignee_id, dev.user.id);
+    assert.equal(db.tickets[2].assignee_id, dev.user.id);
   });
 
   await ok('deleteUser revokes the account API keys explicitly', async () => {

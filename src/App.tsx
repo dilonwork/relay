@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, getToken, onUnauthorized, setToken } from './api';
 import type { LegalTransition, Project, PublicUser, QueueEntry, RoleAgent, Ticket, TicketWithHistory, Transition, User, Workflow } from './api';
-import { ROLE_LABELS, countProjectAttention, countTicketsByProject, isTerminalFor, stateLabelFor, statusLabel, targetsForUser } from './helpers';
+import { ROLE_LABELS, countProjectAttention, countTicketsByProject, isClarificationState, isTerminalFor, roleForState, stateLabelFor, statusLabel, targetsForUser } from './helpers';
 import { ADMIN_TABS, adminTabForView, adminViewForTab, isAdminView } from './adminNav';
 import type { AdminTab } from './adminNav';
 import { gateView, hashToView, viewToHash } from './viewHash';
@@ -669,6 +669,25 @@ export default function App() {
     }
   }
 
+  // Claim an unassigned ticket in place (ticket c1ff08e3): the caller
+  // becomes the owner without the ticket moving state.
+  async function handleClaim() {
+    if (!detail) return;
+    setError('');
+    setNotice('');
+    setBusy(true);
+    try {
+      const res = await api.claimTicket(detail.id);
+      setNotice(`Ticket claimed: you are now the owner in ${stateLabelFor(detailWorkflow, res.ticket.status)}.`);
+      await loadDetail(detail.id);
+      await loadTickets();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Claim failed.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   // Top-level view navigation. Opening a ticket switches to its own
   // detail view; going back returns to the Tickets sub-page it came
   // from (list or Gantt).
@@ -827,6 +846,19 @@ export default function App() {
   const targets = detail && detailMeta.length
     ? targetsForUser(detailMeta, detail.status, user, (s) => isTerminalFor(detailWorkflow, s))
     : [];
+  // Claim in place (ticket c1ff08e3): an unassigned ticket in a
+  // claimable state can be taken over by the role responsible for
+  // that state, without moving it. The role comes from the workflow's
+  // transition table (first outgoing transition), the same derivation
+  // the server uses for the roles map; the server re-checks
+  // everything, including the no-self-review rule.
+  const claimRole = detail ? roleForState(detailMeta, detail.status) : null;
+  const canClaim = !!detail
+    && !detail.assignee_id
+    && claimRole !== null
+    && user.roles.includes(claimRole)
+    && !isTerminalFor(detailWorkflow, detail.status)
+    && !isClarificationState(detailMeta, detail.status);
   const latestHandoff = detail
     ? [...detail.transitions].reverse().find((tr) => tr.handoff && tr.handoff.trim())
     : undefined;
@@ -1228,6 +1260,8 @@ export default function App() {
           onArtifactsTextChange={setArtifactsText}
           onAssignProject={handleAssignProject}
           onTransition={handleTransition}
+          canClaim={canClaim}
+          onClaim={handleClaim}
           projectName={projectName}
         />
       ) : mainView === 'tickets-gantt' ? (

@@ -211,6 +211,25 @@ app.post('/api/tickets/:id/transitions', async (req, res) => {
   }
 });
 
+// Claim an unassigned ticket in place (ticket c1ff08e3, design doc
+// ch. 12): the caller becomes the owner without the ticket moving
+// state. Same shape as the transitions route above.
+app.post('/api/tickets/:id/claim', async (req, res) => {
+  try {
+    const result = await tickets.claimTicket(db, req.params.id, {
+      actorId: req.user.id,
+      actorRoles: req.user.roles,
+      // An account assigned to one project may not claim tickets of
+      // any other project (403 out_of_scope).
+      assignedProjectId: req.user.project_id,
+    });
+    if (!result.ok) return res.status(result.status).json({ error: result.error, message: result.message });
+    res.json({ ticket: result.ticket, transition: result.transition });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // --- Task endpoints (ticket 0ae37c3b, design doc ch. 38) ---
 // The Task sub-dimension under Tickets. Create / edit / delete are
 // leader-only; status updates are leader or engineer; reads are open
