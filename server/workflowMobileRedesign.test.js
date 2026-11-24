@@ -144,7 +144,7 @@ function mobileBlock(css) {
     const css = readSrc('index.css');
     const block = mobileBlock(css);
     assert.match(block, /\.editor-card \.section-nav \{\s*flex-wrap: nowrap;\s*overflow-x: auto;/, 'the nav must stop wrapping and scroll');
-    assert.match(block, /\.editor-card \.section-nav button \{\s*flex: 0 0 auto;\s*border: 1px solid #c4d0da;\s*border-radius: 999px;/, 'nav buttons must read as pills');
+    assert.match(block, /\.editor-card \.section-nav button \{\s*flex: 0 0 auto;\s*border: 1px solid var\(--border\);\s*border-radius: 999px;/, 'nav buttons must read as pills');
     assert.match(block, /\.editor-head \.workflow-preview \{ order: 1;/, 'the flow strip must order above the tab row');
     assert.match(block, /\.editor-head \.section-nav \{ order: 2; \}/, 'the tab row must order below the strip');
     assert.match(css, /\.editor-head \{ display: contents; \}/, 'the head grouping must be invisible on desktop');

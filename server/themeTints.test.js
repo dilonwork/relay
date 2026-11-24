@@ -302,6 +302,72 @@ function checkMobileTicketRows(css, lightVars, darkVars) {
   );
 }
 
+// Ticket 3dfa3021: Dark theme audit — the remaining hard-coded light
+// backgrounds rendered as white blocks in Dark mode. Each item below
+// is pinned to its theme variables and every text/background pair is
+// checked >= 4.5:1 in both themes. Two judgment calls, both recorded
+// here so the Reviewer can confirm them: (1) .document-markdown pre
+// takes var(--border) for its border (light value identical, dark
+// #334155 stays visible); (2) button.amber-outline keeps its
+// hard-coded #d97706 border — var(--tint-amber-border) is #fcd34d in
+// light theme and would nearly vanish on white, while #d97706 reads
+// as an amber outline on both #ffffff and #1e293b, so light theme
+// stays exactly unchanged. Out of scope and deliberately untouched:
+// mobile ticket rows (b6e3bd01), the Gantt sticky label (df3c9e77),
+// and the intentional white active toggle/chip/button states.
+const AUDIT_RULES = [
+  ['.titlebar-menu', { background: '--surface', color: '--text', border: '--border' }],
+  ['input[type="text"], select, textarea', { background: '--input-bg', color: '--input-text', border: '--input-border' }],
+  ['tbody tr:hover', { background: '--hover-bg' }],
+  ['tbody tr.selected', { background: '--card-selected' }],
+  ['.document-markdown pre', { background: '--code-bg', border: '--border' }],
+  ['button.amber-outline', { background: '--card-bg', color: '--tint-amber-text' }],
+  ['.tabs button.claimable:not(.active)', { background: '--tint-amber-bg', 'border-color': '--tint-amber-border', color: '--tint-amber-text' }],
+  ['.editor-card .section-nav button', { background: '--surface', border: '--border' }],
+  ['.editor-table tr', { background: '--card-bg', border: '--card-border' }],
+  ['.editor-table tbody tr:hover', { background: '--hover-bg' }],
+];
+const AUDIT_TEXT_BG_PAIRS = [
+  ['text', 'surface'],
+  ['input-text', 'input-bg'],
+  ['text', 'hover-bg'],
+  ['text', 'card-selected'],
+  ['text', 'code-bg'],
+  ['tint-amber-text', 'card-bg'],
+  ['tint-amber-text', 'tint-amber-bg'],
+  ['text', 'card-bg'],
+];
+
+// .titlebar-menu has two rules (the base `display: none` and the
+// mobile one); ruleBody takes the first, so this finds the rule
+// that actually carries the property being pinned.
+function ruleBodyWith(css, selector, prop) {
+  const re = new RegExp(selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*\\{([^}]*)\\}', 'g');
+  for (const m of css.matchAll(re)) {
+    if (m[1].includes(prop)) return m[1];
+  }
+  assert.fail(`${selector} rule with ${prop} not found in src/index.css`);
+}
+
+function checkAudit(css, lightVars, darkVars) {
+  for (const [selector, props] of AUDIT_RULES) {
+    for (const [prop, variable] of Object.entries(props)) {
+      const body = ruleBodyWith(css, selector, prop);
+      const re = new RegExp(prop + ':[^;]*var\\(' + variable.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\)');
+      assert.ok(re.test(body), `${selector} ${prop} must use var(${variable}) (ticket 3dfa3021)`);
+    }
+  }
+  for (const [theme, vars] of [['light', lightVars], ['dark', darkVars]]) {
+    for (const [textVar, bgVar] of AUDIT_TEXT_BG_PAIRS) {
+      const ratio = contrast(vars[textVar], vars[bgVar]);
+      assert.ok(
+        ratio >= 4.5,
+        `${theme}: --${textVar} (${vars[textVar]}) on --${bgVar} (${vars[bgVar]}) is ${ratio.toFixed(2)}:1, below 4.5:1`,
+      );
+    }
+  }
+}
+
 (async () => {
   const css = fs.readFileSync(CSS_PATH, 'utf8');
   const light = parseVars(readBlock(css, ':root'));
@@ -346,6 +412,10 @@ function checkMobileTicketRows(css, lightVars, darkVars) {
 
   await ok('mobile ticket rows use theme variables and stay readable (ticket b6e3bd01)', () => {
     checkMobileTicketRows(css, light, dark);
+  });
+
+  await ok('remaining hard-coded light backgrounds use theme variables and stay readable (ticket 3dfa3021)', () => {
+    checkAudit(css, light, dark);
   });
 
   console.log(`\n${passed} theme tint tests passed.`);
