@@ -42,6 +42,12 @@ interface TicketDetailProps {
   onArtifactsTextChange: (value: string) => void;
   onAssignProject: (e: React.FormEvent) => void;
   onTransition: (e: React.FormEvent) => void;
+  // Claim in place (ticket c1ff08e3): the ticket has no owner and the
+  // caller holds the role for its state. The button lives next to the
+  // transition form, which cannot offer a claim — a claim is an
+  // assignment, not a transition.
+  canClaim: boolean;
+  onClaim: () => void;
   projectName: (id: string | null) => string;
 }
 
@@ -77,6 +83,8 @@ export default function TicketDetail(props: TicketDetailProps) {
     onArtifactsTextChange,
     onAssignProject,
     onTransition,
+    canClaim,
+    onClaim,
     projectName,
   } = props;
 
@@ -249,6 +257,16 @@ export default function TicketDetail(props: TicketDetailProps) {
 
           <div className="card">
             <h3 className="section">Move this ticket</h3>
+            {canClaim && (
+              <p>
+                <button className="primary" type="button" onClick={onClaim} disabled={busy}>
+                  Claim this ticket
+                </button>{' '}
+                <span className="muted">
+                  This ticket has no owner — claim it to take over the work in {label(detail.status)}.
+                </span>
+              </p>
+            )}
             {targetsLoading ? (
               <p className="muted">Loading transitions…</p>
             ) : targets.length === 0 ? (

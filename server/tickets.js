@@ -495,23 +495,93 @@ async function transitionTicket(db, ticketId, { actorId, actorRoles, toStatus, r
 }
 
 // Trial-stage claim queue (design doc ch. 12): tickets waiting for the
-// caller's roles to pick them up. For the built-in flow the trial
-// covers decomposing and development only: a ticket in `requirement`
-// waits for the role the project's chosen workflow names for that
-// state to decompose it, and a ticket in `pending_dev` waits for that
-// state's role to start it. In-progress states (decomposing, in_dev, ...)
-// are not claimable — they already have an owner. Each entry carries
-// the transition the caller would take next. Under the built-in flow
-// the responsible roles are leader and engineer, exactly as before
-// (design doc ch. 19).
+// caller's roles to pick them up. A ticket is claimable when it has no
+// owner and sits in a state where work is waiting to be picked up:
+// every non-terminal state except the clarification states, which wait
+// on the PM's answer (the PM owns them via /api/tickets, not the
+// queue). Terminal states never return to the queue. Each entry
+// carries the claim the caller would make next, as next_transition.
 //
-// For a custom workflow (ch. 15) the same idea generalizes: a ticket
-// is claimable when its current state has an outgoing 'pickup'
-// transition whose role the caller holds. The claimable states are
-// workflow-dependent, so the candidate set cannot be pre-filtered in
-// SQL; all in-scope tickets are read and filtered here.
-const CLAIMABLE_STATUSES = ['requirement', 'pending_dev'];
-const CLAIMABLE_TO = { requirement: 'decomposing', pending_dev: 'in_dev' };
+// Reclaim (ticket c1ff08e3, fix direction A): a ticket whose owner
+// was removed (deleteUser unassigns it) returns to this queue instead
+// of becoming an invisible orphan. For a queue state the claim is the
+// outgoing pickup transition (or, for the start state, the forward
+// move into work); for a working state with no pickup the claim is in
+// place — kind 'pickup' with to === the current status — performed by
+// POST /api/tickets/:id/claim. Same-state transitions stay forbidden
+// (validateWorkflowDefinition rejects them), so the claim is an
+// assignment, not a transition. The role is the workflow roles map
+// for the state, the same authority transitionTicket consults;
+// listClaimable and attachNextTransitions share the helper below, so
+// the queue and the list agree on every claimable row.
+//
+// For a custom workflow (ch. 15) the same rule generalizes: the
+// claimable states are workflow-dependent, so the candidate set cannot
+// be pre-filtered in SQL; all in-scope tickets are read and filtered
+// here.
+function isClarificationState(definition, status) {
+  // A clarification state is one entered only through a clarify
+  // transition: it waits on an answer, not on someone picking work
+  // up. Computed from the definition, so custom workflows get the
+  // same rule without hard-coding the built-in clarification states.
+  const transitions = (definition && definition.transitions) || [];
+  let clarifiesIn = false;
+  let otherIn = false;
+  for (const t of transitions) {
+    if (t.to !== status) continue;
+    if (t.kind === 'clarify') clarifiesIn = true;
+    else otherIn = true;
+  }
+  return clarifiesIn && !otherIn;
+}
+
+// The claim a caller would make on an unassigned ticket, as a
+// next_transition object, or null when the ticket cannot be claimed.
+// For a pickup or start-state claim the transition row's role is the
+// fallback when the roles map has no entry for the state, matching
+// the effective-role rule (ch. 14 override); the in-place claim has
+// no row to fall back on, so it needs the map's role.
+function claimNextTransition(definition, ticket, roleMap) {
+  if (!definition || ticket.assignee_id) return null;
+  if (sm.isTerminalFor(definition, ticket.status)) return null;
+  if (isClarificationState(definition, ticket.status)) return null;
+  const transitions = definition.transitions || [];
+  const entry = roleMap ? roleMap[ticket.status] : null;
+  const mapRole = entry ? entry.role : null;
+  const pickup = transitions.find((r) => r.from === ticket.status && r.kind === 'pickup');
+  if (pickup) {
+    const role = mapRole || pickup.role;
+    return {
+      to: pickup.to,
+      role,
+      kind: 'pickup',
+      requires_reason: pickup.requiresReason,
+      requires_handoff: pickup.requiresHandoff,
+    };
+  }
+  const state = sm.stateByCode(definition, ticket.status);
+  if (state && state.is_start) {
+    const forward = transitions.find((r) => r.from === ticket.status && r.kind === 'forward');
+    if (forward) {
+      const role = mapRole || forward.role;
+      return {
+        to: forward.to,
+        role,
+        kind: 'forward',
+        requires_reason: forward.requiresReason,
+        requires_handoff: forward.requiresHandoff,
+      };
+    }
+  }
+  if (!mapRole) return null;
+  return {
+    to: ticket.status,
+    role: mapRole,
+    kind: 'pickup',
+    requires_reason: false,
+    requires_handoff: false,
+  };
+}
 
 async function listClaimable(db, actorRoles, projectFilter, assignedProjectId) {
   const roles = Array.isArray(actorRoles) ? actorRoles : [];
@@ -542,58 +612,19 @@ async function listClaimable(db, actorRoles, projectFilter, assignedProjectId) {
     // The queue follows the ticket's definition, not whether it
     // carries a workflow id. A ticket on a workflow that carries the
     // built-in definition (the former Default flow, now any project's
-    // chosen workflow) keeps the built-in queue — claimable from
-    // requirement and pending_dev — while a ticket on a genuinely
-    // custom definition is claimable only from a pickup state
+    // chosen workflow) keeps the built-in queue, and a ticket on a
+    // genuinely custom definition is claimable by the same rule
     // (ch. 19). A ticket whose workflow row is missing is not
     // claimable at all.
     const definition = await definitionFor(t);
-    if (definition && workflows.isBuiltinDefinition(definition)) {
-      if (!CLAIMABLE_STATUSES.includes(t.status)) continue;
-      // The role is the ticket's own workflow roles when it has one
-      // (the same map transitionTicket consults); a workflow-less
-      // ticket takes the project's role map.
-      const roleMap = t.workflow_id ? definition.roles || null : await roleMapFor(t.project_id);
-      const entry = roleMap ? roleMap[t.status] : null;
-      const role = entry ? entry.role : null;
-      if (!role || !roles.includes(role)) continue;
-      const rule = sm.TRANSITIONS.find((r) => r.from === t.status && r.to === CLAIMABLE_TO[t.status]);
-      out.push({
-        ...t,
-        next_transition: rule
-          ? {
-              to: rule.to,
-              role,
-              kind: rule.kind,
-              requires_reason: rule.requiresReason,
-              requires_handoff: rule.requiresHandoff,
-            }
-          : null,
-      });
-      continue;
-    }
     if (!definition) continue;
-    const rule = (definition.transitions || []).find(
-      (r) => r.from === t.status && r.kind === 'pickup'
-    );
-    if (!rule) continue;
-    // The effective role is the workflow's roles map for the state
-    // (ch. 14 override); the transition row's role is the designed
-    // role and agrees with it after a save, but the map is the
-    // authority.
-    const entry = definition.roles ? definition.roles[t.status] : null;
-    const effectiveRole = (entry && entry.role) || rule.role;
-    if (!effectiveRole || !roles.includes(effectiveRole)) continue;
-    out.push({
-      ...t,
-      next_transition: {
-        to: rule.to,
-        role: effectiveRole,
-        kind: rule.kind,
-        requires_reason: rule.requiresReason,
-        requires_handoff: rule.requiresHandoff,
-      },
-    });
+    // The role is the ticket's own workflow roles when it has one
+    // (the same map transitionTicket consults); a workflow-less
+    // ticket takes the project's role map.
+    const roleMap = t.workflow_id ? definition.roles || null : await roleMapFor(t.project_id);
+    const next = claimNextTransition(definition, t, roleMap);
+    if (!next || !roles.includes(next.role)) continue;
+    out.push({ ...t, next_transition: next });
   }
   return out;
 }
@@ -645,6 +676,14 @@ async function attachNextTransitions(db, rows, actorRoles) {
       continue;
     }
     const roleMap = t.workflow_id ? definition.roles || null : await roleMapFor(t.project_id);
+    // Claim first (ticket c1ff08e3): an unassigned ticket in a
+    // claimable state waits for its role to claim it — the next step
+    // is the claim, not the forward move into the next queue state.
+    const claim = claimNextTransition(definition, t, roleMap);
+    if (claim && roles.includes(claim.role)) {
+      out.push({ ...t, next_transition: claim });
+      continue;
+    }
     const candidates = (definition.transitions || [])
       .filter((r) => r.from === t.status && NEXT_STEP_KIND_ORDER.includes(r.kind))
       // Array.prototype.sort is stable: definition order within a kind
@@ -669,6 +708,80 @@ async function attachNextTransitions(db, rows, actorRoles) {
   return out;
 }
 
+// Claim an unassigned ticket in place (ticket c1ff08e3, design doc
+// ch. 12): taking ownership without moving the ticket. Same-state
+// transitions are forbidden, so this is an assignment, not a
+// transition — it writes the owner and an audit row, and changes no
+// state. The UPDATE is conditional on assignee_id IS NULL, so two
+// simultaneous claims cannot both succeed (the FOR UPDATE lock
+// serializes the check, and the conditional UPDATE is the
+// belt-and-braces atomic guarantee). The self-check mirrors the
+// pickup rule: a caller may not claim work in a state whose outgoing
+// transitions refuse the ticket's own developer (review, test,
+// deploy), or the ticket would stall in their hands.
+async function claimTicket(db, ticketId, { actorId, actorRoles, assignedProjectId }) {
+  if (!actorId || !String(actorId).trim() || !Array.isArray(actorRoles)) {
+    return { ok: false, status: 400, error: 'bad_request', message: 'actor_id and actor roles are required.' };
+  }
+  const actor = String(actorId).trim();
+  return db.withTransaction(async (client) => {
+    // FOR UPDATE serializes claims: two actors cannot claim one ticket.
+    const { rows } = await client.query(
+      'SELECT * FROM tickets WHERE id = $1 FOR UPDATE',
+      [ticketId]
+    );
+    const ticket = rows[0];
+    if (!ticket) {
+      return { ok: false, status: 404, error: 'ticket_not_found', message: 'Ticket not found.' };
+    }
+    const scope = sm.checkProjectScope(ticket, actorRoles, assignedProjectId);
+    if (!scope.ok) {
+      return { ok: false, status: 403, error: scope.error, message: scope.message };
+    }
+    const resolved = await workflows.definitionForTicket(client, ticket);
+    if (resolved.missing) {
+      return { ok: false, status: 500, error: 'workflow_not_found', message: 'This ticket names a workflow that no longer exists.' };
+    }
+    const definition = resolved.definition;
+    if (sm.isTerminalFor(definition, ticket.status)) {
+      return { ok: false, status: 403, error: 'terminal', message: `Ticket is ${ticket.status}; terminal tickets cannot be claimed.` };
+    }
+    if (isClarificationState(definition, ticket.status)) {
+      return { ok: false, status: 403, error: 'not_claimable', message: `Ticket is ${ticket.status}; clarification tickets wait on the PM's answer and cannot be claimed.` };
+    }
+    const isCustom = !!ticket.workflow_id;
+    const roleMap = isCustom ? definition.roles : await workflows.getRoleMap(client, ticket.project_id);
+    const entry = roleMap ? roleMap[ticket.status] : null;
+    const role = entry ? entry.role : null;
+    if (!role || !actorRoles.includes(role)) {
+      return { ok: false, status: 403, error: 'wrong_role', message: `Claiming a ticket in ${ticket.status} requires role ${role || 'unknown'}, which you do not hold.` };
+    }
+    const selfCheck = (definition.transitions || []).some(
+      (r) => r.from === ticket.status && r.role === role && r.selfCheck
+    );
+    if (selfCheck && ticket.developer_id && actor === ticket.developer_id) {
+      return { ok: false, status: 403, error: 'self_work', message: 'You cannot review, test or deploy your own work.' };
+    }
+    if (ticket.assignee_id) {
+      return { ok: false, status: 409, error: 'already_assigned', message: 'This ticket already has an owner.' };
+    }
+    const { rows: updatedRows } = await client.query(
+      'UPDATE tickets SET assignee_id = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND assignee_id IS NULL RETURNING *',
+      [actor, ticket.id]
+    );
+    if (updatedRows.length === 0) {
+      // A concurrent claim won between the check and the update.
+      return { ok: false, status: 409, error: 'already_assigned', message: 'This ticket already has an owner.' };
+    }
+    const { rows: transitionRows } = await client.query(
+      `INSERT INTO ticket_transitions (ticket_id, actor_id, actor_role, from_status, to_status, reason, handoff, artifacts, result)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'applied') RETURNING *`,
+      [ticket.id, actor, role, ticket.status, ticket.status, 'Claimed from the queue', '', JSON.stringify([])]
+    );
+    return { ok: true, status: 200, ticket: updatedRows[0], transition: transitionRows[0] };
+  });
+}
+
 module.exports = {
   SOURCES,
   getTicket,
@@ -681,4 +794,5 @@ module.exports = {
   getTicketTransitions,
   createTicket,
   transitionTicket,
+  claimTicket,
 };

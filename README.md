@@ -311,8 +311,8 @@ onboarding document regenerating from a live workflow edit, and the
 project prompt bundle (whole project context, base-URL resolution,
 no token in the bundle).
 
-558 tests in total: state machine 21, tickets 54, tasks 12, projects 16, onboarding 12, agent-readable operating rules 10, public base URL 5, auth 27,
-admin 7, API keys 8, monitor 18, workflows 31, quick-create builder 11, documents 36, document tickets 16, document render 18, gantt helpers 27, admin nav 5, view hash 8, migrations 38, role lists 4, title bar 9, dashboard redesign 17, ticket detail redesign 20, projects redesign 15, admin API keys redesign 12, workflows redesign 15, workflow editor mobile redesign 17, documents redesign 23, tickets list redesign 16, workflow duplicate 12, repo guard 3, nginx allowlist 4, admin users 3, theme tints 8.
+570 tests in total: state machine 21, tickets 63, tasks 12, projects 16, onboarding 12, agent-readable operating rules 10, public base URL 5, auth 28,
+admin 7, API keys 8, monitor 18, workflows 31, quick-create builder 11, documents 36, document tickets 16, document render 18, gantt helpers 27, admin nav 5, view hash 8, migrations 38, role lists 4, title bar 9, dashboard redesign 17, ticket detail redesign 20, projects redesign 15, admin API keys redesign 12, workflows redesign 15, workflow editor mobile redesign 17, documents redesign 23, tickets list redesign 18, workflow duplicate 12, repo guard 3, nginx allowlist 4, admin users 3, theme tints 8.
 
 ## Accounts & authentication
 
@@ -369,12 +369,16 @@ admin 7, API keys 8, monitor 18, workflows 31, quick-create builder 11, document
   currently pick up, each with the transition they would take next. The
   trial covers decomposing and development only: a ticket in
   `requirement` waits for a leader, a ticket in `pending_dev` waits for
-  an engineer. Tickets already in progress are not claimable. The
-  frontend has a Claimable tab for this queue. The tab is not
-  redundant with the status tabs: a status tab lists every ticket in
-  that state, while Claimable lists only the tickets the caller can claim
-  by role (merged across roles for multi-role accounts), each with its
-  next transition.
+  an engineer. A ticket already in progress is not claimable while it
+  has an owner; if its owner was removed, it returns to the queue and
+  the role for its state can claim it in place with
+  `POST /api/tickets/:id/claim` (the next step is a `pickup` whose
+  destination is the ticket's current state). Clarification and
+  terminal tickets are never claimable. The frontend has a Claimable tab
+  for this queue. The tab is not redundant with the status tabs: a status
+  tab lists every ticket in that state, while Claimable lists only the
+  tickets the caller can claim by role (merged across roles for
+  multi-role accounts), each with its next transition.
 - **Agent assignment:** an admin assigns an agent account to one project
   from the Admin panel (per account: a project dropdown, or unassigned).
   Assignment is per account; an API key inherits its account's

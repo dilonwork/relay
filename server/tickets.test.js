@@ -238,6 +238,15 @@ class FakeDb {
       t.updated_at = new Date().toISOString();
       return { rows: [{ ...t }] };
     }
+    if (sql.startsWith('UPDATE tickets SET assignee_id')) {
+      // Claim in place (ticket c1ff08e3): conditional on the ticket
+      // still having no owner, so a concurrent claim loses.
+      const t = this.tickets.find((x) => x.id === params[1] && !x.assignee_id);
+      if (!t) return { rows: [] };
+      t.assignee_id = params[0];
+      t.updated_at = new Date().toISOString();
+      return { rows: [{ ...t }] };
+    }
     if (sql.startsWith('INSERT INTO ticket_transitions')) {
       // Creation variant carries NULL from_status and the workflow's
       // start state as to_status (a parameter now, not a fixed
@@ -905,8 +914,9 @@ async function main() {
       to: 'in_dev', role: 'engineer', kind: 'pickup', requires_reason: false, requires_handoff: false,
     });
 
-    // In-progress tickets are not claimable by anyone, and the PM has no
-    // claimable queue in the trial stages.
+    // Assigned in-progress tickets are not claimable by anyone (an
+    // unassigned one returns to the queue, ticket c1ff08e3), and the
+    // PM has no claimable queue in the trial stages.
     assert.deepEqual(await tickets.listClaimable(db, ['pm']), []);
     assert.deepEqual(await tickets.listClaimable(db, ['reviewer']), []);
     assert.deepEqual(await tickets.listClaimable(db, []), []);
@@ -914,6 +924,155 @@ async function main() {
     // An account holding both trial roles sees both queues.
     const both = await tickets.listClaimable(db, ['leader', 'engineer']);
     assert.deepEqual(both.map((t) => t.id).sort(), [a.ticket.id, b.ticket.id].sort());
+  });
+
+  // Reclaim (ticket c1ff08e3): a ticket whose owner was removed
+  // returns to the claimable queue. Seeded tickets have no owner,
+  // which is the state deleteUser leaves an unassigned ticket in.
+  await ok('reclaim (ticket c1ff08e3): an unassigned in_dev ticket is in the engineer queue with a claim-in-place next step', async () => {
+    const db = new FakeDb();
+    const ticket = db.seedTicket({ status: 'in_dev' });
+    const queue = await tickets.listClaimable(db, ['engineer']);
+    assert.equal(queue.length, 1);
+    assert.equal(queue[0].id, ticket.id);
+    assert.deepEqual(queue[0].next_transition, {
+      to: 'in_dev', role: 'engineer', kind: 'pickup', requires_reason: false, requires_handoff: false,
+    });
+    // No other role can claim it, and the list agrees with the queue.
+    assert.deepEqual(await tickets.listClaimable(db, ['reviewer']), []);
+    assert.deepEqual(await tickets.listClaimable(db, ['leader']), []);
+    const rows = await tickets.listTickets(db, null, undefined, undefined);
+    const attached = await tickets.attachNextTransitions(db, rows, ['engineer']);
+    assert.deepEqual(attached.find((r) => r.id === ticket.id).next_transition, queue[0].next_transition);
+  });
+
+  await ok('reclaim (ticket c1ff08e3): unassigned tickets in every working state return to their role queue', async () => {
+    const db = new FakeDb();
+    const decomposing = db.seedTicket({ status: 'decomposing' });
+    const inReview = db.seedTicket({ status: 'in_review' });
+    const inTest = db.seedTicket({ status: 'in_test' });
+    const deploying = db.seedTicket({ status: 'deploying' });
+    const pendingReview = db.seedTicket({ status: 'pending_review' });
+    const entryFor = async (roles, id) => (await tickets.listClaimable(db, roles)).find((q) => q.id === id);
+    const expectClaim = async (roles, id, to, role) => {
+      const entry = await entryFor(roles, id);
+      assert.ok(entry, `${id} in the ${roles} queue`);
+      assert.deepEqual(entry.next_transition, {
+        to, role, kind: 'pickup', requires_reason: false, requires_handoff: false,
+      });
+    };
+    await expectClaim(['leader'], decomposing.id, 'decomposing', 'leader');
+    await expectClaim(['reviewer'], inReview.id, 'in_review', 'reviewer');
+    await expectClaim(['tester'], inTest.id, 'in_test', 'tester');
+    await expectClaim(['deployer'], deploying.id, 'deploying', 'deployer');
+    // A queue state still claims through its pickup transition, and
+    // the reviewer queue holds both of their tickets.
+    await expectClaim(['reviewer'], pendingReview.id, 'in_review', 'reviewer');
+    assert.equal((await tickets.listClaimable(db, ['reviewer'])).length, 2);
+  });
+
+  await ok('reclaim (ticket c1ff08e3): assigned in-progress tickets are not claimable by anyone', async () => {
+    const db = new FakeDb();
+    const inReview = db.seedTicket({ status: 'in_review' });
+    inReview.assignee_id = 'rev-1';
+    const inTest = db.seedTicket({ status: 'in_test' });
+    inTest.assignee_id = 'qa-1';
+    assert.deepEqual(await tickets.listClaimable(db, ['reviewer']), []);
+    assert.deepEqual(await tickets.listClaimable(db, ['tester']), []);
+    assert.deepEqual(await tickets.listClaimable(db, ['leader', 'engineer', 'reviewer', 'tester', 'deployer']), []);
+  });
+
+  await ok('reclaim (ticket c1ff08e3): clarification and terminal states are never claimable, even unassigned', async () => {
+    const db = new FakeDb();
+    db.seedTicket({ status: 'needs_clarification' });
+    db.seedTicket({ status: 'needs_acceptance_clarification' });
+    db.seedTicket({ status: 'delivered' });
+    db.seedTicket({ status: 'cancelled' });
+    for (const roles of [['pm'], ['leader'], ['engineer'], ['reviewer'], ['tester'], ['deployer']]) {
+      assert.deepEqual(await tickets.listClaimable(db, roles), [], `${roles} queue`);
+    }
+  });
+
+  await ok('claim (ticket c1ff08e3): claiming assigns an unassigned ticket in place and audits it', async () => {
+    const db = new FakeDb();
+    const ticket = db.seedTicket({ status: 'in_dev' });
+    const res = await tickets.claimTicket(db, ticket.id, { actorId: 'dev-2', actorRoles: ['engineer'] });
+    assert.equal(res.ok, true, JSON.stringify(res));
+    assert.equal(res.status, 200);
+    assert.equal(res.ticket.status, 'in_dev');
+    assert.equal(res.ticket.assignee_id, 'dev-2');
+    assert.equal(res.transition.from_status, 'in_dev');
+    assert.equal(res.transition.to_status, 'in_dev');
+    assert.equal(res.transition.actor_role, 'engineer');
+    assert.equal(res.transition.reason, 'Claimed from the queue');
+    assert.equal(res.transition.result, 'applied');
+    const stored = await tickets.getTicket(db, ticket.id);
+    assert.equal(stored.assignee_id, 'dev-2');
+    // A second claim loses: the ticket has an owner now.
+    const again = await tickets.claimTicket(db, ticket.id, { actorId: 'dev-3', actorRoles: ['engineer'] });
+    assert.equal(again.ok, false);
+    assert.equal(again.status, 409);
+    assert.equal(again.error, 'already_assigned');
+  });
+
+  await ok('claim (ticket c1ff08e3): an assigned ticket, the wrong role, a terminal ticket and a clarification ticket are refused', async () => {
+    const db = new FakeDb();
+    const owned = db.seedTicket({ status: 'in_dev' });
+    owned.assignee_id = 'dev-1';
+    const free = db.seedTicket({ status: 'in_dev' });
+    const done = db.seedTicket({ status: 'delivered' });
+    const clarify = db.seedTicket({ status: 'needs_clarification' });
+    const ownedRes = await tickets.claimTicket(db, owned.id, { actorId: 'dev-2', actorRoles: ['engineer'] });
+    assert.equal(ownedRes.ok, false);
+    assert.equal(ownedRes.status, 409);
+    assert.equal(ownedRes.error, 'already_assigned');
+    const wrongRole = await tickets.claimTicket(db, free.id, { actorId: 'rev-1', actorRoles: ['reviewer'] });
+    assert.equal(wrongRole.ok, false);
+    assert.equal(wrongRole.status, 403);
+    assert.equal(wrongRole.error, 'wrong_role');
+    const terminal = await tickets.claimTicket(db, done.id, { actorId: 'ops-1', actorRoles: ['deployer'] });
+    assert.equal(terminal.ok, false);
+    assert.equal(terminal.status, 403);
+    assert.equal(terminal.error, 'terminal');
+    const clarifying = await tickets.claimTicket(db, clarify.id, { actorId: 'pm-1', actorRoles: ['pm'] });
+    assert.equal(clarifying.ok, false);
+    assert.equal(clarifying.status, 403);
+    assert.equal(clarifying.error, 'not_claimable');
+    const missing = await tickets.claimTicket(db, 'no-such-ticket', { actorId: 'dev-2', actorRoles: ['engineer'] });
+    assert.equal(missing.ok, false);
+    assert.equal(missing.status, 404);
+    assert.equal(missing.error, 'ticket_not_found');
+  });
+
+  await ok('claim (ticket c1ff08e3): a developer may not claim their own review or test', async () => {
+    const db = new FakeDb();
+    const inReview = db.seedTicket({ status: 'in_review' });
+    inReview.developer_id = 'dev-1';
+    const refused = await tickets.claimTicket(db, inReview.id, { actorId: 'dev-1', actorRoles: ['reviewer'] });
+    assert.equal(refused.ok, false);
+    assert.equal(refused.status, 403);
+    assert.equal(refused.error, 'self_work');
+    const inTest = db.seedTicket({ status: 'in_test' });
+    inTest.developer_id = 'dev-1';
+    const refusedTest = await tickets.claimTicket(db, inTest.id, { actorId: 'dev-1', actorRoles: ['tester'] });
+    assert.equal(refusedTest.ok, false);
+    assert.equal(refusedTest.error, 'self_work');
+    // Another reviewer may claim it.
+    const okClaim = await tickets.claimTicket(db, inReview.id, { actorId: 'rev-2', actorRoles: ['reviewer'] });
+    assert.equal(okClaim.ok, true, JSON.stringify(okClaim));
+    assert.equal(okClaim.ticket.assignee_id, 'rev-2');
+  });
+
+  await ok('claim (ticket c1ff08e3): an assigned account may not claim another project ticket', async () => {
+    const db = new FakeDb();
+    const ticket = db.seedTicket({ status: 'in_dev' });
+    ticket.project_id = 'proj-1';
+    const res = await tickets.claimTicket(db, ticket.id, {
+      actorId: 'dev-2', actorRoles: ['engineer'], assignedProjectId: 'proj-2',
+    });
+    assert.equal(res.ok, false);
+    assert.equal(res.status, 403);
+    assert.equal(res.error, 'out_of_scope');
   });
 
   await ok('multi-role agent can claim tickets in each of its roles states (ticket bc283a0b)', async () => {
@@ -1708,6 +1867,25 @@ async function main() {
         assert.deepEqual(step(attached, q.id), q.next_transition, `claimable row ${q.id} for ${roles}`);
       }
     }
+  });
+
+  await ok('next step: the queue and the list agree on reclaim rows (ticket c1ff08e3)', async () => {
+    const db = new FakeDb();
+    const inDev = db.seedTicket({ status: 'in_dev' });
+    const inReview = db.seedTicket({ status: 'in_review' });
+    const rows = await tickets.listTickets(db, null, undefined, undefined);
+    const step = (attached, id) => attached.find((r) => r.id === id).next_transition;
+    for (const roles of [['engineer'], ['reviewer'], ['engineer', 'reviewer']]) {
+      const queue = await tickets.listClaimable(db, roles);
+      const attached = await tickets.attachNextTransitions(db, rows, roles);
+      for (const q of queue) {
+        assert.deepEqual(step(attached, q.id), q.next_transition, `reclaim row ${q.id} for ${roles}`);
+      }
+    }
+    // The engineer sees the in_dev reclaim row and nothing else; the
+    // reviewer sees the in_review one.
+    assert.deepEqual((await tickets.listClaimable(db, ['engineer'])).map((q) => q.id), [inDev.id]);
+    assert.deepEqual((await tickets.listClaimable(db, ['reviewer'])).map((q) => q.id), [inReview.id]);
   });
 
   await ok('closure guard (ticket 0ae37c3b): move to delivered with open Tasks is 409 tasks_incomplete, names them, and is audited', async () => {

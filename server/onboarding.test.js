@@ -345,6 +345,7 @@ async function main() {
       assert.ok(md.includes('`X-API-Key`'), 'bundle explains header auth');
       assert.ok(md.includes('GET http://relay.example:3000/api/queue'), 'bundle lists endpoints with the base URL');
       assert.ok(md.includes('POST http://relay.example:3000/api/tickets/:id/transitions'), 'bundle lists the transition endpoint');
+      assert.ok(md.includes('POST http://relay.example:3000/api/tickets/:id/claim'), 'bundle lists the claim endpoint (ticket c1ff08e3)');
       assert.ok(!md.includes('rl_'), 'the bundle never contains a token');
       assert.ok(md.includes('You are joining the project **Acme Support**'), 'bundle names the assignment');
     } finally {

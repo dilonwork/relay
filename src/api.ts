@@ -372,6 +372,13 @@ export const api = {
       `/api/tickets/${encodeURIComponent(id)}/transitions`,
       { method: 'POST', body: JSON.stringify(payload) }
     ),
+  // Claim an unassigned ticket in place (ticket c1ff08e3): the caller
+  // becomes the owner without the ticket moving state.
+  claimTicket: (id: string) =>
+    request<{ ticket: Ticket; transition: Transition }>(
+      `/api/tickets/${encodeURIComponent(id)}/claim`,
+      { method: 'POST' }
+    ),
   assignTicketProject: (id: string, projectId: string | null) =>
     request<Ticket>(`/api/tickets/${encodeURIComponent(id)}/project`, {
       method: 'PATCH',
