@@ -346,9 +346,17 @@ admin 7, API keys 8, monitor 18, workflows 31, quick-create builder 11, document
   overview (`GET /api/admin/overview`: user count and list without
   password hashes, ticket counts by status, total transition count, the
   10 most recent audit entries, database health). The last active admin
-  cannot be deactivated or stripped of the admin role. Admin does **not**
-  bypass workflow role checks: to move a ticket, the admin's account must
-  hold the role that transition requires, like anyone else.
+  cannot be deactivated or stripped of the admin role — and cannot be
+  removed either. An admin can remove any other account
+  (`DELETE /api/admin/users/:id`): in one transaction it unassigns the
+  account's in-progress tickets (back to the Claimable queue), revokes
+  all of its API keys, ends all of its sessions, and deletes the row;
+  the audit history keeps the removed id. Removal is refused for the
+  signed-in admin themself (403 `cannot_delete_self`), for the last
+  active admin (409 `last_admin`), and for an unknown account (404
+  `user_not_found`); in-progress tickets do not block it. Admin does
+  **not** bypass workflow role checks: to move a ticket, the admin's
+  account must hold the role that transition requires, like anyone else.
 
 ## Agent access
 
@@ -429,11 +437,14 @@ admin 7, API keys 8, monitor 18, workflows 31, quick-create builder 11, document
   empty until an admin resets it).
 - **Users screen:** the Admin Users page splits into Humans and Agents
   subtabs. Humans show username, display name, roles, project and
-  active, with Edit, Project, Reset password and Responsibilities; they
-  have no key actions and no key column. Agents show username, role,
-  project, API key status, last seen and chat room, with Edit, Keys,
-  Project, Deactivate and Responsibilities; they have no password
-  actions. Creating a human takes a password (min 8 characters) and
+  active, with Edit, Project, Reset password, Remove and
+  Responsibilities; they have no key actions and no key column. Agents
+  show username, role, project, API key status, last seen and chat room,
+  with Edit, Keys, Project, Deactivate, Remove and Responsibilities;
+  they have no password actions. Remove is a danger-styled link on
+  every row (hidden on the signed-in admin's own row) with a two-step
+  confirm panel stating what removal does (see [Accounts &
+  authentication](#accounts--authentication)). Creating a human takes a password (min 8 characters) and
   role checkboxes; creating an agent takes a username, one or more workflow roles (checkboxes)
   and a project (internal projects only, or assign later) and returns
   its first API key exactly once, in a notice banner with a Copy
@@ -476,8 +487,9 @@ each sub-page owns its own form state and handlers.
 - **Users:** Humans / Agents subtabs (see [Users split](#users-split-humans-and-agents)):
   user list with create, edit (display name, roles, kind, active
   flag), project assignment (the Agent assignment dropdown, or
-  unassigned) and password reset (which revokes that user's sessions;
-  refused for agent accounts).
+  unassigned), password reset (which revokes that user's sessions;
+  refused for agent accounts) and removal (see [Accounts &
+  authentication](#accounts--authentication)).
 - **Onboarding:** onboarding packages for external projects, per role
   agent — masked API key, live onboarding document with Regenerate,
   project prompt bundle, and the chat-room recommendation (see [Users split](#users-split-humans-and-agents)).
@@ -732,6 +744,13 @@ each sub-page owns its own form state and handlers.
   project once when the view is entered (all tickets plus the claimable
   queue, in parallel) and derives tabs and counts client-side, so
   switching tabs needs no round trip.
+- **Filter and group on ALL:** a status-filter chip row on the ALL tab
+  only (All + one chip per status group, counts from the searched set;
+  tapping a chip filters and scrolls to the top) and a group-by toggle,
+  default ON, with collapsible group headers in workflow order (e.g.
+  'Working - 5'). Search, chip filter and grouping combine. The
+  toolbar (search, density, chips) is sticky and never overlaps the
+  title bar.
 - **Next step everywhere:** a Next-step column renders on every tab, not
   just Claimable — the server attaches `next_transition` to every row
   the list endpoint returns, so a ticket in any state shows the
@@ -745,9 +764,12 @@ each sub-page owns its own form state and handlers.
   public user directory (short id until the directory arrives, or when
   the id is unresolvable). The Updated cell carries a stalled amber dot
   with a tooltip when a ticket has not changed for 36h+ in a working
-  state (the same rule as the Gantt marker). On mobile the cards carry
-  the same fields (id, assignee name, next step, stalled dot) as the
-  table. See the design doc, ch. 27.
+  state (the same rule as the Gantt marker). On mobile the rows are
+  collapsed — 2-line Comfortable rows and 1-line Compact rows; tap
+  expands a row in place to the full card, and tapping the expanded card
+  opens the ticket detail as before. The 10-tab row scrolls horizontally
+  instead of wrapping. The cards carry the same fields (id, assignee
+  name, next step, stalled dot) as the table. See the design doc, ch. 27.
 
 ## Gantt view
 
@@ -861,6 +883,7 @@ log records the role actually exercised.
 | `POST` | `/api/admin/users` | Create an account (admin only); accepts `kind` (human default) |
 | `POST` | `/api/admin/users/agents` | Create an agent account with its first API key; body takes `roles` (one or more workflow roles, at least one required); full key returned exactly once (admin only) |
 | `PATCH` | `/api/admin/users/:id` | Edit display name, roles, kind, active flag (admin only) |
+| `DELETE` | `/api/admin/users/:id` | Remove an account (admin only): unassigns in-progress tickets, revokes API keys, ends sessions, deletes the row; refused for self (403 `cannot_delete_self`), last active admin (409 `last_admin`), unknown account (404 `user_not_found`) |
 | `GET` | `/api/admin/projects/:id/onboarding/:role` | Onboarding package for a role agent: masked key, live document, project prompt bundle, chat room (admin only) |
 | `GET` | `/api/operating-rules` | The live operating rules for any authenticated agent: `{work_mode_rules: [{id, text}], standing_rules: [{id, text}]}`, read from `server/operatingRules.js` on every call |
 | `GET` | `/api/projects/:id/onboarding/:role` | The caller's own onboarding package: same live document and prompt bundle as the admin endpoint, but only for the caller's own project and a role it holds (anything else is 403 `out_of_scope`), and with no key data of any kind |
