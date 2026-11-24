@@ -494,7 +494,7 @@ async function transitionTicket(db, ticketId, { actorId, actorRoles, toStatus, r
   });
 }
 
-// Trial-stage claim queue (design doc ch. 12): tickets waiting for the
+// Claim queue (design doc ch. 12): tickets waiting for the
 // caller's roles to pick them up. A ticket is claimable when it has no
 // owner and sits in a state where work is waiting to be picked up:
 // every non-terminal state except the clarification states, which wait

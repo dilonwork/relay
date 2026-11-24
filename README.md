@@ -77,8 +77,7 @@ capture list.
   is subject to the same role and self-work checks as a session. Keys are
   revocable and only a scrypt hash is stored — the full key is shown
   exactly once, at creation. `GET /api/queue` lists the tickets the
-  caller's roles can claim in the trial stages (decomposing and
-  development). The two trial handoffs (`decomposing` → `pending_dev`,
+  caller's roles can claim (every claimable state). The two trial handoffs (`decomposing` → `pending_dev`,
   `in_dev` → `pending_review`) require a handoff note describing what was
   produced for the next role; the note is stored on the audit row, and the
   next role can send the ticket back to `needs_clarification` when it is
@@ -366,10 +365,12 @@ admin 7, API keys 8, monitor 18, workflows 31, quick-create builder 11, document
   `admin` role. Revoking a key (or deactivating its account) makes it
   stop working immediately. Last use is recorded per key.
 - **Claim queue:** `GET /api/queue` returns the tickets the caller can
-  currently pick up, each with the transition they would take next. The
-  trial covers decomposing and development only: a ticket in
-  `requirement` waits for a leader, a ticket in `pending_dev` waits for
-  an engineer. A ticket already in progress is not claimable while it
+  currently pick up, each with the transition they would take next. Any
+  non-terminal state except the two clarification states is claimable
+  while its assignee is null: a ticket in `requirement` waits for a
+  leader, a ticket in `pending_dev` waits for an engineer, an unassigned
+  ticket in `in_dev` waits for an engineer to claim it in place, and so
+  on. A ticket already in progress is not claimable while it
   has an owner; if its owner was removed, it returns to the queue and
   the role for its state can claim it in place with
   `POST /api/tickets/:id/claim` (the next step is a `pickup` whose
@@ -834,7 +835,7 @@ log records the role actually exercised.
 | `PATCH` | `/api/tasks/:taskId` | Update a Task (`title` and/or `status`); title is leader-only, status is leader or engineer; invalid status or empty title answers 400 |
 | `DELETE` | `/api/tasks/:taskId` | Delete a Task (leader only) |
 | `PATCH` | `/api/tickets/:id/project` | Assign a ticket to a project, or back to uncategorized (`project_id` null; PM only) |
-| `GET` | `/api/queue?project_id=<id\|none>` | Tickets the caller can claim in the trial stages, with the next transition; optionally filtered by project; an assigned caller only sees their project's queue |
+| `GET` | `/api/queue?project_id=<id\|none>` | Tickets the caller can claim, with the next transition; optionally filtered by project; an assigned caller only sees their project's queue |
 | `GET` | `/api/monitor/stalled` | Stalled tickets in the caller's project scope, with reminder state and flags (PM only) |
 | `POST` | `/api/monitor/stalled/:id/reminded` | Record that a reminder was sent for a stalled ticket (PM only) |
 | `POST` | `/api/monitor/stalled/:id/escalated` | Record that a stalled ticket was escalated to the main chat (PM only, after 3 reminders) |

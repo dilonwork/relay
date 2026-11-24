@@ -295,7 +295,7 @@ app.delete('/api/tasks/:taskId', async (req, res) => {
   }
 });
 
-// Trial-stage claim queue (design doc ch. 12): the tickets the caller
+// Claim queue (design doc ch. 12): the tickets the caller
 // can currently pick up, each with the transition they would take next.
 app.get('/api/queue', async (req, res) => {
   try {
