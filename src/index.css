@@ -334,10 +334,10 @@ body {
     min-width: 44px;
     min-height: 44px;
     padding: 8px 10px;
-    border: 1px solid #cfdbe4;
+    border: 1px solid var(--border);
     border-radius: 6px;
-    background: #fff;
-    color: #0f2a3d;
+    background: var(--surface);
+    color: var(--text);
     font-size: 18px;
     cursor: pointer;
   }
@@ -550,7 +550,7 @@ h3.section { margin: 14px 0 6px; font-size: 13px; color: var(--text); }
 .tabs button .count { opacity: 0.75; margin-left: 4px; }
 /* Claimable tab with work waiting: amber while it is not the active
    tab, so the queue that needs attention stands out. */
-.tabs button.claimable:not(.active) { background: #fef3c7; border-color: #d97706; color: #92400e; }
+.tabs button.claimable:not(.active) { background: var(--tint-amber-bg); border-color: var(--tint-amber-border); color: var(--tint-amber-text); }
 
 /* Tickets list toolbar (ticket 7da410a5): search + density + the
    one-line project chip, above the tabs.
@@ -679,8 +679,8 @@ table { width: 100%; border-collapse: collapse; font-size: 13px; }
 th { text-align: left; color: var(--text-muted-strong); border-bottom: 2px solid #d9e1e8; padding: 6px 8px; }
 td { border-bottom: 1px solid #e2e8ee; padding: 7px 8px; vertical-align: top; }
 tbody tr { cursor: pointer; }
-tbody tr:hover { background: #eef6f6; }
-tbody tr.selected { background: #eef6f6; }
+tbody tr:hover { background: var(--hover-bg); }
+tbody tr.selected { background: var(--card-selected); }
 
 /* Admin Users tables (ticket 62a85e4f): the 6/7-column tables are
    wider than a phone, and without a scroll container the columns
@@ -728,13 +728,13 @@ label.field { display: block; font-weight: 600; margin: 10px 0 4px 0; color: var
 
 input[type="text"], select, textarea {
   width: 100%;
-  border: 1px solid #cfdbe4;
+  border: 1px solid var(--input-border);
   border-radius: 6px;
   padding: 8px 10px;
   font-size: 14px;
   font-family: inherit;
-  background: #fff;
-  color: #1a2332;
+  background: var(--input-bg);
+  color: var(--input-text);
 }
 
 .actor-bar input[type="text"], .actor-bar select { width: auto; }
@@ -1230,7 +1230,7 @@ button.link {
 .document-markdown h3 { font-size: 15px; margin: 14px 0 6px 0; color: var(--text); }
 .document-markdown p { margin: 0 0 10px 0; }
 .document-markdown ul, .document-markdown ol { margin: 0 0 10px 0; padding-left: 22px; }
-.document-markdown pre { background: #f2f5f7; border: 1px solid #e2e8ee; border-radius: 6px; padding: 10px; overflow-x: auto; }
+.document-markdown pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px; padding: 10px; overflow-x: auto; }
 .document-markdown code { font-size: 13px; }
 .document-markdown table { display: block; max-width: 100%; overflow-x: auto; }
 .document-markdown blockquote { border-left: 3px solid #cfdbe4; margin: 0 0 10px 0; padding: 4px 12px; color: var(--text-muted-strong); }
@@ -1260,7 +1260,7 @@ button.primary.small { min-height: 0; padding: 4px 10px; font-size: 13px; }
 /* Documents redesign (ticket b2d67623): amber-outlined button for
    the Not OK action — visible, distinct, and clearly a different
    kind of action from the dark Implement button. */
-button.amber-outline { border: 1px solid #d97706; color: #92400e; background: #fff; border-radius: 5px; padding: 4px 10px; font-size: 13px; cursor: pointer; }
+button.amber-outline { border: 1px solid #d97706; color: var(--tint-amber-text); background: var(--card-bg); border-radius: 5px; padding: 4px 10px; font-size: 13px; cursor: pointer; }
 button.amber-outline:disabled { opacity: 0.5; cursor: default; }
 /* The "+ Category" chip is dashed, so it reads as an action, not a
    filter. */
@@ -1339,9 +1339,9 @@ button.amber-outline:disabled { opacity: 0.5; cursor: default; }
   }
   .editor-card .section-nav button {
     flex: 0 0 auto;
-    border: 1px solid #c4d0da;
+    border: 1px solid var(--border);
     border-radius: 999px;
-    background: #fff;
+    background: var(--surface);
     padding: 8px 14px;
     min-height: 44px;
     white-space: nowrap;
@@ -1353,14 +1353,14 @@ button.amber-outline:disabled { opacity: 0.5; cursor: default; }
   .editor-table thead { display: none; }
   .editor-table tbody { display: block; }
   .editor-table tbody tr { cursor: default; }
-  .editor-table tbody tr:hover { background: #fff; }
+  .editor-table tbody tr:hover { background: var(--hover-bg); }
   .editor-table tr {
     display: block;
-    border: 1px solid #d9e1e8;
+    border: 1px solid var(--card-border);
     border-radius: 8px;
     padding: 12px;
     margin-bottom: 10px;
-    background: #fff;
+    background: var(--card-bg);
   }
   .editor-table tr::before {
     content: attr(data-heading);
