@@ -214,6 +214,30 @@ function checkBanners(css, lightVars, darkVars) {
   }
 }
 
+// Ticket 166fe578: the body rule sets the page background and the
+// inherited text color. It used hard-coded light values (#f4f7f9 /
+// #1a2332), so in Dark theme every element inheriting the body color
+// (table cells, detail values, plain paragraphs) sat dark-on-dark at
+// 1.08:1 — essentially invisible. The rule must use var(--bg) /
+// var(--text); the pairs below are checked in both themes, against
+// the page background and against card surfaces.
+function checkBodyRule(css, lightVars, darkVars) {
+  const body = ruleBody(css, 'body');
+  for (const [prop, variable] of [['background', '--bg'], ['color', '--text']]) {
+    const re = new RegExp(prop + ':[^;]*var\\(' + variable.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\)');
+    assert.ok(re.test(body), `body ${prop} must use var(${variable}) (ticket 166fe578)`);
+  }
+  for (const [theme, vars] of [['light', lightVars], ['dark', darkVars]]) {
+    for (const bgVar of ['bg', 'card-bg']) {
+      const ratio = contrast(vars['text'], vars[bgVar]);
+      assert.ok(
+        ratio >= 4.5,
+        `${theme}: --text (${vars['text']}) on --${bgVar} (${vars[bgVar]}) is ${ratio.toFixed(2)}:1, below 4.5:1`,
+      );
+    }
+  }
+}
+
 (async () => {
   const css = fs.readFileSync(CSS_PATH, 'utf8');
   const light = parseVars(readBlock(css, ':root'));
@@ -250,6 +274,10 @@ function checkBanners(css, lightVars, darkVars) {
 
   await ok('Admin banners use tint variables and all children stay readable (ticket a1efa937)', () => {
     checkBanners(css, light, dark);
+  });
+
+  await ok('body rule uses theme variables and inherited text stays readable (ticket 166fe578)', () => {
+    checkBodyRule(css, light, dark);
   });
 
   console.log(`\n${passed} theme tint tests passed.`);
