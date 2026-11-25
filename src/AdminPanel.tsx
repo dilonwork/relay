@@ -24,6 +24,10 @@ export default function AdminPanel({
   workflowsCreateRequest,
   onWorkflowsFormOpenChange,
   onWorkflowsCreateRequestConsumed,
+  usersCreateRequest,
+  onUsersCreateFormOpenChange,
+  onUsersCreateRequestConsumed,
+  onUsersTabChange,
 }: {
   tab: AdminTab;
   // The signed-in admin, threaded to the Users sub-page so it can
@@ -42,6 +46,15 @@ export default function AdminPanel({
   // The Workflows sub-page reports a create request as consumed, so
   // App resets the counter (review return, ticket b56b1145).
   onWorkflowsCreateRequestConsumed: () => void;
+  // Title-bar "+ New human / + New agent" (ticket ea0c9a68): same
+  // counter pattern as Workflows — App bumps the counter per click,
+  // the Users sub-page opens a fresh create form per click and
+  // reports the form's open state (so App hides the action while the
+  // form is open) and the active tab (so the action label follows it).
+  usersCreateRequest: number;
+  onUsersCreateFormOpenChange: (open: boolean) => void;
+  onUsersCreateRequestConsumed: () => void;
+  onUsersTabChange: (tab: 'humans' | 'agents') => void;
 }) {
   const [overview, setOverview] = useState<AdminOverview | null>(null);
   const [users, setUsers] = useState<User[]>([]);
@@ -104,6 +117,10 @@ export default function AdminPanel({
           setBusy={setBusy}
           onRefresh={loadAdmin}
           onOpenKeys={openKeysForUser}
+          createRequest={usersCreateRequest}
+          onCreateRequestConsumed={onUsersCreateRequestConsumed}
+          onCreateOpenChange={onUsersCreateFormOpenChange}
+          onUserTabChange={onUsersTabChange}
         />
       ) : tab === 'onboarding' ? (
         <OnboardingPanel users={users} projects={projects} />
