@@ -129,6 +129,22 @@ export function filterTicketsByStatus<T extends { status: string }>(
   return tickets.filter((ticket) => ticket.status === status);
 }
 
+// Admin Users redesign (ticket ea0c9a68): the toolbar search + role +
+// project filters, client-side over the users already loaded. The
+// search matches username or display name; 'all' means no filter on
+// that axis. Returns a copy.
+export function filterAdminUsers<
+  T extends { username: string; display_name: string; roles: string[]; project_id: string | null }
+>(users: T[], query: string, role: string, project: string): T[] {
+  const q = query.trim().toLowerCase();
+  return users.filter((u) => {
+    if (q && !(u.username + ' ' + (u.display_name || '')).toLowerCase().includes(q)) return false;
+    if (role !== 'all' && !u.roles.includes(role)) return false;
+    if (project !== 'all' && u.project_id !== project) return false;
+    return true;
+  });
+}
+
 export function groupTicketsByStatus<T extends { status: string }>(
   tickets: T[]
 ): { group: { key: string; label: string; statuses: string[] }; rows: T[] }[] {

@@ -152,6 +152,13 @@ export default function App() {
   // the title bar; the counter opens the panel's create form.
   const [documentsCreateRequest, setDocumentsCreateRequest] = useState(0);
   const [documentsCreateFormOpen, setDocumentsCreateFormOpen] = useState(false);
+  // Admin - Users redesign (ticket ea0c9a68): "+ New human / + New
+  // agent" lives in the title bar; the counter opens the panel's
+  // create form, and the label follows the Users tab the panel
+  // reports. Same counter pattern as Workflows and Documents.
+  const [usersCreateRequest, setUsersCreateRequest] = useState(0);
+  const [usersCreateFormOpen, setUsersCreateFormOpen] = useState(false);
+  const [usersTab, setUsersTab] = useState<'humans' | 'agents'>('humans');
   // Every ticket, unfiltered, for the Projects page attention signals
   // (same load as the Dashboard; see loadProjectTickets).
   const [projectTickets, setProjectTickets] = useState<Ticket[]>([]);
@@ -1208,6 +1215,16 @@ export default function App() {
             >
               + New document
             </button>
+          ) : mainView === 'admin-users' && isAdmin && !usersCreateFormOpen ? (
+            // Admin - Users redesign (ticket ea0c9a68): Create moves to
+            // the title bar; the label follows the Users tab.
+            <button
+              type="button"
+              className="primary"
+              onClick={() => setUsersCreateRequest((n) => n + 1)}
+            >
+              {usersTab === 'humans' ? '+ New human' : '+ New agent'}
+            </button>
           ) : undefined
         }
         onRefresh={handleRefresh}
@@ -1232,6 +1249,10 @@ export default function App() {
           workflowsCreateRequest={workflowsCreateRequest}
           onWorkflowsFormOpenChange={setWorkflowsFormOpen}
           onWorkflowsCreateRequestConsumed={() => setWorkflowsCreateRequest(0)}
+          usersCreateRequest={usersCreateRequest}
+          onUsersCreateFormOpenChange={setUsersCreateFormOpen}
+          onUsersCreateRequestConsumed={() => setUsersCreateRequest(0)}
+          onUsersTabChange={setUsersTab}
         />
       ) : mainView === 'documents' ? (
         <DocumentsPanel

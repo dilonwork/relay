@@ -399,6 +399,7 @@ body {
   .collapse-toggle { min-height: 44px; min-width: 44px; padding: 8px 10px; }
   .tabs button { min-height: 44px; padding: 8px 14px; }
   button.primary { min-height: 44px; }
+  .admin-users .smallbtn { min-height: 44px; }
   button.link { min-height: 44px; display: inline-flex; align-items: center; }
 
   /* Ticket list: cards replace the 6-column table. */
@@ -700,6 +701,35 @@ tbody tr.selected { background: var(--card-selected); }
 .table-scroll { overflow-x: auto; }
 .table-scroll table { display: table; max-width: none; }
 .admin-users-table th, .admin-users-table td { white-space: nowrap; }
+
+/* Admin Users redesign (ticket ea0c9a68): tabs with sublabels, the
+   search + filters toolbar, the small dark Edit button, the amber
+   Reset password and red Deactivate links, the detail row under the
+   clicked user, grouped role checkboxes, and the amber one-time key
+   banner. Every colour is a theme variable — no hard-coded hex here.
+   Contrast pairs (text on background, WCAG, both themes): Edit button
+   5.01 / 7.86, Reset password 7.09 / 10.15, Deactivate 7.01 / 7.71,
+   Active pill 6.49 / 5.23, Inactive pill 12.79 / 8.40, Never used pill
+   6.37 / 10.39, tab sublabel 5.48 / 5.71 (inactive) and 5.01 / 7.86
+   (active), key banner text 15.22 / 7.36, detail row text 15.78 /
+   11.87 — all above the 4.5:1 floor. The key banner's muted
+   paragraph needs the full text colour: --text-muted-strong on the
+   dark amber background is only 3.54:1. The detail row's cells need
+   white-space normal: the table's no-wrap rule would otherwise force
+   the panel onto one line. */
+.admin-users .tabs button small { display: block; font-size: 11px; font-weight: 400; color: var(--text-muted-strong); }
+.admin-users .tabs button.active small { color: inherit; }
+.admin-users .toolbar { display: flex; gap: 8px; align-items: center; margin: 10px 0; flex-wrap: wrap; }
+.admin-users .toolbar input[type="text"] { flex: 1; min-width: 180px; }
+.admin-users .toolbar select { width: auto; }
+.admin-users .smallbtn { background: var(--accent); color: var(--surface); border: none; border-radius: 5px; padding: 5px 11px; font-size: 12px; cursor: pointer; }
+.admin-users .detailrow td { white-space: normal; background: var(--bg); }
+.admin-users .detailbox { border: 1px solid var(--card-border); border-radius: 6px; padding: 12px 14px; font-size: 13px; background: var(--card-bg); color: var(--text); }
+.admin-users .detailbox h4 { margin: 0 0 6px; font-size: 14px; }
+.admin-users .rolegroup { font-size: 12px; color: var(--text-muted-strong); font-weight: 700; margin: 10px 0 2px; }
+.admin-users .keybanner { border: 1px solid var(--tint-amber-text); border-left: 4px solid var(--tint-amber-text); background: var(--tint-amber-bg-soft); border-radius: 6px; padding: 12px 14px; margin: 10px 0; font-size: 13px; color: var(--text); }
+.admin-users .keybanner .muted { color: var(--text); }
+.admin-users .keybanner code { font-size: 13px; word-break: break-all; }
 
 .badge {
   display: inline-block;
