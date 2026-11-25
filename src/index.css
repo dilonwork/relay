@@ -550,7 +550,7 @@ h3.section { margin: 14px 0 6px; font-size: 13px; color: var(--text); }
 .tabs button .count { opacity: 0.75; margin-left: 4px; }
 /* Claimable tab with work waiting: amber while it is not the active
    tab, so the queue that needs attention stands out. */
-.tabs button.claimable:not(.active) { background: var(--tint-amber-bg); border-color: var(--tint-amber-border); color: var(--tint-amber-text); }
+.tabs button.claimable:not(.active) { background: var(--tint-amber-bg); border-color: #d97706; color: var(--tint-amber-text); }
 
 /* Tickets list toolbar (ticket 7da410a5): search + density + the
    one-line project chip, above the tabs.
