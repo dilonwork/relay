@@ -436,25 +436,31 @@ admin 7, API keys 8, monitor 18, workflows 31, quick-create builder 11, document
   the password and revokes sessions; agent → human leaves the password
   empty until an admin resets it).
 - **Users screen:** the Admin Users page splits into Humans and Agents
-  subtabs, with a toolbar providing search + role + project filters
-  (client-side over loaded users). Creating accounts sits behind a title-bar
-  action ("+ New human" / "+ New agent", label matching the active tab, closed by default).
-  Action panels (Edit, Reset password, Assign project, Responsibilities, Remove)
-  render in an expandable detail row under the clicked user, with only one panel
-  open at a time. Switching tabs while a fresh agent API key is displayed waits for
-  confirmation so the one-time key is not lost silently. Humans show username, display name, roles, project and
+  subtabs. Humans show username, display name, roles, project and
   active, with Edit, Project, Reset password, Remove and
   Responsibilities; they have no key actions and no key column. Agents
   show username, role, project, API key status, last seen and chat room,
   with Edit, Keys, Project, Deactivate, Remove and Responsibilities;
-  they have no password actions. Remove is a danger-styled link on
+  they have no password actions. Edit is a dark button, Reset password
+  renders amber and Deactivate red, and Active is a green / grey status
+  pill instead of Yes/No. The edit, assign, reset, responsibilities and
+  remove panels open as a detail row under the clicked user, with the
+  user's name in the heading, and only one panel is open at a time.
+  Remove is a danger-styled link on
   every row (hidden on the signed-in admin's own row) with a two-step
   confirm panel stating what removal does (see [Accounts &
-  authentication](#accounts--authentication)). Creating a human takes a password (min 8 characters) and
-  role checkboxes; creating an agent takes a username, one or more workflow roles (checkboxes)
-  and a project (internal projects only, or assign later) and returns
-  its first API key exactly once, in a notice banner with a Copy
-  button. Last seen reuses `api_keys.last_used_at`. The chat room is a
+  authentication](#accounts--authentication)). Creating an account
+  opens from the title bar ("+ New human" / "+ New agent", following
+  the active tab); creating a human takes a password (min 8 characters)
+  and role checkboxes, creating an agent takes a username, one or more
+  workflow roles (checkboxes) and a project (internal projects only, or
+  assign later), and roles are grouped Workflow / System in both forms.
+  Creating an agent returns its first API key exactly once, in a notice
+  banner with a Copy button — the banner warns the key is lost for good
+  on tab switch or leaving, and switching tabs while it is on screen
+  waits for confirmation. Last seen reuses `api_keys.last_used_at`; an
+  agent with an active key that was never used shows an amber "Never
+  used" pill. The chat room is a
   display label derived from role + project (`"<Project> <Role>"`) —
   Relay has no chat system.
 - **Onboarding package:** admin-only, on the Admin Onboarding sub-page
@@ -487,8 +493,32 @@ is split into five sub-pages, switched from the sidebar Admin group
 (defaulting to Overview); the shell owns the shared data load, and
 each sub-page owns its own form state and handlers.
 
-- **Overview:** health strip with a "Needs attention" card (priority order: database down, tickets waiting on clarification, rejected transitions in the recent audit; "Nothing needs attention." when clear), system metrics (database health, user count, ticket count, transition count), tickets by status as grouped proportional bars (Active / Done groups, with a "Show empty states" toggle for zero-count rows; clicking a status row opens the Tickets list filtered to that status), and the recent audit log showing actor display names (short id fallback) with result chips and a role filter (all / applied / rejected + role select).
-- **Users:** Humans / Agents subtabs (see [Users split](#users-split-humans-and-agents)) with a search + role + project toolbar: title-bar "+ New human / + New agent" action, single-panel detail rows under clicked users (Edit, Assign project, Reset password, Responsibilities, Remove), and key-preservation confirmation when switching tabs with a fresh agent key displayed (see [Accounts & authentication](#accounts--authentication)).
+- **Overview:** a health strip on top — Database as a status pill
+  (green OK / red UNREACHABLE), Users / Tickets / Transitions stat
+  cards, and a "Needs attention" card naming the current problem
+  (database down, tickets waiting on clarification, or a rejected
+  transition in the recent audit; "Nothing needs attention." when
+  clear) — then tickets by status as grouped proportional bars
+  (Active / Done groups; zero-count states behind a "Show empty
+  states" toggle; clarification states amber with a warning mark when
+  they hold tickets; clicking a status row opens the Tickets list
+  filtered to that status), and the most recent audit entries with the
+  actor's display name (short id fallback) plus result chips (All /
+  Applied / Rejected) and a role select.
+- **Users:** Humans / Agents subtabs (see [Users split](#users-split-humans-and-agents)):
+  a toolbar with search (username or display name) and role and
+  project filters over the loaded users, with a "Showing N of M"
+  count; the create form sits behind a "+ New human / + New agent"
+  button in the title bar (closed by default; the label follows the
+  active tab); user list with edit (display name, roles, kind, active
+  flag), project assignment (the Agent assignment dropdown, or
+  unassigned), password reset (which revokes that user's sessions;
+  refused for agent accounts) and removal (see [Accounts &
+  authentication](#accounts--authentication)); the edit, assign,
+  reset, responsibilities and remove panels open as a detail row under
+  the clicked user, one at a time. Switching tabs while a fresh agent
+  API key is on screen waits for confirmation, so the one-time key is
+  never lost silently.
 - **Onboarding:** onboarding packages for external projects, per role
   agent — masked API key, live onboarding document with Regenerate,
   project prompt bundle, and the chat-room recommendation (see [Users split](#users-split-humans-and-agents)).
@@ -568,7 +598,27 @@ each sub-page owns its own form state and handlers.
   them into a linear flow (first state is the start, last is
   terminal); backward transitions and other advanced settings live in
   the Advanced section and are not required.
-- **Tickets choose a workflow when created:** the New ticket form features a guided form with Title (required, full width), Goal (required), Scope and Done when (optional) that compose into one description (`Goal: ...\n\nScope: ...\n\nDone when: ...`, only filled parts) with a live preview of the composed text. Source is chosen via two radio cards (Project: planned work, enters at Requirement; On-call: incident / breakage / urgent fix). The workflow dropdown defaults to "Use the project's default workflow", with a hint line naming the project's chosen workflow (or the built-in flow when uncategorized / none chosen), alongside the built-in 14-state development flow and custom workflows. Inline validation errors appear under fields, and the PM gate is shown as a visible amber notice above the card. On success, a green confirmation panel ("Ticket created — <title>. It opens in <start state> on the <workflow> workflow, under <project>. The Leader will decompose it from there.") offers "Open the ticket" and "Create another" (which retains source, project, and workflow while clearing guided fields). A ticket follows its workflow for its whole life; the transition table, claimable queue, stall monitor and status labels all follow the ticket's own workflow. A workflow with live tickets cannot be deleted, and a state with live tickets cannot be removed.
+- **Tickets choose a workflow when created:** the New ticket form is a
+  guided form — Title (required, full width), Goal (required), Scope and
+  Done when (optional); the three compose into one description ("Goal:
+  ...\n\nScope: ...\n\nDone when: ...", only the filled parts) with a
+  live preview of the composed text. Source is two radio cards
+  (Project: planned work, enters at Requirement; On-call: incident /
+  breakage / urgent fix) instead of a dropdown. The workflow empty
+  option reads "Use the project's default workflow", with a hint line
+  naming the project's chosen workflow (or the built-in flow when
+  uncategorized / none chosen). Title and goal are validated inline;
+  the PM gate is a visible amber notice above the card. On success the
+  page shows a green confirmation ("Ticket created — <title>. It opens
+  in <start state> on the <workflow> workflow, under <project>. The
+  Leader will decompose it from there.") with "Open the ticket" and
+  "Create another"; Create another keeps source, project and workflow
+  and only clears the guided fields. The form offers the built-in
+  14-state development flow plus the project's (and global)
+  workflows. A ticket follows its workflow for its whole life; the
+  transition table, claimable queue, stall monitor and status labels all
+  follow the ticket's own workflow. A workflow with live tickets cannot
+  be deleted, and a state with live tickets cannot be removed.
 - **No default workflow:** there is no default workflow — a project
   chooses its workflow (`projects.workflow_id`), set at creation or
   through the active-workflow endpoints; a project with no chosen
