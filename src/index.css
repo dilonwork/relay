@@ -416,12 +416,18 @@ body {
   /* Selected card in Dark theme (ticket b6e3bd01): the muted row text
      (#94a3b8) on the teal selected background (#134e4a) is only 3.70:1,
      so selected rows use the full text colour there (7.69:1). Light
-     theme is untouched — the override is dark-only. */
+     theme is untouched — the override is dark-only. Ticket 8a70951b
+     extends it to the remaining muted spans in the expanded detail —
+     the short id, the task progress "n/m" and the updated time, all
+     class .muted — which were still 3.70:1. The stalled dot (#b45309)
+     is deliberately not covered: it awaits a deeper amber (see its
+     own comment) and is a non-text marker, not muted subtext. */
   [data-theme='dark'] .ticket-card.selected .ticket-row-status,
   [data-theme='dark'] .ticket-card.selected .ticket-row-line2,
   [data-theme='dark'] .ticket-card.selected .ticket-row-chev,
   [data-theme='dark'] .ticket-card.selected .ticket-card-next,
-  [data-theme='dark'] .ticket-card.selected .ticket-card-assignee { color: var(--text); }
+  [data-theme='dark'] .ticket-card.selected .ticket-card-assignee,
+  [data-theme='dark'] .ticket-card.selected .muted { color: var(--text); }
   .ticket-card-title { font-weight: 600; color: var(--text); overflow-wrap: anywhere; }
   .ticket-card-meta {
     display: flex;
