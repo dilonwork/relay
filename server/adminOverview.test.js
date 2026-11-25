@@ -283,4 +283,6 @@ function readRule(cssText, selector) {
     assert.ok(list.includes('statusLabel(statusFilter)'), 'the chip must show the status label');
     assert.ok(!app.includes("setTab(status)"), 'App must not setTab(status): most statuses have no tab key');
   });
+
+  console.log(`\n${passed} admin overview redesign tests passed.`);
 })();
