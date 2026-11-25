@@ -140,6 +140,29 @@ const workflows = [
     assert.ok(!body.includes('Ticket created: ${created.title}'), 'handleCreate still sets the old notice');
   });
 
+  await ok('a successful create clears the guided fields but keeps source, project and workflow for the next ticket', () => {
+    const app = fs.readFileSync(path.join(__dirname, '..', 'src', 'App.tsx'), 'utf8');
+    const start = app.indexOf('async function handleCreate');
+    const end = app.indexOf('function handleOpenCreated', start);
+    const body = app.slice(start, end);
+    // The four guided fields are cleared for the next ticket.
+    for (const cleared of ["setNewTitle('')", "setNewGoal('')", "setNewScope('')", "setNewDone('')"]) {
+      assert.ok(body.includes(cleared), `handleCreate must clear: ${cleared}`);
+    }
+    // Source, project and workflow stay as they were, so Create
+    // another reopens the form on the same project and workflow.
+    for (const kept of ["setNewProjectId('')", "setNewWorkflowId('')", "setNewSource('project')"]) {
+      assert.ok(!body.includes(kept), `handleCreate must not reset: ${kept}`);
+    }
+    const another = app.slice(
+      app.indexOf('function handleCreateAnother'),
+      app.indexOf('async function handleCreateProject', app.indexOf('function handleCreateAnother')),
+    );
+    assert.ok(another.includes('setCreatedTicket(null)'), 'Create another must clear the confirmation');
+    assert.ok(!another.includes('setNewTitle'), 'Create another must not touch the fields');
+    assert.ok(!another.includes('setNewProjectId'), 'Create another must not touch the project');
+  });
+
   await ok('the stylesheet carries the new-ticket classes in theme variables', () => {
     const css = fs.readFileSync(path.join(__dirname, '..', 'src', 'index.css'), 'utf8');
     for (const needle of [
