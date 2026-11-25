@@ -129,6 +129,11 @@ export default function App() {
 
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectFilter, setProjectFilter] = useState('all');
+  // Admin Overview redesign (ticket 1b17c264): the status a status row
+  // opened the Tickets list with. The list has no tab for every status
+  // (only 7 of the 14 states have tab keys), so the row opens the
+  // 'all' tab with this client-side filter instead of the tab.
+  const [statusFilter, setStatusFilter] = useState<string | null>(null);
   const [newProjectName, setNewProjectName] = useState('');
   const [newProjectDescription, setNewProjectDescription] = useState('');
   const [newProjectType, setNewProjectType] = useState('internal');
@@ -760,6 +765,16 @@ export default function App() {
     setMainView('tickets-list');
   }
 
+  // Clicking a status row on the Admin Overview opens the Tickets list
+  // filtered to that status (ticket 1b17c264). The tab stays 'all':
+  // the list has no tab for every status, so the filter — not the tab
+  // — is what narrows the rows; the chip shows the active status.
+  function openStatusFromOverview(status: string) {
+    setStatusFilter(status);
+    setTab('all');
+    setMainView('tickets-list');
+  }
+
   // Clicking a project on the Dashboard opens that project's view with
   // its Gantt chart (the Tickets > Gantt sub-page).
   function openProjectFromDashboard(id: string) {
@@ -1215,6 +1230,7 @@ export default function App() {
           tab={adminTabForView(mainView) || 'overview'}
           user={user}
           onTabChange={(t: AdminTab) => setMainView(adminViewForTab(t))}
+          onOpenStatus={openStatusFromOverview}
           workflowsCreateRequest={workflowsCreateRequest}
           onWorkflowsFormOpenChange={setWorkflowsFormOpen}
           onWorkflowsCreateRequestConsumed={() => setWorkflowsCreateRequest(0)}
@@ -1335,6 +1351,8 @@ export default function App() {
           projects={projects}
           projectFilter={projectFilter}
           onProjectFilterChange={setProjectFilter}
+          statusFilter={statusFilter}
+          onStatusFilterChange={setStatusFilter}
           selectedProject={selectedProject}
           tab={tab}
           onTabChange={setTab}

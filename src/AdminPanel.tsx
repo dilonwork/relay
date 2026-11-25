@@ -20,6 +20,7 @@ export default function AdminPanel({
   tab,
   user,
   onTabChange,
+  onOpenStatus,
   workflowsCreateRequest,
   onWorkflowsFormOpenChange,
   onWorkflowsCreateRequestConsumed,
@@ -29,6 +30,9 @@ export default function AdminPanel({
   // hide Remove on their own row.
   user: User | null;
   onTabChange: (tab: AdminTab) => void;
+  // Admin Overview redesign (ticket 1b17c264): a status row on the
+  // Overview opens the Tickets list filtered to that status.
+  onOpenStatus: (status: string) => void;
   // Title-bar "+ New workflow" (ticket b56b1145): App increments this
   // counter; the Workflows sub-page opens a fresh create form per click.
   workflowsCreateRequest: number;
@@ -80,7 +84,12 @@ export default function AdminPanel({
   return (
     <>
       {tab === 'overview' ? (
-        <AdminOverviewPanel overview={overview} adminError={adminError} adminNotice={adminNotice} />
+        <AdminOverviewPanel
+          overview={overview}
+          adminError={adminError}
+          adminNotice={adminNotice}
+          onOpenStatus={onOpenStatus}
+        />
       ) : tab === 'users' ? (
         <AdminUsers
           users={users}
