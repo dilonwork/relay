@@ -300,6 +300,13 @@ function checkMobileTicketRows(css, lightVars, darkVars) {
     /color:\s*var\(--text\)/.test(css.slice(at, at + 500)),
     `dark selected rows must use color: var(--text) (ticket b6e3bd01)`,
   );
+  // Ticket 8a70951b: the expanded detail's muted spans (short id, task
+  // progress "n/m", updated time — all class .muted) were still 3.70:1
+  // on the selected background; the same override must cover them.
+  assert.ok(
+    css.slice(at, at + 500).includes("[data-theme='dark'] .ticket-card.selected .muted"),
+    `dark selected-row override must cover .muted (ticket 8a70951b)`,
+  );
 }
 
 // Ticket 3dfa3021: Dark theme audit — the remaining hard-coded light
