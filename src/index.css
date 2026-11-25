@@ -524,8 +524,8 @@ body {
 .checkbox-row label { font-weight: 400; display: flex; gap: 6px; align-items: center; color: var(--text); }
 .checkbox-row input { width: auto; }
 
-.actor-bar label { font-weight: 600; color: #0f2a3d; }
-.actor-bar .hint { color: #5a6b7c; font-size: 12px; }
+.actor-bar label { font-weight: 600; color: var(--text); }
+.actor-bar .hint { color: var(--text-muted-strong); font-size: 12px; }
 
 .card {
   background: var(--card-bg);
