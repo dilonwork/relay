@@ -598,8 +598,6 @@ export default function App() {
       setNewGoal('');
       setNewScope('');
       setNewDone('');
-      setNewProjectId('');
-      setNewWorkflowId('');
       await loadTickets();
       await loadProjects();
     } catch (err) {
