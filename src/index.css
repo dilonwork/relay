@@ -1296,6 +1296,32 @@ button.amber-outline:disabled { opacity: 0.5; cursor: default; }
 .replace-notice { background: var(--tint-amber-bg); border: 1px solid var(--tint-amber-border); color: var(--tint-amber-text); border-radius: 6px; padding: 10px 14px; margin-bottom: 12px; }
 .workflow-preview { margin-bottom: 12px; }
 
+/* New ticket redesign (ticket 31fccba3): guided fields, radio-card
+   source, live description preview, inline errors, success panel.
+   All colours are theme variables. The selected radio card uses the
+   hover background so its muted description stays readable in both
+   themes (light ~5.1:1, dark 4.94:1); a stronger selected background
+   (e.g. --card-selected) would drop the dark muted text to 3.70:1.
+   Inline errors reuse the --tint-red-text precedent from
+   .section-error above (var(--error) is too light for 12px text);
+   the red input border is a border, not text, so var(--error) is
+   fine there (4.13:1 light, ~7:1 dark against the input background). */
+input[type="text"].big { font-size: 16px; padding: 10px 12px; }
+.radiocards { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 8px 0; }
+.radiocard { border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; cursor: pointer; font-size: 13px; font-family: inherit; background: var(--card-bg); color: var(--text); text-align: left; }
+.radiocard.on { border-color: var(--text); background: var(--hover-bg); }
+.radiocard b { display: block; margin-bottom: 2px; }
+.radiocard span { color: var(--text-muted-strong); font-size: 12px; }
+.notice { background: var(--tint-amber-bg); border: 1px solid var(--tint-amber-border); border-left: 4px solid var(--warning); color: var(--tint-amber-text); border-radius: 6px; padding: 10px 12px; margin: 10px 0; font-size: 13px; }
+.success { background: var(--tint-green-bg); border: 1px solid var(--tint-green-mid); border-left: 4px solid var(--tint-green-mid); color: var(--tint-green-text); border-radius: 6px; padding: 12px 14px; margin: 10px 0; font-size: 13px; }
+.success h3 { margin: 0 0 4px; font-size: 15px; }
+.preview { border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; margin: 8px 0; background: var(--surface-alt); font-size: 13px; white-space: pre-wrap; color: var(--text); }
+.preview b { font-size: 12px; color: var(--text-muted-strong); }
+.err { color: var(--tint-red-text); font-size: 12px; margin-top: 4px; display: none; }
+.err.show { display: block; }
+input.bad, textarea.bad { border-color: var(--error); }
+@media (max-width: 720px) { .radiocards { grid-template-columns: 1fr; } }
+
 /* Workflow editor on mobile (ticket 1ddcd4ed, UI&UX prototype
    "Workflow editor mobile redesign — recommendations"): below 700 px
    the editor tables become cards, the section nav becomes a scrollable

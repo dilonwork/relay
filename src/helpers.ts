@@ -1281,3 +1281,36 @@ export function visibleDocuments(
     : documents.filter((d) => d.category_id === categoryId);
   return filterDocumentsByTitle(byCategory, query);
 }
+
+// New ticket form (ticket 31fccba3): the description is three guided
+// fields, composed into one description on submit; the form validates
+// inline before posting.
+
+// Compose the description from the guided fields: only the filled
+// parts, in Goal / Scope / Done-when order, blank line between parts.
+export function composeTicketDescription(goal: string, scope: string, done: string): string {
+  const parts: string[] = [];
+  if (goal.trim()) parts.push('Goal: ' + goal.trim());
+  if (scope.trim()) parts.push('Scope: ' + scope.trim());
+  if (done.trim()) parts.push('Done when: ' + done.trim());
+  return parts.join('\n\n');
+}
+
+// Inline validation for the New ticket form: title and goal are
+// required. Returns one message per missing field, keyed by field.
+export function validateNewTicket(title: string, goal: string): { title?: string; goal?: string } {
+  const errors: { title?: string; goal?: string } = {};
+  if (!title.trim()) errors.title = 'Give the ticket a title — it is what every role sees first.';
+  if (!goal.trim()) errors.goal = 'Say what the goal is — the Leader decomposes from this.';
+  return errors;
+}
+
+// The workflow a ticket lands on when the workflow select is left
+// empty: the project's chosen workflow by name, or the built-in flow
+// when the ticket is uncategorized or the project chose none.
+export function chosenWorkflowLabel(projectId: string, projects: Project[], workflows: Workflow[]): string {
+  if (!projectId) return 'the built-in flow (14 states)';
+  const project = projects.find((p) => p.id === projectId);
+  const chosen = project?.workflow_id ? workflows.find((w) => w.id === project.workflow_id) : undefined;
+  return chosen ? chosen.name : 'the built-in flow (14 states)';
+}

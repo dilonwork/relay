@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, getToken, onUnauthorized, setToken } from './api';
 import type { LegalTransition, Project, PublicUser, QueueEntry, RoleAgent, Ticket, TicketWithHistory, Transition, User, Workflow } from './api';
-import { ROLE_LABELS, countProjectAttention, countTicketsByProject, isClarificationState, isTerminalFor, roleForState, stateLabelFor, statusLabel, targetsForUser } from './helpers';
+import { ROLE_LABELS, composeTicketDescription, countProjectAttention, countTicketsByProject, isClarificationState, isTerminalFor, roleForState, stateLabelFor, statusLabel, targetsForUser, validateNewTicket } from './helpers';
+import NewTicketForm, { type CreatedTicketSummary } from './NewTicketForm';
 import { ADMIN_TABS, adminTabForView, adminViewForTab, isAdminView } from './adminNav';
 import type { AdminTab } from './adminNav';
 import { gateView, hashToView, viewToHash } from './viewHash';
@@ -9,7 +10,6 @@ import type { MainView } from './viewHash';
 import AdminPanel from './AdminPanel';
 import Dashboard from './Dashboard';
 import DocumentsPanel from './DocumentsPanel';
-import NewTicketForm from './NewTicketForm';
 import ProjectsPanel from './ProjectsPanel';
 import TicketDetail from './TicketDetail';
 import TicketGantt from './TicketGantt';
@@ -163,7 +163,12 @@ export default function App() {
   const [setupDisplayName, setSetupDisplayName] = useState('');
 
   const [newTitle, setNewTitle] = useState('');
-  const [newDescription, setNewDescription] = useState('');
+  const [newGoal, setNewGoal] = useState('');
+  const [newScope, setNewScope] = useState('');
+  const [newDone, setNewDone] = useState('');
+  const [newTitleError, setNewTitleError] = useState<string | undefined>(undefined);
+  const [newGoalError, setNewGoalError] = useState<string | undefined>(undefined);
+  const [createdTicket, setCreatedTicket] = useState<CreatedTicketSummary | null>(null);
   const [newSource, setNewSource] = useState('project');
   const [newProjectId, setNewProjectId] = useState('');
   const [newWorkflowId, setNewWorkflowId] = useState('');
@@ -553,27 +558,43 @@ export default function App() {
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
+    // Inline validation first: title and goal are required, and the
+    // form shows which one is missing instead of posting and failing.
+    const errors = validateNewTicket(newTitle, newGoal);
+    setNewTitleError(errors.title);
+    setNewGoalError(errors.goal);
+    if (errors.title || errors.goal) return;
     setError('');
     setNotice('');
     setBusy(true);
     try {
       const created = await api.createTicket({
-        title: newTitle,
-        description: newDescription,
+        title: newTitle.trim(),
+        description: composeTicketDescription(newGoal, newScope, newDone),
         source: newSource,
         project_id: newProjectId || null,
         workflow_id: newWorkflowId || null,
       });
+      // The submit lands on a confirmation that says where the ticket
+      // is and what happens next; it does not jump to the detail page.
+      const workflow = created.workflow_id
+        ? workflows.find((w) => w.id === created.workflow_id)
+        : undefined;
+      setCreatedTicket({
+        id: created.id,
+        title: created.title,
+        workflowName: workflow ? workflow.name : 'Built-in flow (14 states)',
+        startLabel: stateLabelFor(workflow ?? null, created.status),
+        projectName: created.project_id
+          ? projects.find((p) => p.id === created.project_id)?.name ?? 'Uncategorized'
+          : 'Uncategorized',
+      });
       setNewTitle('');
-      setNewDescription('');
+      setNewGoal('');
+      setNewScope('');
+      setNewDone('');
       setNewProjectId('');
       setNewWorkflowId('');
-      setNotice(`Ticket created: ${created.title}`);
-      setSelectedId(created.id);
-      // The detail was opened from New ticket, so going back returns
-      // to the All tickets list.
-      setTicketsReturnView('tickets-list');
-      setMainView('detail');
       await loadTickets();
       await loadProjects();
     } catch (err) {
@@ -581,6 +602,23 @@ export default function App() {
     } finally {
       setBusy(false);
     }
+  }
+
+  // From the creation confirmation: open the new ticket's detail page.
+  function handleOpenCreated() {
+    if (!createdTicket) return;
+    setSelectedId(createdTicket.id);
+    // The detail was opened from New ticket, so going back returns
+    // to the All tickets list.
+    setTicketsReturnView('tickets-list');
+    setMainView('detail');
+    setCreatedTicket(null);
+  }
+
+  // From the creation confirmation: start another ticket. The fields
+  // are already cleared; source, project and workflow stay as they were.
+  function handleCreateAnother() {
+    setCreatedTicket(null);
   }
 
   async function handleCreateProject(e: React.FormEvent) {
@@ -1220,7 +1258,11 @@ export default function App() {
       ) : mainView === 'new' ? (
         <NewTicketForm
           title={newTitle}
-          description={newDescription}
+          goal={newGoal}
+          scope={newScope}
+          done={newDone}
+          titleError={newTitleError}
+          goalError={newGoalError}
           source={newSource}
           projectId={newProjectId}
           workflowId={newWorkflowId}
@@ -1228,12 +1270,23 @@ export default function App() {
           projects={projects}
           isPm={isPm}
           busy={busy}
-          onTitleChange={setNewTitle}
-          onDescriptionChange={setNewDescription}
+          created={createdTicket}
+          onTitleChange={(v) => {
+            setNewTitle(v);
+            if (newTitleError) setNewTitleError(undefined);
+          }}
+          onGoalChange={(v) => {
+            setNewGoal(v);
+            if (newGoalError) setNewGoalError(undefined);
+          }}
+          onScopeChange={setNewScope}
+          onDoneChange={setNewDone}
           onSourceChange={setNewSource}
           onProjectIdChange={setNewProjectId}
           onWorkflowIdChange={setNewWorkflowId}
           onSubmit={handleCreate}
+          onOpenCreated={handleOpenCreated}
+          onCreateAnother={handleCreateAnother}
         />
       ) : mainView === 'detail' ? (
         <TicketDetail
