@@ -388,6 +388,41 @@ function checkAudit(css, lightVars, darkVars) {
   }
 }
 
+// Ticket 7f907aa2: the .actor-bar label and hint sit on the themed
+// surface (var(--surface), #ffffff light / #1e293b dark). The label
+// was hard-coded #0f2a3d (1.01:1 in Dark theme, essentially invisible)
+// and the hint #5a6b7c (2.67:1 dark). Both now use theme variables;
+// the pairs below are checked in both themes. The hint rides along
+// here per the ticket's note to the Reviewer: same one-line pattern,
+// same component, same dark surface.
+const ACTOR_BAR_RULES = [
+  ['.actor-bar label', { color: '--text' }],
+  ['.actor-bar .hint', { color: '--text-muted-strong' }],
+];
+const ACTOR_BAR_PAIRS = [
+  ['text', 'surface'],
+  ['text-muted-strong', 'surface'],
+];
+
+function checkActorBar(css, lightVars, darkVars) {
+  for (const [selector, props] of ACTOR_BAR_RULES) {
+    const body = ruleBody(css, selector);
+    for (const [prop, variable] of Object.entries(props)) {
+      const re = new RegExp(prop + ':[^;]*var\\(' + variable.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\)');
+      assert.ok(re.test(body), `${selector} ${prop} must use var(${variable}) (ticket 7f907aa2)`);
+    }
+  }
+  for (const [theme, vars] of [['light', lightVars], ['dark', darkVars]]) {
+    for (const [textVar, bgVar] of ACTOR_BAR_PAIRS) {
+      const ratio = contrast(vars[textVar], vars[bgVar]);
+      assert.ok(
+        ratio >= 4.5,
+        `${theme}: --${textVar} (${vars[textVar]}) on --${bgVar} (${vars[bgVar]}) is ${ratio.toFixed(2)}:1, below 4.5:1`,
+      );
+    }
+  }
+}
+
 (async () => {
   const css = fs.readFileSync(CSS_PATH, 'utf8');
   const light = parseVars(readBlock(css, ':root'));
@@ -432,6 +467,10 @@ function checkAudit(css, lightVars, darkVars) {
 
   await ok('mobile ticket rows use theme variables and stay readable (ticket b6e3bd01)', () => {
     checkMobileTicketRows(css, light, dark);
+  });
+
+  await ok('actor-bar label and hint use theme variables and stay readable (ticket 7f907aa2)', () => {
+    checkActorBar(css, light, dark);
   });
 
   await ok('remaining hard-coded light backgrounds use theme variables and stay readable (ticket 3dfa3021)', () => {
