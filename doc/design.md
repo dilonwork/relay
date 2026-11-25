@@ -1720,7 +1720,7 @@ Verified against the live site after reload (2026-11-22): `/.git/config`, `/.env
 
 ### The ticket
 
-Ticket 62a85e4f, "Admin Users: no GUI to modify agent and user accounts (Edit not reachable on the live site)". Dylan reported there was no GUI to modify agents and users. The Edit button and the "Edit user" form already exist in source (`src/AdminUsers.tsx`: Edit buttons call `startEdit`, the form renders below the tables, Save goes through `adminUpdateUser`), so this is reproduce-and-fix, not build-from-scratch.
+Ticket 62a85e4f, "Admin Users: no GUI to modify agent and user accounts (Edit not reachable on the live site)". Dylan reported there was no GUI to modify agents and users. The Edit button and the "Edit user" form already exist in source (`src/AdminUsers.tsx`: Edit buttons call `startEdit`, the form renders in a detail row directly under the clicked user (ticket ea0c9a68; it used to render below the tables), Save goes through `adminUpdateUser`), so this is reproduce-and-fix, not build-from-scratch.
 
 ### What the live reproduction found
 

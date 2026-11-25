@@ -103,7 +103,7 @@ export default function AdminUsers({
   const [assignId, setAssignId] = useState<string | null>(null);
   const [assignProjectValue, setAssignProjectValue] = useState('');
 
-  // Which user's workflow responsibilities are shown below the table.
+  // Which user's workflow responsibilities are shown in the detail row under their row.
   const [responsibilitiesUserId, setResponsibilitiesUserId] = useState<string | null>(null);
 
   // Which user the two-step remove confirm panel is open for.
@@ -285,13 +285,13 @@ export default function AdminUsers({
     setEditKind(u.kind === 'agent' ? 'agent' : 'human');
   }
 
-  // Edit form (ticket 62a85e4f): the form renders below the table, so
-  // with 20 agent rows it sits a full screen below the Edit button
-  // with nothing to say it is there. The form rendered; the admin
-  // never saw it. Scroll it into view when it opens; block 'nearest'
-  // moves the page only as far as needed, so a form already in view
-  // does not move at all. The lookup is by id, as on the Documents
-  // page.
+  // Edit form (ticket 62a85e4f; layout moved by ticket ea0c9a68): the
+  // form opens in the detail row under the clicked user, so on a long
+  // list it can still sit below the viewport with nothing to say it
+  // is there. The form rendered; the admin never saw it. Scroll it
+  // into view when it opens; block 'nearest' moves the page only as
+  // far as needed, so a form already in view does not move at all.
+  // The lookup is by id, as on the Documents page.
   useEffect(() => {
     if (!editingId) return;
     document.getElementById('admin-edit-user-form')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
@@ -359,9 +359,9 @@ export default function AdminUsers({
     }
   }
 
-  // The remove confirm panel renders below the table, like the edit
-  // form, so scroll it into view when it opens (same pattern as the
-  // edit form above).
+  // The remove confirm panel renders in the detail row under the
+  // clicked user, like the edit form, so scroll it into view when it
+  // opens (same pattern as the edit form above).
   useEffect(() => {
     if (!confirmRemoveId) return;
     document.getElementById('admin-remove-user-confirm')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
