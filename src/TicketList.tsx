@@ -7,6 +7,7 @@ import {
   STATUS_GROUPS,
   countTicketsByStatusGroup,
   countTicketsByTab,
+  filterTicketsByStatus,
   filterTicketsByStatusGroup,
   filterTicketsByTitle,
   formatTime,
@@ -17,6 +18,7 @@ import {
   shortStatusLabel,
   stateLabelFor,
   statusColor,
+  statusLabel,
   ticketsForTab,
 } from './helpers';
 
@@ -24,6 +26,12 @@ interface TicketListProps {
   projects: Project[];
   projectFilter: string;
   onProjectFilterChange: (value: string) => void;
+  // Admin Overview redesign (ticket 1b17c264): the status a status row
+  // opened the list with. The list has no tab for every status, so the
+  // row opens the 'all' tab with this client-side filter instead; the
+  // chip shows it and clears it.
+  statusFilter: string | null;
+  onStatusFilterChange: (value: string | null) => void;
   selectedProject: Project | undefined;
   tab: string;
   onTabChange: (key: string) => void;
@@ -50,6 +58,8 @@ export default function TicketList(props: TicketListProps) {
   const {
     projectFilter,
     onProjectFilterChange,
+    statusFilter,
+    onStatusFilterChange,
     selectedProject,
     tab,
     onTabChange,
@@ -74,10 +84,12 @@ export default function TicketList(props: TicketListProps) {
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
-  // Switching tabs clears the ALL-only filter and any expanded row.
+  // Switching tabs clears the ALL-only filter, the status filter, and
+  // any expanded row.
   function changeTab(key: string) {
     setGroupFilter('all');
     setExpandedId(null);
+    onStatusFilterChange(null);
     onTabChange(key);
   }
 
@@ -147,8 +159,15 @@ export default function TicketList(props: TicketListProps) {
 
   // Tab counts come from the searched set, so a tab's count is exactly
   // the rows it shows; tab switches are client-side, no round trip.
-  const counts = countTicketsByTab(tickets, queueTickets, query);
-  const tabTickets = filterTicketsByTitle(ticketsForTab(tickets, tab, queueTickets), query);
+  // The status filter (Admin Overview deep-link, ticket 1b17c264)
+  // narrows the same set before the tab and the search, so the counts
+  // and the rows agree with the status chip.
+  const statusTickets = filterTicketsByStatus(tickets, statusFilter);
+  const counts = countTicketsByTab(statusTickets, queueTickets, query);
+  const tabTickets = filterTicketsByTitle(
+    ticketsForTab(statusTickets, tab, queueTickets),
+    query
+  );
 
   // Group counts come from the same searched set, so a chip's count is
   // exactly the rows it shows. The group filter and grouping only
@@ -309,6 +328,18 @@ export default function TicketList(props: TicketListProps) {
               className="link"
               onClick={() => onProjectFilterChange('all')}
               aria-label="Show all projects"
+            >
+              ✕
+            </button>
+          </span>
+        )}
+        {statusFilter && (
+          <span className="tickets-status-chip">
+            Status: {statusLabel(statusFilter)} {' '}
+            <button
+              className="link"
+              onClick={() => onStatusFilterChange(null)}
+              aria-label="Clear status filter"
             >
               ✕
             </button>

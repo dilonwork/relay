@@ -69,6 +69,66 @@ export function countTicketsByStatusGroup<T extends { status: string }>(tickets:
   return counts;
 }
 
+// Admin Overview redesign (ticket 1b17c264): the Needs attention card
+// names the single most urgent problem, in this priority order —
+// database down, tickets waiting on clarification, a rejected
+// transition in the recent audit. Returns null when nothing needs
+// attention.
+export function overviewAttention(
+  dbOk: boolean,
+  byStatus: Record<string, number>,
+  recentResults: string[]
+): string | null {
+  if (!dbOk) return 'Database unreachable — nothing below can be trusted until it is back.';
+  const clarification = CLARIFICATION_STATUSES.reduce(
+    (total, status) => total + (byStatus[status] || 0),
+    0
+  );
+  if (clarification > 0) {
+    return `${clarification} ticket${clarification > 1 ? 's' : ''} waiting on clarification — the PM queue needs a look.`;
+  }
+  const rejected = recentResults.filter((result) => result === 'rejected').length;
+  if (rejected > 0) {
+    return `${rejected} transition${rejected > 1 ? 's' : ''} rejected in the recent audit — check what was sent back.`;
+  }
+  return null;
+}
+
+// Admin Overview redesign (ticket 1b17c264): the status rows grouped
+// for the proportional bars — Active is every non-terminal status in
+// workflow order (clarification states included), Done is the terminal
+// statuses. Zero-count rows are included here; the component hides
+// them behind the "Show empty states" toggle.
+export function overviewStatusGroups(
+  byStatus: Record<string, number>
+): {
+  key: string;
+  label: string;
+  rows: { status: string; count: number; clarification: boolean }[];
+}[] {
+  const rows = ALL_STATUSES.map((status) => ({
+    status,
+    count: byStatus[status] || 0,
+    clarification: CLARIFICATION_STATUSES.includes(status),
+  }));
+  return [
+    { key: 'active', label: 'Active', rows: rows.filter((row) => !TERMINAL_STATUSES.has(row.status)) },
+    { key: 'done', label: 'Done', rows: rows.filter((row) => TERMINAL_STATUSES.has(row.status)) },
+  ];
+}
+
+// Admin Overview redesign (ticket 1b17c264): the Tickets list has no
+// tab for every status (only 7 of the 14 states have tab keys), so a
+// status row opens the list on the 'all' tab with this client-side
+// status filter instead. A null filter returns every ticket.
+export function filterTicketsByStatus<T extends { status: string }>(
+  tickets: T[],
+  status: string | null
+): T[] {
+  if (!status) return [...tickets];
+  return tickets.filter((ticket) => ticket.status === status);
+}
+
 export function groupTicketsByStatus<T extends { status: string }>(
   tickets: T[]
 ): { group: { key: string; label: string; statuses: string[] }; rows: T[] }[] {
@@ -172,6 +232,16 @@ export function formatTime(iso: string): string {
 // terminal). Task relations are the ticket's own status journey, read
 // from its transition history.
 export const TERMINAL_STATUSES = new Set(['delivered', 'cancelled']);
+
+// The two states where a ticket is waiting on clarification from the
+// PM (Admin Overview redesign, ticket 1b17c264): both are part of the
+// Active group, but they render amber with a warning mark when they
+// hold tickets, and they outrank a rejected transition in the
+// Needs attention card.
+export const CLARIFICATION_STATUSES = [
+  'needs_clarification',
+  'needs_acceptance_clarification',
+];
 
 export const STATUS_COLORS: Record<string, string> = {
   requirement: '#5a6b7c',

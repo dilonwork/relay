@@ -1017,6 +1017,42 @@ button.link {
 .stat span { font-size: 12px; color: var(--text); }
 .stat.warn b { color: var(--tint-amber-text); }
 
+/* Admin Overview redesign (ticket 1b17c264): the health strip, the
+   grouped status bars, and the audit filters. Every colour is a theme
+   variable — no hard-coded hex here. Contrast pairs (text on
+   background, WCAG, both themes): pill ok 6.49 / 5.23, pill bad 9.16 /
+   6.93, attention text on the red / amber stat backgrounds 14.43 /
+   8.13 and 15.22 / 7.36, clarification count on the card 7.09 / 10.15,
+   bar fill on the track 12.79 / 8.40, clarification fill on the track
+   5.74 / 7.18 — all above the 4.5:1 floor. The global .stat rule is
+   left alone (AdminApiKeys uses it); these overrides are scoped to
+   this page. */
+.admin-overview .health { display: flex; gap: 10px; align-items: stretch; margin: 10px 0; flex-wrap: wrap; }
+.admin-overview .stat { background: var(--card-bg); min-width: 130px; padding: 10px 14px; }
+.admin-overview .stat .num { font-size: 22px; font-weight: 700; }
+.admin-overview .stat .lbl { font-size: 12px; color: var(--text-muted-strong); }
+.admin-overview .stat .num.attention { font-size: 15px; line-height: 1.35; font-weight: 600; }
+.admin-overview .stat.ok { border-left: 4px solid var(--tint-green-text); }
+.admin-overview .stat.bad { border-left: 4px solid var(--tint-red-text); background: var(--tint-red-bg-soft); }
+.admin-overview .stat.warn { border-left: 4px solid var(--tint-amber-text); background: var(--tint-amber-bg-soft); }
+.admin-overview .pill.ok { background: var(--tint-green-bg-soft); color: var(--tint-green-text-strong); }
+.admin-overview .pill.bad { background: var(--tint-red-bg-soft); color: var(--tint-red-text-strong); }
+.admin-overview .grouphead { font-size: 12px; color: var(--text-muted-strong); font-weight: 700; margin: 12px 0 2px; }
+.admin-overview .statusrow { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 6px 8px; border: none; border-radius: 4px; background: none; cursor: pointer; font: inherit; color: var(--text); text-align: left; width: 100%; }
+.admin-overview .statusrow:hover { background: var(--hover-bg); }
+.admin-overview .statusrow .name { flex: 0 0 190px; }
+.admin-overview .statusrow .bar { flex: 1; height: 8px; background: var(--border); border-radius: 4px; overflow: hidden; }
+.admin-overview .statusrow .bar i { display: block; height: 100%; background: var(--text); }
+.admin-overview .statusrow.warn .bar i { background: var(--tint-amber-text); }
+.admin-overview .statusrow .count { flex: 0 0 34px; text-align: right; font-weight: 700; }
+.admin-overview .statusrow.warn .count { color: var(--tint-amber-text); }
+.admin-overview .filters { display: flex; gap: 8px; align-items: center; margin: 6px 0; font-size: 13px; flex-wrap: wrap; }
+.admin-overview .filters select { width: auto; }
+.admin-overview .chipbtn { border: 1px solid var(--border-strong); background: var(--card-bg); color: var(--text); border-radius: 999px; padding: 4px 11px; font-size: 12px; cursor: pointer; }
+.admin-overview .chipbtn.on { background: var(--text); color: var(--card-bg); border-color: var(--text); }
+.tickets-status-chip { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: var(--text); }
+@media (max-width: 720px) { .admin-overview .statusrow .name { flex-basis: 130px; } }
+
 /* The one-time key panel: amber, distinct from the rest of the page.
    It only closes when the admin confirms the key is saved. */
 .keypanel { border: 2px solid var(--warning); background: var(--tint-amber-bg-soft); border-radius: 6px; padding: 14px 16px; margin: 12px 0; }
