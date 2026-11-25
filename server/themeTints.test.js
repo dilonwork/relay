@@ -312,7 +312,13 @@ function checkMobileTicketRows(css, lightVars, darkVars) {
 // hard-coded #d97706 border — var(--tint-amber-border) is #fcd34d in
 // light theme and would nearly vanish on white, while #d97706 reads
 // as an amber outline on both #ffffff and #1e293b, so light theme
-// stays exactly unchanged. Out of scope and deliberately untouched:
+// stays exactly unchanged. Ticket 2cf1866b later moved the Claimable
+// tab border to the same pattern (see checkAudit): border-color is
+// hard-coded #d97706 in both themes — var(--tint-amber-border) was
+// #fcd34d in light theme (1.29:1 on the light tab background) and
+// #92400e in dark theme (2.11:1), while #d97706 on the dark tab
+// background #451a03 is 4.70:1 and restores the pre-3dfa3021 light
+// border. Out of scope and deliberately untouched:
 // mobile ticket rows (b6e3bd01), the Gantt sticky label (df3c9e77),
 // and the intentional white active toggle/chip/button states.
 const AUDIT_RULES = [
@@ -322,7 +328,7 @@ const AUDIT_RULES = [
   ['tbody tr.selected', { background: '--card-selected' }],
   ['.document-markdown pre', { background: '--code-bg', border: '--border' }],
   ['button.amber-outline', { background: '--card-bg', color: '--tint-amber-text' }],
-  ['.tabs button.claimable:not(.active)', { background: '--tint-amber-bg', 'border-color': '--tint-amber-border', color: '--tint-amber-text' }],
+  ['.tabs button.claimable:not(.active)', { background: '--tint-amber-bg', color: '--tint-amber-text' }],
   ['.editor-card .section-nav button', { background: '--surface', border: '--border' }],
   ['.editor-table tr', { background: '--card-bg', border: '--card-border' }],
   ['.editor-table tbody tr:hover', { background: '--hover-bg' }],
@@ -357,6 +363,20 @@ function checkAudit(css, lightVars, darkVars) {
       assert.ok(re.test(body), `${selector} ${prop} must use var(${variable}) (ticket 3dfa3021)`);
     }
   }
+  // Ticket 2cf1866b: the Claimable tab border follows the amber-outline
+  // pattern — hard-coded #d97706 in both themes. Dark #d97706 on the
+  // dark tab background is 4.70:1; light restores the pre-3dfa3021
+  // border (#d97706 on #fef3c7 is 2.86:1, unchanged by this ticket).
+  const claimable = ruleBody(css, '.tabs button.claimable:not(.active)');
+  assert.ok(
+    /border-color:\s*#d97706/.test(claimable),
+    `.tabs button.claimable:not(.active) border-color must be #d97706 (ticket 2cf1866b)`,
+  );
+  const borderRatio = contrast('#d97706', darkVars['tint-amber-bg']);
+  assert.ok(
+    borderRatio >= 4.5,
+    `dark: #d97706 on --tint-amber-bg (${darkVars['tint-amber-bg']}) is ${borderRatio.toFixed(2)}:1, below 4.5:1`,
+  );
   for (const [theme, vars] of [['light', lightVars], ['dark', darkVars]]) {
     for (const [textVar, bgVar] of AUDIT_TEXT_BG_PAIRS) {
       const ratio = contrast(vars[textVar], vars[bgVar]);
