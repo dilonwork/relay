@@ -63,7 +63,7 @@ capture list.
   transition attempts are logged too.
 - **Accounts & authentication (locked 2026-11-11):** every caller logs in
   as an account that holds one or more roles (`pm`, `leader`, `engineer`,
-  `reviewer`, `tester`, `deployer`, `ui_ux`, `guest`, `admin`). Passwords are hashed with
+  `reviewer`, `tester`, `deployer`, `ui_ux`, `planner`, `worker`, `reporter`, `guest`, `admin`). Passwords are hashed with
   scrypt and a per-user salt; sessions are opaque bearer tokens valid for
   7 days. There is no pre-seeded account: the first admin is created
   through first-run setup, which closes permanently once any account
@@ -317,7 +317,7 @@ admin 7, API keys 8, monitor 18, workflows 32, quick-create builder 12, document
 
 - **Accounts:** one account, one username (case-insensitive, unique), a
   display name, and one or more roles. Roles are `pm`, `leader`,
-  `engineer`, `reviewer`, `tester`, `deployer`, `ui_ux`, plus `guest`
+  `engineer`, `reviewer`, `tester`, `deployer`, `ui_ux`, `planner`, `worker`, `reporter`, plus `guest`
   (read-only, with the PM's visibility) and `admin` for account
   management. An account may hold several roles at once — for example
   `engineer` + `reviewer`, matching the design doc's rule that one person

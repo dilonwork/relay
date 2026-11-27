@@ -197,7 +197,7 @@ function legalTransitions() {
 
 // The role recorded for an attempt that has no applicable transition
 // rule: the actor's first workflow role, or 'pm' when they hold none.
-// (The audit table requires one of the seven workflow roles; 'admin' alone
+// (The audit table requires one of the ten workflow roles; 'admin' alone
 // is not a workflow role, so it can never be the role of a transition.)
 function attemptedRoleFallback(actorRoles) {
   const roles = Array.isArray(actorRoles) ? actorRoles : [];
