@@ -310,7 +310,7 @@ onboarding document regenerating from a live workflow edit, and the
 project prompt bundle (whole project context, base-URL resolution,
 no token in the bundle).
 
-618 tests in total: state machine 21, tickets 69, tasks 12, projects 16, onboarding 12, agent-readable operating rules 10, public base URL 5, auth 28,
+619 tests in total: state machine 21, tickets 70, tasks 12, projects 16, onboarding 12, agent-readable operating rules 10, public base URL 5, auth 28,
 admin 7, API keys 8, monitor 18, workflows 32, quick-create builder 12, documents 36, document tickets 16, document render 18, gantt helpers 27, admin nav 5, view hash 8, migrations 43, role lists 5, title bar 9, dashboard redesign 17, ticket detail redesign 20, projects redesign 15, admin API keys redesign 12, workflows redesign 15, workflow editor mobile redesign 17, documents redesign 23, tickets list redesign 18, workflow duplicate 12, repo guard 3, nginx allowlist 4, admin users 3, theme tints 12, admin overview redesign 8, new ticket redesign 11, admin users redesign 11.
 
 ## Accounts & authentication
@@ -386,7 +386,7 @@ admin 7, API keys 8, monitor 18, workflows 32, quick-create builder 12, document
   terminal tickets are never claimable. One exception (ch. 40, ticket
   d9f355b4): a ticket whose dependencies are unmet or whose files
   overlap with an in-progress ticket still appears in the queue, but
-  cannot be claimed until its dependencies are delivered and no
+  cannot be claimed until its dependencies have reached a terminal state and no
   in-progress ticket overlaps its files. The frontend has a Claimable tab
   for this queue. The tab is not redundant with the status tabs: a status
   tab lists every ticket in that state, while Claimable lists only the
