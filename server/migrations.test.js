@@ -132,7 +132,7 @@ function rolesCheckLists(sql) {
 // The 12 account roles, from the same source the application uses:
 // auth.js ALL_ROLES (the 10 workflow roles plus guest and admin).
 // Migration 014 predates guest, so its file still lists the 8 roles
-// that were current then; 003 (updated in place) and 016 list 9.
+// that were current then; 003 (updated in place) lists 12, and 016 lists 9.
 // Migrations 027/028 predate nothing — they are the current step —
 // but 014/016/017 are historical files, so their tests assert
 // frozen lists, not the current ones: 014 lists the 8 roles current
