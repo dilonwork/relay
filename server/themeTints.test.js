@@ -307,6 +307,14 @@ function checkMobileTicketRows(css, lightVars, darkVars) {
     css.slice(at, at + 500).includes("[data-theme='dark'] .ticket-card.selected .muted"),
     `dark selected-row override must cover .muted (ticket 8a70951b)`,
   );
+  // Ticket 3721c2a2: the desktop table view had the same 3.70:1 muted
+  // text in a selected row (short id, task progress "n/m") — the card
+  // override above never covered tbody tr.selected. The 7.69:1 ratio
+  // for --text on --card-selected is already pinned by MOBILE_ROW_PAIRS.
+  assert.ok(
+    css.includes("[data-theme='dark'] tbody tr.selected .muted"),
+    `dark selected-row override must cover the desktop table (ticket 3721c2a2)`,
+  );
 }
 
 // Ticket 3dfa3021: Dark theme audit — the remaining hard-coded light
