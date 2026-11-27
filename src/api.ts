@@ -1,3 +1,13 @@
+// Why a ticket cannot be claimed yet (ticket d9f355b4): null when
+// sequencing and files do not block it. The message is human-readable
+// and names the blockers; blocking carries the ticket ids (and the
+// overlapping files, for a file conflict) for API callers.
+export interface ClaimBlocked {
+  error: 'dependency_unmet' | 'file_conflict';
+  message: string;
+  blocking: Array<{ id: string; status: string; files?: string[] }>;
+}
+
 export interface Ticket {
   id: string;
   title: string;
@@ -18,6 +28,15 @@ export interface Ticket {
   // ticket has no Tasks. Optional so older payloads still type-check.
   task_completed?: number;
   task_total?: number;
+  // The plan (ticket d9f355b4): which tickets this one depends on
+  // and which files it will touch, declared by the Leader at
+  // decomposition. Optional so older payloads still type-check.
+  depends_on?: string[];
+  files?: string[];
+  // Why this ticket cannot be claimed yet (ticket d9f355b4): null
+  // when sequencing and files do not block it. Attached by the list,
+  // queue and detail endpoints.
+  claim_blocked?: ClaimBlocked | null;
 }
 
 // A Task under a ticket (ticket 0ae37c3b, design doc ch. 38): a

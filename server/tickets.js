@@ -47,6 +47,134 @@ function normalizeArtifacts(artifacts) {
   return [];
 }
 
+// Ticket sequencing and file-overlap prevention (ticket d9f355b4,
+// design doc ch. 40): the plan a ticket carries — which tickets it
+// depends on, and which repo files it will touch. Both are estimates
+// declared by the Leader at decomposition time; the claim-time check
+// is best-effort against those lists, not a guarantee against an
+// Engineer discovering extra files mid-work.
+const UUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+const IN_PROGRESS_STATUSES = ['in_dev', 'in_review', 'in_test'];
+
+// Clean a depends_on / files value from the client into the arrays
+// the columns store, or return an error string when it is not an
+// array of the right shape. Undefined / null means "not given" and
+// stores as an empty list. Entries are trimmed and de-duplicated; a
+// dependency must be a UUID (the column is UUID[] — a non-UUID would
+// fail the INSERT in Postgres, so it is a 400 here instead).
+function cleanDependsOn(value) {
+  if (value === undefined || value === null) return { ok: true, value: [] };
+  if (!Array.isArray(value)) return { ok: false, error: 'depends_on must be an array of ticket ids.' };
+  const seen = new Set();
+  const out = [];
+  for (const item of value) {
+    if (typeof item !== 'string' || !UUID_RE.test(item.trim())) {
+      return { ok: false, error: `depends_on must be an array of ticket ids; got ${JSON.stringify(item)}.` };
+    }
+    const id = item.trim();
+    if (!seen.has(id)) { seen.add(id); out.push(id); }
+  }
+  return { ok: true, value: out };
+}
+
+function cleanFiles(value) {
+  if (value === undefined || value === null) return { ok: true, value: [] };
+  if (!Array.isArray(value)) return { ok: false, error: 'files must be an array of repo-relative paths.' };
+  const seen = new Set();
+  const out = [];
+  for (const item of value) {
+    if (typeof item !== 'string' || !item.trim()) {
+      return { ok: false, error: `files must be an array of repo-relative paths; got ${JSON.stringify(item)}.` };
+    }
+    const path = item.trim();
+    if (!seen.has(path)) { seen.add(path); out.push(path); }
+  }
+  return { ok: true, value: out };
+}
+
+// Short id for human-readable messages: the first 8 characters,
+// the same short form the list shows.
+function shortTicketId(id) {
+  return String(id).slice(0, 8);
+}
+
+// Why a ticket cannot be claimed yet, or null when sequencing and
+// files do not block it. Pure: the caller supplies the dependency
+// rows (by id) and the in-progress tickets. A dependency counts as
+// satisfied only when its ticket is delivered; a dependency that
+// does not exist is unmet (it can never become delivered). A file
+// conflict names the in-progress ticket and the overlapping files.
+// The message is human-readable and names the blockers, so the UI
+// can show it verbatim and the PM can see what is blocked.
+function findClaimBlock(ticket, { depById, inProgress }) {
+  const deps = Array.isArray(ticket.depends_on) ? ticket.depends_on : [];
+  const unmet = [];
+  for (const id of deps) {
+    const dep = depById.get(id);
+    if (!dep || dep.status !== 'delivered') {
+      unmet.push({ id, status: dep ? dep.status : 'missing' });
+    }
+  }
+  if (unmet.length > 0) {
+    const names = unmet.map((d) => `${shortTicketId(d.id)} (${d.status})`).join(', ');
+    return {
+      error: 'dependency_unmet',
+      message: `Cannot claim yet: depends on ${names} — not delivered.`,
+      blocking: unmet,
+    };
+  }
+  const files = Array.isArray(ticket.files) ? ticket.files : [];
+  if (files.length > 0) {
+    const conflicts = [];
+    for (const other of inProgress || []) {
+      if (other.id === ticket.id) continue;
+      const overlap = files.filter((f) => (other.files || []).includes(f));
+      if (overlap.length > 0) {
+        conflicts.push({ id: other.id, status: other.status, files: overlap });
+      }
+    }
+    if (conflicts.length > 0) {
+      const names = conflicts
+        .map((c) => `${c.files.join(', ')} overlap${c.files.length > 1 ? '' : 's'} with ${shortTicketId(c.id)} (${c.status})`)
+        .join('; ');
+      return {
+        error: 'file_conflict',
+        message: `Cannot claim yet: ${names}.`,
+        blocking: conflicts,
+      };
+    }
+  }
+  return null;
+}
+
+// Load the inputs findClaimBlock needs for a set of tickets: the
+// statuses of every dependency id, and every in-progress ticket
+// with its files. Two queries no matter how many tickets — the list
+// never fires one query per ticket.
+async function loadClaimBlockInputs(client, tickets) {
+  const depIds = [...new Set((tickets || []).flatMap((t) => (Array.isArray(t.depends_on) ? t.depends_on : [])))];
+  const depById = new Map();
+  if (depIds.length > 0) {
+    const { rows } = await client.query('SELECT * FROM tickets WHERE id = ANY($1)', [depIds]);
+    for (const row of rows) depById.set(row.id, row);
+  }
+  const { rows: inProgress } = await client.query('SELECT * FROM tickets WHERE status = ANY($1)', [IN_PROGRESS_STATUSES]);
+  return { depById, inProgress };
+}
+
+// Attach claim_blocked (null or the findClaimBlock result) to every
+// row. Skips the queries entirely when no row carries a dependency
+// or a file list — the common case for old tickets and the queue.
+async function attachClaimBlocks(client, rows) {
+  if (!rows || rows.length === 0) return rows;
+  const needsCheck = rows.some(
+    (t) => (Array.isArray(t.depends_on) && t.depends_on.length > 0) || (Array.isArray(t.files) && t.files.length > 0)
+  );
+  if (!needsCheck) return rows.map((t) => ({ ...t, claim_blocked: null }));
+  const inputs = await loadClaimBlockInputs(client, rows);
+  return rows.map((t) => ({ ...t, claim_blocked: findClaimBlock(t, inputs) }));
+}
+
 async function getTicket(db, id) {
   const { rows } = await db.query('SELECT * FROM tickets WHERE id = $1', [id]);
   return rows[0] || null;
@@ -179,7 +307,8 @@ async function getTicketDetail(db, id, { actorId, actorRoles, assignedProjectId 
   }
   const result = await getTicketWithHistory(db, id);
   const [withCounts] = await attachTaskCounts(db, [result]);
-  return { ok: true, status: 200, ticket: withCounts };
+  const [withBlock] = await attachClaimBlocks(db, [withCounts]);
+  return { ok: true, status: 200, ticket: withBlock };
 }
 
 // Transition history of one ticket, under the same scope check.
@@ -200,7 +329,7 @@ async function getTicketTransitions(db, id, { actorId, actorRoles, assignedProje
   return { ok: true, status: 200, transitions };
 }
 
-async function createTicket(db, { actorId, actorRoles, title, description, source, reason, projectId, workflowId, documentId }) {
+async function createTicket(db, { actorId, actorRoles, title, description, source, reason, projectId, workflowId, documentId, dependsOn, files }) {
   if (!actorRoles || !actorRoles.includes('pm')) {
     return { ok: false, status: 403, error: 'wrong_role', message: 'Only the PM may create a ticket.' };
   }
@@ -216,6 +345,19 @@ async function createTicket(db, { actorId, actorRoles, title, description, sourc
   const src = source || 'project';
   if (!SOURCES.includes(src)) {
     return { ok: false, status: 400, error: 'bad_request', message: `Unknown source: ${src}.` };
+  }
+  // The plan (ticket d9f355b4): which tickets this one depends on
+  // and which files it will touch, declared at creation (usually by
+  // the Leader decomposing). Both are optional; empty means no
+  // constraint. Invalid shapes are a 400 here, not a Postgres error
+  // at the INSERT.
+  const cleanDeps = cleanDependsOn(dependsOn);
+  if (!cleanDeps.ok) {
+    return { ok: false, status: 400, error: 'bad_request', message: cleanDeps.error };
+  }
+  const cleanF = cleanFiles(files);
+  if (!cleanF.ok) {
+    return { ok: false, status: 400, error: 'bad_request', message: cleanF.error };
   }
   // A ticket may be created uncategorized (no projectId) — that is how
   // tickets from before projects existed stay visible. When a project is
@@ -319,9 +461,9 @@ async function createTicket(db, { actorId, actorRoles, title, description, sourc
 
   const ticket = await db.withTransaction(async (client) => {
     const { rows } = await client.query(
-      `INSERT INTO tickets (title, source, status, creator_id, assignee_id, developer_id, description, project_id, workflow_id)
-       VALUES ($1, $2, $3, $4, NULL, NULL, $5, $6, $7) RETURNING *`,
-      [String(title).trim(), src, startState, String(actorId).trim(), String(description).trim(), cleanProjectId, cleanWorkflowId]
+      `INSERT INTO tickets (title, source, status, creator_id, assignee_id, developer_id, description, project_id, workflow_id, depends_on, files)
+       VALUES ($1, $2, $3, $4, NULL, NULL, $5, $6, $7, $8, $9) RETURNING *`,
+      [String(title).trim(), src, startState, String(actorId).trim(), String(description).trim(), cleanProjectId, cleanWorkflowId, cleanDeps.value, cleanF.value]
     );
     const created = rows[0];
     await client.query(
@@ -626,7 +768,13 @@ async function listClaimable(db, actorRoles, projectFilter, assignedProjectId) {
     if (!next || !roles.includes(next.role)) continue;
     out.push({ ...t, next_transition: next });
   }
-  return out;
+  // Why a ticket cannot be claimed yet, when it cannot (ticket
+  // d9f355b4): the queue shows the blocked reason on the row, so an
+  // Engineer does not waste a claim attempt and the PM can see what
+  // is blocked. The ticket stays in the queue — it is unclaimable
+  // until its dependencies are delivered and no in-progress ticket
+  // overlaps its files, not hidden.
+  return attachClaimBlocks(db, out);
 }
 
 // Next step for the Tickets list (design doc ch. 27, ticket 7da410a5):
@@ -705,7 +853,7 @@ async function attachNextTransitions(db, rows, actorRoles) {
     }
     out.push({ ...t, next_transition: next });
   }
-  return out;
+  return attachClaimBlocks(db, out);
 }
 
 // Claim an unassigned ticket in place (ticket c1ff08e3, design doc
@@ -765,6 +913,17 @@ async function claimTicket(db, ticketId, { actorId, actorRoles, assignedProjectI
     if (ticket.assignee_id) {
       return { ok: false, status: 409, error: 'already_assigned', message: 'This ticket already has an owner.' };
     }
+    // Sequencing and file-overlap prevention (ticket d9f355b4): a
+    // claim whose dependency is not delivered, or whose files
+    // overlap an in-progress ticket, is rejected here — after the
+    // role/assignee checks and before the owner is written, inside
+    // the same FOR UPDATE transaction, so the check and the claim
+    // cannot race. The rejection names the blockers, so the claimant
+    // and the PM can see why the ticket cannot be claimed yet.
+    const block = findClaimBlock(ticket, await loadClaimBlockInputs(client, [ticket]));
+    if (block) {
+      return { ok: false, status: 403, error: block.error, message: block.message, blocking: block.blocking };
+    }
     const { rows: updatedRows } = await client.query(
       'UPDATE tickets SET assignee_id = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND assignee_id IS NULL RETURNING *',
       [actor, ticket.id]
@@ -782,6 +941,55 @@ async function claimTicket(db, ticketId, { actorId, actorRoles, assignedProjectI
   });
 }
 
+// Update a ticket's plan (ticket d9f355b4): the Leader sets
+// depends_on and files when decomposing, or adjusts them afterwards.
+// Leader-only; the ticket must exist and not be terminal (a
+// delivered ticket's plan is history). A field left undefined keeps
+// its current value; null clears it. No transition row: this is not
+// a state change, the same way creating a Task writes no transition
+// row (ticket 0ae37c3b).
+async function updateTicketPlan(db, ticketId, { actorId, actorRoles, dependsOn, files, assignedProjectId }) {
+  if (!actorId || !String(actorId).trim() || !Array.isArray(actorRoles)) {
+    return { ok: false, status: 400, error: 'bad_request', message: 'actor_id and actor roles are required.' };
+  }
+  if (!actorRoles.includes('leader')) {
+    return { ok: false, status: 403, error: 'wrong_role', message: 'Only the leader may update a ticket plan.' };
+  }
+  const ticket = await getTicket(db, ticketId);
+  if (!ticket) {
+    return { ok: false, status: 404, error: 'ticket_not_found', message: 'Ticket not found.' };
+  }
+  const scope = sm.checkProjectScope(ticket, actorRoles, assignedProjectId);
+  if (!scope.ok) {
+    return { ok: false, status: 403, error: scope.error, message: scope.message };
+  }
+  const resolved = await workflows.definitionForTicket(db, ticket);
+  if (!resolved.missing && sm.isTerminalFor(resolved.definition, ticket.status)) {
+    return { ok: false, status: 403, error: 'terminal', message: `Ticket is ${ticket.status}; a delivered ticket's plan cannot change.` };
+  }
+  let newDeps = Array.isArray(ticket.depends_on) ? ticket.depends_on : [];
+  if (dependsOn !== undefined) {
+    const cleaned = cleanDependsOn(dependsOn);
+    if (!cleaned.ok) {
+      return { ok: false, status: 400, error: 'bad_request', message: cleaned.error };
+    }
+    newDeps = cleaned.value;
+  }
+  let newFiles = Array.isArray(ticket.files) ? ticket.files : [];
+  if (files !== undefined) {
+    const cleaned = cleanFiles(files);
+    if (!cleaned.ok) {
+      return { ok: false, status: 400, error: 'bad_request', message: cleaned.error };
+    }
+    newFiles = cleaned.value;
+  }
+  const { rows } = await db.query(
+    'UPDATE tickets SET depends_on = $1, files = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3 RETURNING *',
+    [newDeps, newFiles, ticket.id]
+  );
+  return { ok: true, status: 200, ticket: rows[0] };
+}
+
 module.exports = {
   SOURCES,
   getTicket,
@@ -795,4 +1003,6 @@ module.exports = {
   createTicket,
   transitionTicket,
   claimTicket,
+  updateTicketPlan,
+  findClaimBlock,
 };

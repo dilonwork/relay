@@ -270,9 +270,9 @@ async function main() {
       assert.deepEqual(body.work_mode_rules, WORK_MODE_RULES);
       assert.deepEqual(body.standing_rules, STANDING_RULES);
       assert.equal(body.work_mode_rules.length, 5);
-      assert.equal(body.standing_rules.length, 8);
+      assert.equal(body.standing_rules.length, 9);
       assert.deepEqual(body.work_mode_rules.map((r) => r.id), ['five-minute-check', 'one-ticket', 'clarify', 'verify-before-deliver', 'key-handling']);
-      assert.deepEqual(body.standing_rules.map((r) => r.id), [...body.work_mode_rules.map((r) => r.id), 'english-only', 'twelve-hour-sync', 'develop-branch']);
+      assert.deepEqual(body.standing_rules.map((r) => r.id), [...body.work_mode_rules.map((r) => r.id), 'english-only', 'twelve-hour-sync', 'develop-branch', 'leader-decomposition-plan']);
     });
 
     await ok('getOperatingRules returns fresh copies: mutating one response leaves the next unchanged', async () => {

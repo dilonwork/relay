@@ -59,6 +59,7 @@ Tickets carry project development work through a pipeline: the PM creates a requ
 37. Title Bar: Theme Toggle Button
 38. Task Sub-Dimension: Tasks under Tickets, Progress, and the Closure Guard
 39. New Ticket Redesign: Guided Fields, a Preview, and a Confirmation
+40. Ticket Sequencing and File-Overlap Prevention: depends_on and files
 - Appendix A State Code Reference
 - Appendix B Ticket Lifecycle Example
 
@@ -1816,3 +1817,45 @@ No schema change: the description is composed client-side from fields the server
 ### Review return (2026-11-25)
 
 The Reviewer returned the first submission (commit b2587aa) on one item: `handleCreate` cleared all six fields on success, including `setNewProjectId('')` and `setNewWorkflowId('')`, so "Create another" reopened the form as Uncategorized with the default workflow — contradicting the prototype (which resets only created / title / goal / scope / done), this chapter, and the `handleCreateAnother` comment. Fixed in the follow-up commit: the two resets are removed from `handleCreate` (source was already kept), so Create another now reopens the form on the same source, project and workflow with the four guided fields cleared; a new test pins exactly that (clears title / goal / scope / done, keeps source / project / workflow, and Create another touches nothing but the confirmation). The same commit corrects two optimistic contrast numbers in the CSS comment above the new rules: the red input border in Dark theme is 5.99:1 (was "~7:1") and the selected radio-card description in Light theme is 4.96:1 (was "~5.1:1"); both still clear the bar, only the comments were imprecise. Everything else was verified as submitted.
+
+## 40. Ticket Sequencing and File-Overlap Prevention: depends_on and files
+
+Relay had a one-ticket-at-a-time rule per agent, but Engineer1 and Engineer2 are different agents, so they could each hold a ticket in parallel and collide on the same file — and a ticket whose predecessor was not done could be claimed anyway. The ParallACT paper (UT Austin, arXiv:2611.00314) measured two coding agents on one shared codebase at 62% success for non-conflicting parallel tasks but only 16% for conflicting ones, and found that merely telling agents about each other does not help. The fix is structural (the system prevents the conflict), not agent-to-agent coordination: the Leader declares each ticket's plan, and Relay enforces it at claim time.
+
+The plan is two arrays on the ticket (migration 026): `depends_on` (UUID[] — the ticket ids this ticket depends on; empty means no dependency) and `files` (TEXT[] — the repo-relative paths this ticket will touch, e.g. `["src/index.css", "src/TicketList.tsx"]`; empty means no file constraint). Both default to an empty array, so existing tickets carry no constraint. The lists are estimates declared by the Leader at decomposition time; the claim-time check is best-effort against those lists, not a guarantee against an Engineer discovering extra files mid-work.
+
+### API
+
+- Creating a ticket (`POST /api/tickets`) accepts `depends_on` and `files`. Both are optional; entries are trimmed and de-duplicated. A `depends_on` entry must be a UUID (the column is UUID[] — a non-UUID would fail the INSERT in Postgres, so it is a 400 here instead); a `files` entry must be a non-empty string. Invalid shapes are 400, not a database error. A dependency id that does not exist is accepted at creation — it blocks at claim time (see below), which makes a bad id visible instead of silent.
+- `PATCH /api/tickets/:id/plan` lets the Leader set or adjust the plan after creation. Leader-only; the ticket must exist and not be terminal (a delivered ticket's plan is history). A field left out keeps its current value; null clears it. No transition row is written: this is not a state change, the same way creating a Task writes no transition row.
+- Claiming (`POST /api/tickets/:id/claim`, `claimTicket` in `server/tickets.js`) enforces the plan after the existing role/assignee checks and before the owner is written, inside the same FOR UPDATE transaction, so the check and the claim cannot race:
+  - Dependency check: every ticket in `depends_on` must be `delivered`. A dependency is satisfied only by `delivered`; a dependency that does not exist is unmet (it can never become delivered). Otherwise the claim is rejected 403 `dependency_unmet`, naming the blocking ticket(s) with their short ids and statuses.
+  - File-overlap check: the ticket's `files` must not overlap with the files of any ticket currently in an in-progress state (`in_dev`, `in_review`, `in_test`). Otherwise the claim is rejected 403 `file_conflict`, naming the conflicting ticket(s) and the overlapping file(s).
+  - Both rejections are human-readable (`Cannot claim yet: depends on … — not delivered.` / `Cannot claim yet: … overlaps with … .`) and carry a structured `blocking` array in the response, so an API caller can see which tickets and files stand in the way without parsing the message. The check is shared with the list paths through `findClaimBlock` (pure) plus `loadClaimBlockInputs` (two queries no matter how many tickets: dependency statuses, then in-progress tickets with their files) — the list never fires one query per ticket, and `attachClaimBlocks` skips the queries entirely when no row carries a dependency or a file list.
+
+### UI
+
+The blocked reason is shown where a claim would be attempted, not after it fails. The list, the queue and the detail all carry `claim_blocked` (null when sequencing and files do not block the ticket) on every ticket row:
+
+- The Tickets list (`src/TicketList.tsx`): the Next-step column shows the blocked reason in place of the next step, so the queue shows why a ticket is waiting instead of a claim that would be refused. The ticket stays in the queue — it is unclaimable until its dependencies are delivered and no in-progress ticket overlaps its files, not hidden.
+- The ticket detail (`src/TicketDetail.tsx`, `src/App.tsx`): when the caller holds the claiming role but the ticket is blocked, the Claim button stays hidden and an amber notice shows the reason ("It stays in the queue until then."). When the caller does not hold the claiming role, no notice is shown — the block is only their business when they could otherwise claim.
+- The API types (`src/api.ts`): `Ticket` carries `depends_on`, `files` and `claim_blocked` (all optional, so older payloads still type-check).
+
+### Leader operating rules
+
+When the Leader decomposes a requirement into sub-tasks, it must set `depends_on` and `files` on each sub-task: sub-tasks whose file lists do not overlap may run in parallel; sub-tasks that overlap must be sequential — the later one `depends_on` the earlier one. This is required in two places, so it shows up wherever the Leader reads its rules: the `decomposing` responsibilities in `server/workflows.js` (rendered in the onboarding document's "What you own in this flow" and in the project prompt bundle's per-role section) and a new standing rule `leader-decomposition-plan` in `server/operatingRules.js` (rendered in the project prompt bundle and served by `GET /api/operating-rules`, which the duty agents re-read every 12 hours). The five work-mode bullets are unchanged.
+
+### PM dispatch (process note, no code change)
+
+The PM's hourly queue check should also skip notifying Engineers about tickets whose dependencies are unmet or whose files overlap with in-progress work, so Engineers are not asked to claim a ticket the API will reject. The API enforcement above remains the authoritative check — the dispatch skip is only a courtesy, and a ticket that becomes claimable again is notified on the next check.
+
+### No new status
+
+Out of scope, deliberately: there is no `blocked` or `locked` state. A blocked ticket stays in `pending_dev` and is simply unclaimable until its dependencies are delivered and no in-progress ticket overlaps its files. No change to the one-ticket-at-a-time rule. No cycle detection on `depends_on`: a cycle (or a self-dependency) blocks forever with the reason visible in the UI — the Leader must fix the plan, not the claim check.
+
+### Tests
+
+- `server/tickets.test.js` (6 items, ticket d9f355b4): creating a ticket stores `depends_on` and `files` (trimmed, de-duplicated) and defaults both to empty; bad plan shapes are 400; claiming with an unmet dependency is 403 `dependency_unmet` naming the blocking ticket (and a missing dependency blocks the same way), and succeeds once the dependency is delivered; claiming with files overlapping an in-progress ticket is 403 `file_conflict` naming the ticket and the overlapping files only, and succeeds once the other ticket is delivered; the Leader updates the plan (including a partial update that keeps the other field, and null clearing a field), while other roles are 403, bad shapes are 400, a missing ticket is 404 and a delivered ticket is 403; the queue, the list and the detail all carry `claim_blocked` for a blocked ticket and null for a clean one.
+- `server/migrations.test.js` (1 item): migration 026 adds both columns idempotently with empty defaults.
+- Full suite 611 tests pass (604 baseline + 7 new); `vite build` (tsc + vite) passes.
+- Not verified: live browser click-through of the blocked notice on the detail page and the blocked reason in the list (no browser here; the Tester verifies live — a blocked ticket in the queue, its detail page, and the claim attempt from the UI, in both themes).

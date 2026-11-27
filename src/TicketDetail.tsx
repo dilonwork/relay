@@ -48,6 +48,10 @@ interface TicketDetailProps {
   // assignment, not a transition.
   canClaim: boolean;
   onClaim: () => void;
+  // Blocked from claiming (ticket d9f355b4): the caller holds the
+  // claiming role but sequencing or files stand in the way. Shown
+  // instead of the Claim button, which stays hidden while blocked.
+  claimBlocked: boolean;
   projectName: (id: string | null) => string;
 }
 
@@ -85,6 +89,7 @@ export default function TicketDetail(props: TicketDetailProps) {
     onTransition,
     canClaim,
     onClaim,
+    claimBlocked,
     projectName,
   } = props;
 
@@ -257,6 +262,11 @@ export default function TicketDetail(props: TicketDetailProps) {
 
           <div className="card">
             <h3 className="section">Move this ticket</h3>
+            {claimBlocked && detail.claim_blocked && (
+              <p className="notice">
+                {detail.claim_blocked.message} It stays in the queue until then.
+              </p>
+            )}
             {canClaim && (
               <p>
                 <button className="primary" type="button" onClick={onClaim} disabled={busy}>

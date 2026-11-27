@@ -911,12 +911,17 @@ export default function App() {
   // the server uses for the roles map; the server re-checks
   // everything, including the no-self-review rule.
   const claimRole = detail ? roleForState(detailMeta, detail.status) : null;
-  const canClaim = !!detail
+  // A blocked ticket (ticket d9f355b4) cannot be claimed yet even
+  // though the caller holds the role: the detail shows the blocked
+  // reason instead of offering a claim the server would refuse.
+  const couldClaim = !!detail
     && !detail.assignee_id
     && claimRole !== null
     && user.roles.includes(claimRole)
     && !isTerminalFor(detailWorkflow, detail.status)
     && !isClarificationState(detailMeta, detail.status);
+  const canClaim = couldClaim && !detail.claim_blocked;
+  const claimBlocked = couldClaim && !!detail.claim_blocked;
   const latestHandoff = detail
     ? [...detail.transitions].reverse().find((tr) => tr.handoff && tr.handoff.trim())
     : undefined;
@@ -1350,6 +1355,7 @@ export default function App() {
           onTransition={handleTransition}
           canClaim={canClaim}
           onClaim={handleClaim}
+          claimBlocked={claimBlocked}
           projectName={projectName}
         />
       ) : mainView === 'tickets-gantt' ? (
