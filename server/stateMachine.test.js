@@ -50,8 +50,11 @@ async function main() {
   await ok('14 states, 2 terminal states', async () => {
     assert.equal(sm.STATUSES.length, 14);
     assert.deepEqual(sm.TERMINAL_STATUSES, ['delivered', 'cancelled']);
-    assert.equal(sm.ROLES.length, 7);
+    assert.equal(sm.ROLES.length, 10);
     assert.ok(sm.ROLES.includes('ui_ux'));
+    for (const role of ['planner', 'worker', 'reporter']) {
+      assert.ok(sm.ROLES.includes(role));
+    }
   });
 
   await ok('all 19 explicit legal transitions validate for the right role', async () => {

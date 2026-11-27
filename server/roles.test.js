@@ -33,6 +33,19 @@ function ok(name, fn) {
     assert.equal(helpers.ROLE_LABELS.ui_ux, 'UI&UX');
   });
 
+  await ok('planner, worker and reporter are workflow roles everywhere, labelled', () => {
+    for (const role of ['planner', 'worker', 'reporter']) {
+      for (const list of [auth.WORKFLOW_ROLES, sm.ROLES, workflows.WORKFLOW_ROLES, helpers.WORKFLOW_ROLES]) {
+        assert.ok(list.includes(role), `${role} missing from ${JSON.stringify(list)}`);
+      }
+      assert.ok(auth.ALL_ROLES.includes(role));
+      assert.ok(helpers.ALL_ROLES.includes(role));
+    }
+    assert.equal(helpers.ROLE_LABELS.planner, 'Planner');
+    assert.equal(helpers.ROLE_LABELS.worker, 'Worker');
+    assert.equal(helpers.ROLE_LABELS.reporter, 'Reporter');
+  });
+
   await ok('guest is an account role, labelled Guest, never a workflow role', () => {
     // Guest reads with PM's visibility but takes no transition, so it
     // is an account role like admin: in ALL_ROLES, never in any
@@ -62,12 +75,14 @@ function ok(name, fn) {
     assert.deepEqual([...auth.ALL_ROLES], [...auth.WORKFLOW_ROLES, 'guest', 'admin']);
   });
 
-  await ok('the built-in 14-state flow is unchanged: no ui_ux anywhere', () => {
-    for (const entry of Object.values(workflows.BUILTIN_WORKFLOW_ROLES)) {
-      assert.notEqual(entry.role, 'ui_ux');
-    }
-    for (const t of sm.BUILTIN_DEFINITION.transitions) {
-      assert.notEqual(t.role, 'ui_ux');
+  await ok('the built-in 14-state flow is unchanged: no ui_ux, planner, worker or reporter anywhere', () => {
+    for (const role of ['ui_ux', 'planner', 'worker', 'reporter']) {
+      for (const entry of Object.values(workflows.BUILTIN_WORKFLOW_ROLES)) {
+        assert.notEqual(entry.role, role);
+      }
+      for (const t of sm.BUILTIN_DEFINITION.transitions) {
+        assert.notEqual(t.role, role);
+      }
     }
   });
 

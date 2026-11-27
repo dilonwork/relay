@@ -8,7 +8,9 @@
 -- existing database; a fresh database is created with the full list
 -- here. Migration 016 (ticket 5519e03c) widens it again for the guest
 -- role: 9 roles in total. Guest is an account role, not a workflow
--- role (see auth.js ALL_ROLES).
+-- role (see auth.js ALL_ROLES). Migration 027 (ticket 4b487343)
+-- widens it again for the planner, worker and reporter roles: 12
+-- roles in total.
 -- Migration 019 (ticket 0f26169c) splits accounts into humans and
 -- agents (kind, default 'human') and makes password_hash nullable:
 -- agent accounts have no password and sign in with an API key only.
@@ -20,7 +22,7 @@ CREATE TABLE IF NOT EXISTS users (
   password_hash TEXT,
   display_name TEXT NOT NULL DEFAULT '',
   roles TEXT[] NOT NULL DEFAULT '{}'
-    CHECK (roles <@ ARRAY['pm', 'leader', 'engineer', 'reviewer', 'tester', 'deployer', 'ui_ux', 'guest', 'admin']::text[]),
+    CHECK (roles <@ ARRAY['pm', 'leader', 'engineer', 'reviewer', 'tester', 'deployer', 'ui_ux', 'planner', 'worker', 'reporter', 'guest', 'admin']::text[]),
   kind TEXT NOT NULL DEFAULT 'human'
     CHECK (kind IN ('human', 'agent')),
   is_active BOOLEAN NOT NULL DEFAULT TRUE,

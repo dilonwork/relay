@@ -193,6 +193,9 @@ async function main() {
   await ok('chatRoomLabel names the role room; unassigned agents say so', async () => {
     assert.equal(onboarding.chatRoomLabel('Acme Support', 'engineer'), 'Acme Support Engineer');
     assert.equal(onboarding.chatRoomLabel('Relay', 'ui_ux'), 'Relay UI&UX');
+    assert.equal(onboarding.chatRoomLabel('RedTeam', 'planner'), 'RedTeam Planner');
+    assert.equal(onboarding.chatRoomLabel('RedTeam', 'worker'), 'RedTeam Worker');
+    assert.equal(onboarding.chatRoomLabel('RedTeam', 'reporter'), 'RedTeam Reporter');
     assert.equal(onboarding.chatRoomLabel(null, 'pm'), 'PM (unassigned)');
     assert.equal(onboarding.chatRoomLabel('', 'tester'), 'Tester (unassigned)');
   });

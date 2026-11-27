@@ -46,7 +46,7 @@ const STATUSES = [
 
 const TERMINAL_STATUSES = ['delivered', 'cancelled'];
 
-const ROLES = ['pm', 'leader', 'engineer', 'reviewer', 'tester', 'deployer', 'ui_ux'];
+const ROLES = ['pm', 'leader', 'engineer', 'reviewer', 'tester', 'deployer', 'ui_ux', 'planner', 'worker', 'reporter'];
 
 // Display labels for the built-in states (same wording as the frontend's
 // STATUS_LABELS). A workflow definition carries its own labels for its
