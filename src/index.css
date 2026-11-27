@@ -422,13 +422,18 @@ body {
      the short id, the task progress "n/m" and the updated time, all
      class .muted — which were still 3.70:1. The stalled dot (#b45309)
      is deliberately not covered: it awaits a deeper amber (see its
-     own comment) and is a non-text marker, not muted subtext. */
+     own comment) and is a non-text marker, not muted subtext.
+     Ticket 3721c2a2 extends the same dark-only override to the
+     desktop table view below, whose selected row had the same 3.70:1
+     muted text (short id, task progress "n/m") and was never covered
+     by the card override above. */
   [data-theme='dark'] .ticket-card.selected .ticket-row-status,
   [data-theme='dark'] .ticket-card.selected .ticket-row-line2,
   [data-theme='dark'] .ticket-card.selected .ticket-row-chev,
   [data-theme='dark'] .ticket-card.selected .ticket-card-next,
   [data-theme='dark'] .ticket-card.selected .ticket-card-assignee,
   [data-theme='dark'] .ticket-card.selected .muted { color: var(--text); }
+  [data-theme='dark'] tbody tr.selected .muted { color: var(--text); }
   .ticket-card-title { font-weight: 600; color: var(--text); overflow-wrap: anywhere; }
   .ticket-card-meta {
     display: flex;
