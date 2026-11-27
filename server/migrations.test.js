@@ -738,6 +738,18 @@ async function main() {
     assert.ok(sql.includes('0ae37c3b'), '025: header must name this ticket');
   });
 
+  await ok('migration 026 adds depends_on and files to tickets, both empty by default', async () => {
+    const sql = readMigration('026_ticket_plan_columns.sql');
+    // The plan (ticket d9f355b4): depends_on is an array of ticket
+    // ids (UUID[] — a non-UUID cannot be stored), files an array of
+    // repo-relative paths. Both are idempotent ADD COLUMN steps with
+    // an empty default, so existing tickets carry no constraint.
+    assert.ok(sql.includes('ALTER TABLE tickets ADD COLUMN IF NOT EXISTS depends_on UUID[] NOT NULL DEFAULT'), '026: must add depends_on idempotently');
+    assert.ok(sql.includes('ALTER TABLE tickets ADD COLUMN IF NOT EXISTS files TEXT[] NOT NULL DEFAULT'), '026: must add files idempotently');
+    assert.ok(sql.includes("DEFAULT '{}'"), '026: both columns must default to an empty array');
+    assert.ok(sql.includes('d9f355b4'), '026: header must name this ticket');
+  });
+
   console.log(`\n${passed} migration tests passed.`);
 }
 

@@ -52,6 +52,10 @@ const STANDING_RULES = [
     id: 'develop-branch',
     text: 'Develop on the develop branch and push to origin/develop. Never work on main; only merge to main when deployment is approved.',
   },
+  {
+    id: 'leader-decomposition-plan',
+    text: 'When the Leader decomposes a requirement into sub-tasks, set depends_on and files on each sub-task: sub-tasks whose file lists do not overlap may run in parallel; sub-tasks that overlap must be sequential — the later one depends_on the earlier one. Relay enforces this at claim time: a ticket whose dependency is not delivered, or whose files overlap an in-progress ticket, cannot be claimed.',
+  },
 ];
 
 module.exports = {

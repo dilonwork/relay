@@ -126,6 +126,11 @@ export default function TicketList(props: TicketListProps) {
   }
 
   function nextStep(t: QueueEntry): string {
+    // A blocked ticket cannot be claimed yet (ticket d9f355b4): the
+    // reason replaces the next step in this column, so the queue
+    // shows why the ticket is waiting instead of a claim that would
+    // be refused.
+    if (t.claim_blocked) return t.claim_blocked.message;
     return t.next_transition
       ? `→ ${labelFor(t, t.next_transition.to)} (${ROLE_LABELS[t.next_transition.role] || t.next_transition.role})`
       : '—';

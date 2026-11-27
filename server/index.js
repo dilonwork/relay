@@ -132,6 +132,10 @@ app.post('/api/tickets', async (req, res) => {
       // Implementing a Prototype (ticket b14207c5): the document this
       // ticket implements, linked on the document when created.
       documentId: req.body ? req.body.document_id : undefined,
+      // The plan (ticket d9f355b4): which tickets this one depends
+      // on and which files it will touch, declared at creation.
+      dependsOn: req.body ? req.body.depends_on : undefined,
+      files: req.body ? req.body.files : undefined,
     });
     if (!result.ok) return res.status(result.status).json({ error: result.error, message: result.message });
     res.status(201).json(result.ticket);
@@ -223,7 +227,16 @@ app.post('/api/tickets/:id/claim', async (req, res) => {
       // any other project (403 out_of_scope).
       assignedProjectId: req.user.project_id,
     });
-    if (!result.ok) return res.status(result.status).json({ error: result.error, message: result.message });
+    if (!result.ok) {
+      // A claim blocked by sequencing or files (ticket d9f355b4)
+      // carries the structured block, so an API caller can see which
+      // tickets and files stand in the way without parsing the message.
+      return res.status(result.status).json({
+        error: result.error,
+        message: result.message,
+        ...(result.blocking ? { blocking: result.blocking } : {}),
+      });
+    }
     res.json({ ticket: result.ticket, transition: result.transition });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -403,6 +416,27 @@ app.patch('/api/tickets/:id/project', async (req, res) => {
       actorRoles: req.user.roles,
       ticketId: req.params.id,
       projectId: req.body ? req.body.project_id : undefined,
+    });
+    if (!result.ok) return res.status(result.status).json({ error: result.error, message: result.message });
+    res.json(result.ticket);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Update a ticket's plan (ticket d9f355b4): the Leader sets
+// depends_on and files when decomposing, or adjusts them afterwards.
+// A field left out keeps its current value; null clears it. The
+// service enforces the leader-only rule; the route passes the result
+// straight through, like the ticket routes above.
+app.patch('/api/tickets/:id/plan', async (req, res) => {
+  try {
+    const result = await tickets.updateTicketPlan(db, req.params.id, {
+      actorId: req.user.id,
+      actorRoles: req.user.roles,
+      dependsOn: req.body ? req.body.depends_on : undefined,
+      files: req.body ? req.body.files : undefined,
+      assignedProjectId: req.user.project_id,
     });
     if (!result.ok) return res.status(result.status).json({ error: result.error, message: result.message });
     res.json(result.ticket);

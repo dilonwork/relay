@@ -60,7 +60,9 @@ class FakeDb {
 
   // Seed a ticket with a chosen status (for a linked implementation
   // ticket): only id and status matter to the duplicate check.
-  seedTicket({ id, status = 'requirement' }) {
+  // depends_on / files default to empty (ticket d9f355b4): a seeded
+  // ticket carries no plan unless the test says so.
+  seedTicket({ id, status = 'requirement', depends_on = [], files = [] }) {
     const row = {
       id: id || `ticket-${++this.seq}`,
       title: 'Seed ticket',
@@ -72,6 +74,8 @@ class FakeDb {
       description: '',
       project_id: null,
       workflow_id: null,
+      depends_on: [...depends_on],
+      files: [...files],
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };
@@ -189,6 +193,12 @@ class FakeDb {
       const t = this.tickets.find((x) => x.id === params[0]);
       return { rows: t ? [{ ...t }] : [] };
     }
+    if (sql.startsWith('SELECT * FROM tickets WHERE id = ANY($1)')) {
+      // Dependency statuses (ticket d9f355b4): one query for every
+      // dependency id, so the claim check never fires one query per
+      // dependency.
+      return { rows: this.tickets.filter((t) => params[0].includes(t.id)).map((t) => ({ ...t })) };
+    }
     if (sql.startsWith('SELECT * FROM tickets WHERE status = ANY($1)')) {
       let rows = this.tickets.filter((t) => params[0].includes(t.status));
       if (sql.includes('AND project_id IS NULL')) {
@@ -223,10 +233,23 @@ class FakeDb {
         description: params[4],
         project_id: params[5] === undefined ? null : params[5],
         workflow_id: params[6] === undefined ? null : params[6],
+        depends_on: params[7] === undefined ? [] : params[7],
+        files: params[8] === undefined ? [] : params[8],
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       };
       this.tickets.push(t);
+      return { rows: [{ ...t }] };
+    }
+    if (sql.startsWith('UPDATE tickets SET depends_on')) {
+      // Plan update (ticket d9f355b4): depends_on and files, in that
+      // order; a field left out keeps its value (the service passes
+      // the current value through).
+      const t = this.tickets.find((x) => x.id === params[2]);
+      if (!t) return { rows: [] };
+      t.depends_on = params[0];
+      t.files = params[1];
+      t.updated_at = new Date().toISOString();
       return { rows: [{ ...t }] };
     }
     if (sql.startsWith('UPDATE tickets SET status')) {
@@ -1061,6 +1084,165 @@ async function main() {
     const okClaim = await tickets.claimTicket(db, inReview.id, { actorId: 'rev-2', actorRoles: ['reviewer'] });
     assert.equal(okClaim.ok, true, JSON.stringify(okClaim));
     assert.equal(okClaim.ticket.assignee_id, 'rev-2');
+  });
+
+  // Ticket sequencing and file-overlap prevention (ticket d9f355b4):
+  // the plan a ticket carries, and the claim-time enforcement.
+  await ok('create (ticket d9f355b4): a ticket stores depends_on and files, trimmed and de-duplicated', async () => {
+    const db = new FakeDb();
+    const depId = '11111111-1111-4111-8111-111111111111';
+    const res = await tickets.createTicket(db, {
+      actorId: 'pm-1', actorRoles: ['pm'], title: 'later', description: 'd',
+      dependsOn: [depId, depId],
+      files: ['src/index.css', ' src/TicketList.tsx ', 'src/index.css'],
+    });
+    assert.equal(res.ok, true, JSON.stringify(res));
+    assert.deepEqual(res.ticket.depends_on, [depId]);
+    assert.deepEqual(res.ticket.files, ['src/index.css', 'src/TicketList.tsx']);
+    // No plan means empty lists, not null.
+    const plain = await tickets.createTicket(db, { actorId: 'pm-1', actorRoles: ['pm'], title: 'plain', description: 'd' });
+    assert.deepEqual(plain.ticket.depends_on, []);
+    assert.deepEqual(plain.ticket.files, []);
+  });
+
+  await ok('create (ticket d9f355b4): a bad plan shape is a 400, not a database error', async () => {
+    const db = new FakeDb();
+    const pm = { actorId: 'pm-1', actorRoles: ['pm'], title: 'x', description: 'd' };
+    const notArray = await tickets.createTicket(db, { ...pm, dependsOn: 'not-an-array' });
+    assert.equal(notArray.ok, false);
+    assert.equal(notArray.status, 400);
+    const badUuid = await tickets.createTicket(db, { ...pm, dependsOn: ['no-such-ticket'] });
+    assert.equal(badUuid.ok, false);
+    assert.equal(badUuid.status, 400);
+    const badFiles = await tickets.createTicket(db, { ...pm, files: 'src/index.css' });
+    assert.equal(badFiles.ok, false);
+    assert.equal(badFiles.status, 400);
+    const emptyFile = await tickets.createTicket(db, { ...pm, files: ['src/index.css', '  '] });
+    assert.equal(emptyFile.ok, false);
+    assert.equal(emptyFile.status, 400);
+  });
+
+  await ok('claim (ticket d9f355b4): a ticket whose dependency is not delivered is refused, naming it', async () => {
+    const db = new FakeDb();
+    const dep = db.seedTicket({ status: 'in_review' });
+    const waiting = db.seedTicket({ status: 'pending_dev', depends_on: [dep.id] });
+    const refused = await tickets.claimTicket(db, waiting.id, { actorId: 'dev-2', actorRoles: ['engineer'] });
+    assert.equal(refused.ok, false);
+    assert.equal(refused.status, 403);
+    assert.equal(refused.error, 'dependency_unmet');
+    assert.ok(refused.message.includes(dep.id.slice(0, 8)), refused.message);
+    assert.ok(refused.message.includes('in_review'), refused.message);
+    assert.deepEqual(refused.blocking, [{ id: dep.id, status: 'in_review' }]);
+    // A dependency that does not exist can never become delivered,
+    // so it blocks the same way (status 'missing').
+    const orphan = db.seedTicket({ status: 'pending_dev', depends_on: ['22222222-2222-4222-8222-222222222222'] });
+    const orphanRefused = await tickets.claimTicket(db, orphan.id, { actorId: 'dev-2', actorRoles: ['engineer'] });
+    assert.equal(orphanRefused.ok, false);
+    assert.equal(orphanRefused.error, 'dependency_unmet');
+    assert.deepEqual(orphanRefused.blocking, [{ id: '22222222-2222-4222-8222-222222222222', status: 'missing' }]);
+    // Once the dependency is delivered, the same claim succeeds.
+    dep.status = 'delivered';
+    const okClaim = await tickets.claimTicket(db, waiting.id, { actorId: 'dev-2', actorRoles: ['engineer'] });
+    assert.equal(okClaim.ok, true, JSON.stringify(okClaim));
+    assert.equal(okClaim.ticket.assignee_id, 'dev-2');
+  });
+
+  await ok('claim (ticket d9f355b4): files overlapping an in-progress ticket are refused, naming ticket and files', async () => {
+    const db = new FakeDb();
+    const busy = db.seedTicket({ status: 'in_dev', files: ['src/index.css', 'src/api.ts'] });
+    busy.assignee_id = 'dev-1';
+    const waiting = db.seedTicket({ status: 'pending_dev', files: ['src/index.css', 'src/other.ts'] });
+    const refused = await tickets.claimTicket(db, waiting.id, { actorId: 'dev-2', actorRoles: ['engineer'] });
+    assert.equal(refused.ok, false);
+    assert.equal(refused.status, 403);
+    assert.equal(refused.error, 'file_conflict');
+    assert.ok(refused.message.includes('src/index.css'), refused.message);
+    assert.ok(refused.message.includes(busy.id.slice(0, 8)), refused.message);
+    assert.ok(!refused.message.includes('src/other.ts'), refused.message);
+    assert.deepEqual(refused.blocking, [{ id: busy.id, status: 'in_dev', files: ['src/index.css'] }]);
+    // Overlap with a delivered ticket does not block: delivered is
+    // not an in-progress state.
+    busy.status = 'delivered';
+    const okClaim = await tickets.claimTicket(db, waiting.id, { actorId: 'dev-2', actorRoles: ['engineer'] });
+    assert.equal(okClaim.ok, true, JSON.stringify(okClaim));
+  });
+
+  await ok('plan (ticket d9f355b4): the leader updates depends_on and files; others are refused', async () => {
+    const db = new FakeDb();
+    const ticket = db.seedTicket({ status: 'pending_dev' });
+    const depId = '33333333-3333-4333-8333-333333333333';
+    const updated = await tickets.updateTicketPlan(db, ticket.id, {
+      actorId: 'leader-1', actorRoles: ['leader'], dependsOn: [depId], files: ['src/index.css'],
+    });
+    assert.equal(updated.ok, true, JSON.stringify(updated));
+    assert.deepEqual(updated.ticket.depends_on, [depId]);
+    assert.deepEqual(updated.ticket.files, ['src/index.css']);
+    // A partial update keeps the other field.
+    const partial = await tickets.updateTicketPlan(db, ticket.id, {
+      actorId: 'leader-1', actorRoles: ['leader'], files: ['src/TicketList.tsx'],
+    });
+    assert.equal(partial.ok, true, JSON.stringify(partial));
+    assert.deepEqual(partial.ticket.depends_on, [depId]);
+    assert.deepEqual(partial.ticket.files, ['src/TicketList.tsx']);
+    // Null clears a field.
+    const cleared = await tickets.updateTicketPlan(db, ticket.id, {
+      actorId: 'leader-1', actorRoles: ['leader'], dependsOn: null,
+    });
+    assert.equal(cleared.ok, true, JSON.stringify(cleared));
+    assert.deepEqual(cleared.ticket.depends_on, []);
+    assert.deepEqual(cleared.ticket.files, ['src/TicketList.tsx']);
+    // Not the leader, not allowed.
+    const wrongRole = await tickets.updateTicketPlan(db, ticket.id, {
+      actorId: 'dev-2', actorRoles: ['engineer'], files: ['src/x.ts'],
+    });
+    assert.equal(wrongRole.ok, false);
+    assert.equal(wrongRole.status, 403);
+    assert.equal(wrongRole.error, 'wrong_role');
+    // Bad shapes and a missing ticket.
+    const bad = await tickets.updateTicketPlan(db, ticket.id, {
+      actorId: 'leader-1', actorRoles: ['leader'], files: 'src/x.ts',
+    });
+    assert.equal(bad.ok, false);
+    assert.equal(bad.status, 400);
+    const missing = await tickets.updateTicketPlan(db, 'no-such-ticket', {
+      actorId: 'leader-1', actorRoles: ['leader'], files: [],
+    });
+    assert.equal(missing.ok, false);
+    assert.equal(missing.status, 404);
+    // A delivered ticket's plan is history.
+    const done = db.seedTicket({ status: 'delivered' });
+    const terminal = await tickets.updateTicketPlan(db, done.id, {
+      actorId: 'leader-1', actorRoles: ['leader'], files: ['src/x.ts'],
+    });
+    assert.equal(terminal.ok, false);
+    assert.equal(terminal.status, 403);
+    assert.equal(terminal.error, 'terminal');
+  });
+
+  await ok('queue and list (ticket d9f355b4): a blocked ticket carries claim_blocked, a clean one carries null', async () => {
+    const db = new FakeDb();
+    const dep = db.seedTicket({ status: 'in_review' });
+    const waiting = db.seedTicket({ status: 'pending_dev', depends_on: [dep.id] });
+    const busy = db.seedTicket({ status: 'in_dev', files: ['src/index.css'] });
+    busy.assignee_id = 'dev-1';
+    const conflicted = db.seedTicket({ status: 'pending_dev', files: ['src/index.css'] });
+    const clean = db.seedTicket({ status: 'pending_dev' });
+    const queue = await tickets.listClaimable(db, ['engineer']);
+    const queuedWaiting = queue.find((t) => t.id === waiting.id);
+    assert.ok(queuedWaiting, 'the blocked ticket stays in the queue');
+    assert.equal(queuedWaiting.claim_blocked.error, 'dependency_unmet');
+    assert.ok(queuedWaiting.claim_blocked.message.includes(dep.id.slice(0, 8)));
+    const rows = await tickets.listTickets(db, null);
+    const attached = await tickets.attachNextTransitions(db, rows, ['engineer']);
+    const listedConflicted = attached.find((t) => t.id === conflicted.id);
+    assert.equal(listedConflicted.claim_blocked.error, 'file_conflict');
+    assert.deepEqual(listedConflicted.claim_blocked.blocking, [{ id: busy.id, status: 'in_dev', files: ['src/index.css'] }]);
+    const listedClean = attached.find((t) => t.id === clean.id);
+    assert.equal(listedClean.claim_blocked, null);
+    // The detail carries it too.
+    const detail = await tickets.getTicketDetail(db, waiting.id, { actorId: 'dev-2', actorRoles: ['engineer'] });
+    assert.equal(detail.ok, true);
+    assert.equal(detail.ticket.claim_blocked.error, 'dependency_unmet');
   });
 
   await ok('claim (ticket c1ff08e3): an assigned account may not claim another project ticket', async () => {

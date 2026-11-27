@@ -65,7 +65,7 @@ const EDITABLE_KINDS = ['forward', 'backward', 'pickup', 'clarify', 'return'];
 // program states them; the design doc (ch. 14) records that they are new.
 const BUILTIN_RESPONSIBILITIES = {
   requirement: 'Pick up the ticket and decompose it into a buildable plan, or return it for clarification.',
-  decomposing: 'Break the requirement into tasks and hand the plan to development.',
+  decomposing: 'Break the requirement into sub-tasks and hand the plan to development. Set depends_on and files on each sub-task: sub-tasks whose file lists do not overlap may run in parallel; sub-tasks that overlap must be sequential — the later one depends_on the earlier one.',
   needs_clarification: 'Answer the open question and send the ticket back for decomposition.',
   pending_dev: 'Pick up the ticket and start development.',
   in_dev: 'Implement the plan, then hand it over for review with a handoff note.',
