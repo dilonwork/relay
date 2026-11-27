@@ -65,6 +65,21 @@ function ok(name, fn) {
     assert.equal(workflows.validateWorkflowDefinition(result).ok, true);
   });
 
+  await ok('planner, worker and reporter are accepted roles for a state', () => {
+    const result = buildLinearFlow([
+      { label: 'Plan', role: 'planner' },
+      { label: 'Work', role: 'worker' },
+      { label: 'Report', role: 'reporter' },
+      { label: 'Delivered', role: 'engineer' },
+    ]);
+    assert.equal(result.ok, true, result.error || '');
+    assert.equal(result.roles[result.states[0].code].role, 'planner');
+    assert.equal(result.roles[result.states[1].code].role, 'worker');
+    assert.equal(result.roles[result.states[2].code].role, 'reporter');
+    assert.equal(result.transitions[0].role, 'planner');
+    assert.equal(workflows.validateWorkflowDefinition(result).ok, true);
+  });
+
   await ok('two entries make one pickup transition', () => {
     const result = buildLinearFlow([
       { label: 'System event', role: 'pm' },

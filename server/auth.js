@@ -17,7 +17,7 @@
 // in-memory fake, so no live database is needed.
 const crypto = require('crypto');
 
-const WORKFLOW_ROLES = ['pm', 'leader', 'engineer', 'reviewer', 'tester', 'deployer', 'ui_ux'];
+const WORKFLOW_ROLES = ['pm', 'leader', 'engineer', 'reviewer', 'tester', 'deployer', 'ui_ux', 'planner', 'worker', 'reporter'];
 // Account kinds (ticket 0f26169c): 'human' accounts sign in with a
 // password and never have an API key; 'agent' accounts sign in with
 // an API key only and have no password (password_hash NULL).

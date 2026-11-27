@@ -32,6 +32,9 @@ const ROLE_LABELS = {
   tester: 'Tester',
   deployer: 'Deployer',
   ui_ux: 'UI&UX',
+  planner: 'Planner',
+  worker: 'Worker',
+  reporter: 'Reporter',
 };
 
 function roleLabel(role) {

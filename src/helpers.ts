@@ -165,17 +165,20 @@ export const ROLE_LABELS: Record<string, string> = {
   tester: 'Tester',
   deployer: 'Deployer',
   ui_ux: 'UI&UX',
+  planner: 'Planner',
+  worker: 'Worker',
+  reporter: 'Reporter',
   guest: 'Guest',
   admin: 'Admin',
 };
 
-export const ALL_ROLES = ['pm', 'leader', 'engineer', 'reviewer', 'tester', 'deployer', 'ui_ux', 'guest', 'admin'];
+export const ALL_ROLES = ['pm', 'leader', 'engineer', 'reviewer', 'tester', 'deployer', 'ui_ux', 'planner', 'worker', 'reporter', 'guest', 'admin'];
 
-// The seven workflow roles a workflow may assign to a ticket state
+// The ten workflow roles a workflow may assign to a ticket state
 // (design doc ch. 14). 'admin' and 'guest' are account roles, never
 // workflow roles, so neither is listed here: admin manages accounts,
 // guest reads with PM's visibility but takes no transition.
-export const WORKFLOW_ROLES = ['pm', 'leader', 'engineer', 'reviewer', 'tester', 'deployer', 'ui_ux'];
+export const WORKFLOW_ROLES = ['pm', 'leader', 'engineer', 'reviewer', 'tester', 'deployer', 'ui_ux', 'planner', 'worker', 'reporter'];
 
 // The chat room for a role agent: "<Project> <Role>", e.g. "Acme
 // Support Engineer" (ticket 0f26169c). A display label only — Relay

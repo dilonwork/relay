@@ -50,7 +50,7 @@ export type QuickCreateResult =
     }
   | { ok: false; error: string };
 
-const WORKFLOW_ROLES = ['pm', 'leader', 'engineer', 'reviewer', 'tester', 'deployer', 'ui_ux'];
+const WORKFLOW_ROLES = ['pm', 'leader', 'engineer', 'reviewer', 'tester', 'deployer', 'ui_ux', 'planner', 'worker', 'reporter'];
 
 // Derive a state code from a label. Mirrors helpers.slugStateCode
 // (lowercase snake_case); kept inline so this module has no imports

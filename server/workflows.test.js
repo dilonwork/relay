@@ -256,6 +256,37 @@ async function main() {
     assert.equal(workflows.validateRolesMap({}).ok, false);
   });
 
+  await ok('a roles map using planner, worker and reporter passes validation on create and update', async () => {
+    // Ticket 4b487343: the Red Team Operations workflow assigns states
+    // to planner, worker and reporter. The map must validate, and an
+    // Admin must be able to create a workflow with it and update a
+    // workflow to it — the new roles behave like the existing ones.
+    const redTeamRoles = rolesWith({
+      requirement: { role: 'planner', responsibilities: 'Plan the operation' },
+      in_dev: { role: 'worker', responsibilities: 'Do the work' },
+      pending_review: { role: 'reporter', responsibilities: 'Report the outcome' },
+    });
+    assert.equal(workflows.validateRolesMap(redTeamRoles).ok, true);
+    const db = new FakeDb();
+    const created = await workflows.createWorkflow(db, {
+      ...ADMIN, name: 'Red Team Operations', projectId: 'proj-1', roles: redTeamRoles,
+    });
+    assert.equal(created.ok, true, created.error || '');
+    assert.equal(created.workflow.roles.requirement.role, 'planner');
+    assert.equal(created.workflow.roles.in_dev.role, 'worker');
+    assert.equal(created.workflow.roles.pending_review.role, 'reporter');
+    const updated = await workflows.updateWorkflow(db, created.workflow.id, {
+      ...ADMIN, roles: rolesWith({
+        requirement: { role: 'planner', responsibilities: 'Plan the operation' },
+        decomposing: { role: 'worker', responsibilities: 'Do the work' },
+        in_test: { role: 'reporter', responsibilities: 'Report the outcome' },
+      }),
+    });
+    assert.equal(updated.ok, true, updated.error || '');
+    assert.equal(updated.workflow.roles.decomposing.role, 'worker');
+    assert.equal(updated.workflow.roles.in_test.role, 'reporter');
+  });
+
   await ok('Only Admin may create a workflow; PM and other roles may not', async () => {
     const db = new FakeDb();
     const byAdmin = await workflows.createWorkflow(db, {
