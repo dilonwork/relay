@@ -420,9 +420,9 @@ body {
      theme is untouched — the override is dark-only. Ticket 8a70951b
      extends it to the remaining muted spans in the expanded detail —
      the short id, the task progress "n/m" and the updated time, all
-     class .muted — which were still 3.70:1. The stalled dot (#b45309)
-     is deliberately not covered: it awaits a deeper amber (see its
-     own comment) and is a non-text marker, not muted subtext.
+     class .muted — which were still 3.70:1. The stalled dot is
+     deliberately not covered here: it now uses var(--tint-amber-text)
+     (ticket 403b68e2) and is a non-text marker, not muted subtext.
      Ticket 3721c2a2 extends the same dark-only override to the
      desktop table view below, whose selected row had the same 3.70:1
      muted text (short id, task progress "n/m") and was never covered
@@ -614,11 +614,15 @@ h3.section { margin: 14px 0 6px; font-size: 13px; color: var(--text); }
 .ticket-id { font-size: 12px; }
 /* Stalled marker (ticket 7da410a5): the same 36h rule as the Gantt
    marker, an amber dot on the Updated cell with a tooltip.
-   Kept at the original #b45309 (ticket 1e248c03, review return):
-   var(--warning) drops light-theme contrast to 2.39:1, below the
-   WCAG non-text 3:1 floor. Awaits a deeper amber from the tint
-   variables ticket 5ac8689c. */
-.stalled-dot { color: #b45309; margin-left: 4px; }
+   Ticket 403b68e2: the deeper amber this waited for is
+   var(--tint-amber-text) — light #92400e (7.09:1 on white,
+   6.46:1 on the light selected row), dark #fcd34d (6.57:1 on the
+   dark selected row, 10.15:1 on the dark card). The old #b45309 was
+   1.89:1 on the dark selected row and 2.91:1 on the dark card,
+   below the WCAG non-text 3:1 floor. var(--warning) is still not
+   an option (2.39:1 in light theme, ticket 1e248c03). The dot is a
+   non-text marker, so 3:1 is the bar, not 4.5:1. */
+.stalled-dot { color: var(--tint-amber-text); margin-left: 4px; }
 /* Compact density (ticket 7da410a5): tighter rows for scanning long
    queues; Comfortable is today's row height, the default. */
 .card.ticket-compact .ticket-table td { padding: 3px 8px; }

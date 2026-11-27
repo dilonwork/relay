@@ -438,6 +438,33 @@ function checkActorBar(css, lightVars, darkVars) {
   }
 }
 
+// Ticket 403b68e2: the stalled dot is a non-text marker (a filled
+// circle), so the WCAG bar is 3:1, not 4.5:1. The old #b45309 was
+// 1.89:1 on the dark selected row and 2.91:1 on the dark card. It
+// now uses var(--tint-amber-text); the pairs below are the surfaces
+// it sits on in each theme (card background and selected row).
+const STALLED_DOT_PAIRS = [
+  ['tint-amber-text', 'card-bg'],
+  ['tint-amber-text', 'card-selected'],
+];
+
+function checkStalledDot(css, lightVars, darkVars) {
+  const body = ruleBody(css, '.stalled-dot');
+  assert.ok(
+    /color:\s*var\(--tint-amber-text\)/.test(body),
+    '.stalled-dot color must use var(--tint-amber-text) (ticket 403b68e2)',
+  );
+  for (const [theme, vars] of [['light', lightVars], ['dark', darkVars]]) {
+    for (const [textVar, bgVar] of STALLED_DOT_PAIRS) {
+      const ratio = contrast(vars[textVar], vars[bgVar]);
+      assert.ok(
+        ratio >= 3,
+        `${theme}: --${textVar} (${vars[textVar]}) on --${bgVar} (${vars[bgVar]}) is ${ratio.toFixed(2)}:1, below 3:1`,
+      );
+    }
+  }
+}
+
 (async () => {
   const css = fs.readFileSync(CSS_PATH, 'utf8');
   const light = parseVars(readBlock(css, ':root'));
@@ -490,6 +517,9 @@ function checkActorBar(css, lightVars, darkVars) {
 
   await ok('remaining hard-coded light backgrounds use theme variables and stay readable (ticket 3dfa3021)', () => {
     checkAudit(css, light, dark);
+  });
+  await ok('stalled dot uses the deeper amber and stays visible on every row background (ticket 403b68e2)', () => {
+    checkStalledDot(css, light, dark);
   });
 
   console.log(`\n${passed} theme tint tests passed.`);
