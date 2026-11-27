@@ -62,7 +62,7 @@ class FakeDb {
   // ticket): only id and status matter to the duplicate check.
   // depends_on / files default to empty (ticket d9f355b4): a seeded
   // ticket carries no plan unless the test says so.
-  seedTicket({ id, status = 'requirement', depends_on = [], files = [] }) {
+  seedTicket({ id, status = 'requirement', depends_on = [], files = [], workflow_id = null }) {
     const row = {
       id: id || `ticket-${++this.seq}`,
       title: 'Seed ticket',
@@ -73,7 +73,7 @@ class FakeDb {
       developer_id: null,
       description: '',
       project_id: null,
-      workflow_id: null,
+      workflow_id,
       depends_on: [...depends_on],
       files: [...files],
       created_at: new Date().toISOString(),
@@ -300,6 +300,12 @@ class FakeDb {
     // map when the project has chosen none. The project query above
     // and the definition lookup below are the two queries it issues.
     // Definition lookups for a ticket's own workflow (ch. 15).
+    if (/^SELECT \* FROM workflows WHERE id = ANY\(\$1\)/.test(sql)) {
+      // Terminal-state lookup (ticket 491ccf87): one query for every
+      // distinct workflow the dependencies follow.
+      const rows = this.workflows.filter((x) => params[0].includes(x.id));
+      return { rows: rows.map((w) => ({ ...w })) };
+    }
     if (/^SELECT \* FROM workflows WHERE id = \$1/.test(sql)) {
       const w = this.workflows.find((x) => x.id === params[0]);
       return { rows: w ? [{ ...w }] : [] };
@@ -1122,7 +1128,7 @@ async function main() {
     assert.equal(emptyFile.status, 400);
   });
 
-  await ok('claim (ticket d9f355b4): a ticket whose dependency is not delivered is refused, naming it', async () => {
+  await ok('claim (ticket d9f355b4): a ticket whose dependency has not reached a terminal state is refused, naming it', async () => {
     const db = new FakeDb();
     const dep = db.seedTicket({ status: 'in_review' });
     const waiting = db.seedTicket({ status: 'pending_dev', depends_on: [dep.id] });
@@ -1132,9 +1138,10 @@ async function main() {
     assert.equal(refused.error, 'dependency_unmet');
     assert.ok(refused.message.includes(dep.id.slice(0, 8)), refused.message);
     assert.ok(refused.message.includes('in_review'), refused.message);
+    assert.ok(!refused.message.includes('not delivered'), refused.message);
     assert.deepEqual(refused.blocking, [{ id: dep.id, status: 'in_review' }]);
-    // A dependency that does not exist can never become delivered,
-    // so it blocks the same way (status 'missing').
+    // A dependency that does not exist can never reach a terminal
+    // state, so it blocks the same way (status 'missing').
     const orphan = db.seedTicket({ status: 'pending_dev', depends_on: ['22222222-2222-4222-8222-222222222222'] });
     const orphanRefused = await tickets.claimTicket(db, orphan.id, { actorId: 'dev-2', actorRoles: ['engineer'] });
     assert.equal(orphanRefused.ok, false);
@@ -1145,6 +1152,67 @@ async function main() {
     const okClaim = await tickets.claimTicket(db, waiting.id, { actorId: 'dev-2', actorRoles: ['engineer'] });
     assert.equal(okClaim.ok, true, JSON.stringify(okClaim));
     assert.equal(okClaim.ticket.assignee_id, 'dev-2');
+  });
+
+  await ok('claim (ticket 491ccf87): a dependency in a terminal state of its own workflow satisfies the claim', async () => {
+    const db = new FakeDb();
+    // Red Team Operations: requirement -> executing -> reported /
+    // false_positive. Only the last two are terminal in this
+    // workflow; 'delivered' is not one of its states at all.
+    const redTeam = db.seedCustomWorkflow({
+      name: 'Red Team Operations',
+      states: [
+        { code: 'requirement', is_start: true, is_terminal: false },
+        { code: 'executing', is_start: false, is_terminal: false },
+        { code: 'reported', is_start: false, is_terminal: true },
+        { code: 'false_positive', is_start: false, is_terminal: true },
+      ],
+      transitions: [],
+      roles: {
+        requirement: { role: 'planner', responsibilities: 'Plan the operation' },
+        executing: { role: 'worker', responsibilities: 'Do the work' },
+        reported: { role: null, responsibilities: 'Reported' },
+        false_positive: { role: null, responsibilities: 'Not a finding' },
+      },
+    }, null);
+    // AC1: a dependency in `reported` satisfies the claim.
+    const reported = db.seedTicket({ status: 'reported', workflow_id: redTeam.id });
+    const waitingReported = db.seedTicket({ status: 'pending_dev', depends_on: [reported.id] });
+    const okReported = await tickets.claimTicket(db, waitingReported.id, { actorId: 'dev-2', actorRoles: ['engineer'] });
+    assert.equal(okReported.ok, true, JSON.stringify(okReported));
+    // AC2: a dependency in `false_positive` satisfies it too.
+    const fp = db.seedTicket({ status: 'false_positive', workflow_id: redTeam.id });
+    const waitingFp = db.seedTicket({ status: 'pending_dev', depends_on: [fp.id] });
+    const okFp = await tickets.claimTicket(db, waitingFp.id, { actorId: 'dev-2', actorRoles: ['engineer'] });
+    assert.equal(okFp.ok, true, JSON.stringify(okFp));
+    // `cancelled` is terminal in every workflow, even when unlisted.
+    const cancelled = db.seedTicket({ status: 'cancelled', workflow_id: redTeam.id });
+    const waitingCancelled = db.seedTicket({ status: 'pending_dev', depends_on: [cancelled.id] });
+    const okCancelled = await tickets.claimTicket(db, waitingCancelled.id, { actorId: 'dev-2', actorRoles: ['engineer'] });
+    assert.equal(okCancelled.ok, true, JSON.stringify(okCancelled));
+    // AC3: a non-terminal state in the same workflow still blocks,
+    // naming the ticket and its status.
+    const executing = db.seedTicket({ status: 'executing', workflow_id: redTeam.id });
+    const waitingExecuting = db.seedTicket({ status: 'pending_dev', depends_on: [executing.id] });
+    const refused = await tickets.claimTicket(db, waitingExecuting.id, { actorId: 'dev-2', actorRoles: ['engineer'] });
+    assert.equal(refused.ok, false);
+    assert.equal(refused.status, 403);
+    assert.equal(refused.error, 'dependency_unmet');
+    assert.ok(refused.message.includes(executing.id.slice(0, 8)), refused.message);
+    assert.ok(refused.message.includes('executing'), refused.message);
+    assert.ok(!refused.message.includes('not delivered'), refused.message);
+    assert.deepEqual(refused.blocking, [{ id: executing.id, status: 'executing' }]);
+    // A dependency whose workflow row is gone falls back to the
+    // built-in definition: delivered satisfies, in_review does not.
+    const goneDelivered = db.seedTicket({ status: 'delivered', workflow_id: 'wf-gone' });
+    const waitingGone = db.seedTicket({ status: 'pending_dev', depends_on: [goneDelivered.id] });
+    const okGone = await tickets.claimTicket(db, waitingGone.id, { actorId: 'dev-2', actorRoles: ['engineer'] });
+    assert.equal(okGone.ok, true, JSON.stringify(okGone));
+    const goneReview = db.seedTicket({ status: 'in_review', workflow_id: 'wf-gone' });
+    const waitingGoneReview = db.seedTicket({ status: 'pending_dev', depends_on: [goneReview.id] });
+    const refusedGone = await tickets.claimTicket(db, waitingGoneReview.id, { actorId: 'dev-2', actorRoles: ['engineer'] });
+    assert.equal(refusedGone.ok, false);
+    assert.equal(refusedGone.error, 'dependency_unmet');
   });
 
   await ok('claim (ticket d9f355b4): files overlapping an in-progress ticket are refused, naming ticket and files', async () => {

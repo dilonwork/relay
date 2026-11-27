@@ -98,20 +98,51 @@ function shortTicketId(id) {
   return String(id).slice(0, 8);
 }
 
+// The terminal states of one workflow definition: every state whose
+// is_terminal flag is set, plus 'cancelled', which is terminal in
+// every workflow even when unlisted (isTerminalFor in
+// server/stateMachine.js). A dependency is satisfied by any of these,
+// not only by `delivered` — workflows whose terminal states are not
+// `delivered` (e.g. Red Team Operations: `reported`,
+// `false_positive`) must be able to satisfy a dependency too
+// (ticket 491ccf87). No Red Team state name is hardcoded here: the
+// rule is workflow-generic, read off the definition's flags.
+function terminalStatesOf(definition) {
+  const codes = new Set(['cancelled']);
+  for (const state of (definition && definition.states) || []) {
+    if (sm.isTerminalFor(definition, state.code)) codes.add(state.code);
+  }
+  return codes;
+}
+
+// Whether a dependency ticket satisfies the claim block: its status
+// is terminal in its own workflow. A ticket with no workflow follows
+// the built-in definition; a ticket whose workflow row is gone falls
+// back to it too (getWorkflowDefinition's rule — a missing row is
+// unreachable in practice, see definitionForTicket in
+// server/workflows.js).
+function isDepSatisfied(dep, terminalByWorkflowId) {
+  const terminals = terminalByWorkflowId && terminalByWorkflowId.get(dep.workflow_id);
+  if (terminals) return terminals.has(dep.status);
+  return sm.isTerminalFor(sm.BUILTIN_DEFINITION, dep.status);
+}
+
 // Why a ticket cannot be claimed yet, or null when sequencing and
 // files do not block it. Pure: the caller supplies the dependency
-// rows (by id) and the in-progress tickets. A dependency counts as
-// satisfied only when its ticket is delivered; a dependency that
-// does not exist is unmet (it can never become delivered). A file
-// conflict names the in-progress ticket and the overlapping files.
-// The message is human-readable and names the blockers, so the UI
-// can show it verbatim and the PM can see what is blocked.
-function findClaimBlock(ticket, { depById, inProgress }) {
+// rows (by id), the in-progress tickets, and the terminal states of
+// each dependency's workflow (by workflow id). A dependency counts as
+// satisfied only when its ticket is in a terminal state of its own
+// workflow; a dependency that does not exist is unmet (it can never
+// reach a terminal state). A file conflict names the in-progress
+// ticket and the overlapping files. The message is human-readable and
+// names the blockers, so the UI can show it verbatim and the PM can
+// see what is blocked.
+function findClaimBlock(ticket, { depById, inProgress, terminalByWorkflowId }) {
   const deps = Array.isArray(ticket.depends_on) ? ticket.depends_on : [];
   const unmet = [];
   for (const id of deps) {
     const dep = depById.get(id);
-    if (!dep || dep.status !== 'delivered') {
+    if (!dep || !isDepSatisfied(dep, terminalByWorkflowId)) {
       unmet.push({ id, status: dep ? dep.status : 'missing' });
     }
   }
@@ -119,7 +150,7 @@ function findClaimBlock(ticket, { depById, inProgress }) {
     const names = unmet.map((d) => `${shortTicketId(d.id)} (${d.status})`).join(', ');
     return {
       error: 'dependency_unmet',
-      message: `Cannot claim yet: depends on ${names} — not delivered.`,
+      message: `Cannot claim yet: depends on ${names} — not in a terminal state.`,
       blocking: unmet,
     };
   }
@@ -148,9 +179,10 @@ function findClaimBlock(ticket, { depById, inProgress }) {
 }
 
 // Load the inputs findClaimBlock needs for a set of tickets: the
-// statuses of every dependency id, and every in-progress ticket
-// with its files. Two queries no matter how many tickets — the list
-// never fires one query per ticket.
+// rows of every dependency id, the terminal states of the workflows
+// those dependencies follow, and every in-progress ticket with its
+// files. Three queries no matter how many tickets — the list never
+// fires one query per ticket.
 async function loadClaimBlockInputs(client, tickets) {
   const depIds = [...new Set((tickets || []).flatMap((t) => (Array.isArray(t.depends_on) ? t.depends_on : [])))];
   const depById = new Map();
@@ -158,8 +190,22 @@ async function loadClaimBlockInputs(client, tickets) {
     const { rows } = await client.query('SELECT * FROM tickets WHERE id = ANY($1)', [depIds]);
     for (const row of rows) depById.set(row.id, row);
   }
+  // Terminal states per workflow, batched: one query for every
+  // distinct workflow the dependencies follow. A workflow-less
+  // dependency follows the built-in definition, so no query is needed
+  // for it — findClaimBlock falls back to it when the map has no
+  // entry for the dependency's workflow.
+  const terminalByWorkflowId = new Map();
+  const workflowIds = [...new Set([...depById.values()].map((t) => t.workflow_id).filter(Boolean))];
+  if (workflowIds.length > 0) {
+    const { rows } = await client.query('SELECT * FROM workflows WHERE id = ANY($1)', [workflowIds]);
+    for (const row of rows) {
+      const definition = workflows.definitionFromRow(row);
+      if (definition) terminalByWorkflowId.set(row.id, terminalStatesOf(definition));
+    }
+  }
   const { rows: inProgress } = await client.query('SELECT * FROM tickets WHERE status = ANY($1)', [IN_PROGRESS_STATUSES]);
-  return { depById, inProgress };
+  return { depById, inProgress, terminalByWorkflowId };
 }
 
 // Attach claim_blocked (null or the findClaimBlock result) to every
@@ -772,7 +818,7 @@ async function listClaimable(db, actorRoles, projectFilter, assignedProjectId) {
   // d9f355b4): the queue shows the blocked reason on the row, so an
   // Engineer does not waste a claim attempt and the PM can see what
   // is blocked. The ticket stays in the queue — it is unclaimable
-  // until its dependencies are delivered and no in-progress ticket
+  // until its dependencies have reached a terminal state and no in-progress ticket
   // overlaps its files, not hidden.
   return attachClaimBlocks(db, out);
 }
@@ -914,7 +960,7 @@ async function claimTicket(db, ticketId, { actorId, actorRoles, assignedProjectI
       return { ok: false, status: 409, error: 'already_assigned', message: 'This ticket already has an owner.' };
     }
     // Sequencing and file-overlap prevention (ticket d9f355b4): a
-    // claim whose dependency is not delivered, or whose files
+    // claim whose dependency has not reached a terminal state, or whose files
     // overlap an in-progress ticket, is rejected here — after the
     // role/assignee checks and before the owner is written, inside
     // the same FOR UPDATE transaction, so the check and the claim
