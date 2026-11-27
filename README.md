@@ -383,7 +383,11 @@ admin 7, API keys 8, monitor 18, workflows 31, quick-create builder 11, document
   the role for its state can claim it in place with
   `POST /api/tickets/:id/claim` (the next step is a `pickup` whose
   destination is the ticket's current state). Clarification and
-  terminal tickets are never claimable. The frontend has a Claimable tab
+  terminal tickets are never claimable. One exception (ch. 40, ticket
+  d9f355b4): a ticket whose dependencies are unmet or whose files
+  overlap with an in-progress ticket still appears in the queue, but
+  cannot be claimed until its dependencies are delivered and no
+  in-progress ticket overlaps its files. The frontend has a Claimable tab
   for this queue. The tab is not redundant with the status tabs: a status
   tab lists every ticket in that state, while Claimable lists only the
   tickets the caller can claim by role (merged across roles for
